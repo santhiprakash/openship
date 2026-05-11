@@ -11,6 +11,14 @@ import type { BuildStrategy, DeploymentConfig } from "./types";
 import { DEFAULT_CONFIG } from "./types";
 import { normalizeSubdomain } from "@/utils/subdomain";
 
+function envMapToRows(env?: Record<string, string>): DeploymentConfig["envVars"] {
+  return Object.entries(env ?? {}).map(([key, value]) => ({
+    key,
+    value,
+    visible: false,
+  }));
+}
+
 /**
  * Owns the deployment configuration state and prepare logic.
  *
@@ -146,6 +154,7 @@ export function useDeploymentConfig() {
           branch: selectedBranch,
           branches: branchOptions,
           services: response.services || [],
+          rootEnvVars: envMapToRows(response.rootEnv),
           options: {
             buildCommand: project?.buildCommand ?? response.buildCommand ?? "",
             installCommand: project?.installCommand ?? response.installCommand ?? "",
@@ -220,6 +229,7 @@ export function useDeploymentConfig() {
           branch: project?.gitBranch || response.repository.default_branch || "main",
           branches: [],
           services: response.services || [],
+          rootEnvVars: envMapToRows(response.rootEnv),
           options: {
             buildCommand: project?.buildCommand ?? response.buildCommand ?? "",
             installCommand: project?.installCommand ?? response.installCommand ?? "",

@@ -126,29 +126,6 @@ export interface MultiServiceGroupHandle {
   id: string;
 }
 
-export interface ComposeSourceHandle {
-  /** Runtime-specific source identifier. Cloud uses an Oblien workspace id. */
-  id: string;
-  /** Build source kind; currently only cloud workspaces need an explicit handle. */
-  kind: "cloud-workspace";
-  /** Runtime workspace that contains the checked-out source tree. */
-  workspaceId: string;
-  /** Absolute source path inside the workspace. */
-  path: string;
-}
-
-export interface PrepareComposeSourceConfig {
-  deploymentId: string;
-  projectId: string;
-  slug: string;
-  repoUrl: string;
-  branch: string;
-  commitSha?: string | null;
-  gitToken?: string;
-  image?: string;
-  resources?: ResourceConfig;
-}
-
 export interface MultiServiceDeployConfig {
   deploymentId: string;
   projectId: string;
@@ -184,15 +161,6 @@ export interface MultiServiceRuntimeAdapter extends RuntimeAdapter {
     slug: string;
     resources?: ResourceConfig;
   }): Promise<MultiServiceGroupHandle>;
-
-  /** Prepare a shared source tree for sibling service builds. */
-  prepareComposeSource?(
-    config: PrepareComposeSourceConfig,
-    logger?: BuildLogger,
-  ): Promise<ComposeSourceHandle>;
-
-  /** Remove a shared source tree after service builds finish. */
-  destroyComposeSource?(handle: ComposeSourceHandle): Promise<void>;
 
   /** Deploy one service workload into a prepared group */
   deployServiceWorkload(

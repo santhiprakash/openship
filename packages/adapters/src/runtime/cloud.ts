@@ -21,6 +21,7 @@ import {
   type DeploymentResult,
   type LogEntry,
   type LogCallback,
+  type CommandExecutor,
   type ContainerInfo,
   type ResourceUsage,
   type ContainerStatus,
@@ -37,22 +38,31 @@ import {
 } from "../dockerfile";
 
 import type {
-  ComposeSourceHandle,
   MultiServiceDeployConfig,
   MultiServiceDeployResult,
   MultiServiceGroupHandle,
   MultiServiceRuntimeAdapter,
-  PrepareComposeSourceConfig,
   RuntimeCapability,
 } from "./types";
-import { BuildLogger, runBuildPipeline, sq, type BuildEnvironment } from "./build-pipeline";
-import { CloudComposeSupport, COMPOSE_SOURCE_PATH, type CloudBuiltArtifact } from "./cloud/compose";
+import {
+  BuildLogger,
+  injectGitToken,
+  runBuildPipeline,
+  sq,
+  type BuildEnvironment,
+} from "./build-pipeline";
+import { CloudComposeSupport, type CloudBuiltArtifact } from "./cloud/compose";
 import { createDockerBuildContext } from "./docker-build-context";
+import { normalizeDockerRelativePath, resolveDockerfileCandidates } from "./docker-paths";
 import { runLocalBuild } from "./local-build";
 import { transferLocalDirectory } from "./transfer";
+import { checkGit } from "../system/checks";
+import { installGit } from "../system/installer";
 import { STACKS, TRANSFER_EXCLUDES, type StackId, type StackDefinition } from "@repo/core";
 
 type CloudWorkspaceRuntime = Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
+const DOCKERFILE_SOURCE_IMAGE = "node:22";
+const WORKSPACE_STREAM_EXEC_TIMEOUT_MS = 15 * 60 * 1000;
 
 function now(): string {
   return new Date().toISOString();
@@ -98,52 +108,8 @@ function envExportPrefix(env: Record<string, string | null | undefined>): string
   return parts.length ? `${parts.join(" && ")} && ` : "";
 }
 
-function normalizeRelativePath(value?: string): string {
-  const normalized = value
-    ?.trim()
-    .replace(/^\.\//, "")
-    .replace(/^\/+|\/+$/g, "");
-  if (!normalized || normalized === ".") return "";
-  return normalized;
-}
-
 function joinWorkspacePath(base: string, ...parts: string[]): string {
   return posix.normalize(posix.join(base, ...parts.filter(Boolean)));
-}
-
-function resolveExplicitDockerfileCandidate(
-  rootDirectory?: string,
-  dockerfilePath?: string,
-): string {
-  const normalizedRootDirectory = normalizeRelativePath(rootDirectory);
-  const normalizedDockerfilePath = normalizeRelativePath(dockerfilePath);
-
-  if (!normalizedDockerfilePath) {
-    return "";
-  }
-
-  if (!normalizedRootDirectory) {
-    return normalizedDockerfilePath;
-  }
-
-  if (normalizedDockerfilePath.startsWith(`${normalizedRootDirectory}/`)) {
-    return normalizedDockerfilePath;
-  }
-
-  return `${normalizedRootDirectory}/${normalizedDockerfilePath}`;
-}
-
-function resolveDockerfileCandidates(
-  rootDirectory?: string,
-  explicitDockerfilePath?: string,
-): string[] {
-  const normalizedRootDirectory = normalizeRelativePath(rootDirectory);
-
-  return [
-    resolveExplicitDockerfileCandidate(rootDirectory, explicitDockerfilePath),
-    normalizedRootDirectory ? `${normalizedRootDirectory}/Dockerfile` : "Dockerfile",
-    "Dockerfile",
-  ].filter((candidate, index, values) => candidate && values.indexOf(candidate) === index);
 }
 
 function resolveVmPath(workdir: string, target: string): string {
@@ -170,6 +136,36 @@ function sourceExpression(baseDir: string, source: string): string {
   return sq(full);
 }
 
+function dockerCopyShellCommands(opts: {
+  sources: string[];
+  destination: string;
+  destinationIsDir: boolean;
+  destinationTarget: string;
+}): string[] {
+  const { sources, destination, destinationIsDir, destinationTarget } = opts;
+  const destinationExpr = sq(destination);
+  const destinationTargetExpr = sq(destinationTarget);
+
+  return sources.flatMap((source) => [
+    `for src in ${source}; do`,
+    '  if [ ! -e "$src" ]; then',
+    '    echo "COPY source not found: $src" >&2',
+    "    exit 1",
+    "  fi",
+    '  if [ -d "$src" ]; then',
+    destinationIsDir
+      ? `    mkdir -p ${destinationExpr}`
+      : `    rm -rf ${destinationExpr} && mkdir -p ${destinationExpr}`,
+    // Docker COPY copies directory contents, not the directory wrapper.
+    `    cp -a "$src/." ${destinationExpr}/`,
+    "  else",
+    `    mkdir -p ${destinationTargetExpr}`,
+    `    cp -a "$src" ${destinationExpr}`,
+    "  fi",
+    "done",
+  ]);
+}
+
 function stageArtifactDownloadPath(source: string): string {
   const normalized = source.trim();
   if (!normalized || normalized === ".") {
@@ -181,37 +177,38 @@ function stageArtifactDownloadPath(source: string): string {
   return posix.normalize(`/${normalized}`);
 }
 
-function stageArtifactDirectoryName(copy: WorkspaceCopyStep, stepIndex: number): string {
-  const stageName = (copy.from ?? "stage").replace(/[^A-Za-z0-9_.-]/g, "-") || "stage";
-  return `${stageName}-${copy.line}-${stepIndex}`;
-}
-
-function normalizeStageArtifactCommand(sourceBase: string, downloadPaths: string[]): string {
-  return downloadPaths
-    .map((path) => {
-      const relativePath = path.replace(/^\/+/, "");
-      if (!relativePath) return "";
-
-      const expectedPath = posix.join(sourceBase, relativePath);
-      const fallbackPath = posix.join(sourceBase, posix.basename(relativePath));
-      if (expectedPath === fallbackPath) return "";
-
-      return [
-        `if [ ! -e ${sq(expectedPath)} ] && [ -e ${sq(fallbackPath)} ]; then`,
-        `  mkdir -p ${sq(posix.dirname(expectedPath))}`,
-        `  mv ${sq(fallbackPath)} ${sq(expectedPath)}`,
-        "fi",
-      ].join("\n");
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
 function substituteDockerArgs(value: string, args: Record<string, string | null>): string {
   return value.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (match, key: string) => {
     const replacement = args[key];
     return replacement === undefined || replacement === null ? match : replacement;
   });
+}
+
+function stageBaseLabel(
+  stageBaseImage: string,
+  requestedBaseImage: string,
+  stageAlias?: string,
+): string {
+  if (stageAlias) {
+    return `${requestedBaseImage} (stage alias -> ${stageBaseImage})`;
+  }
+  return stageBaseImage === requestedBaseImage
+    ? requestedBaseImage
+    : `${requestedBaseImage} (resolved to ${stageBaseImage})`;
+}
+
+function resolveCopyDestinationPath(
+  copy: WorkspaceCopyStep,
+  sourcePath: string,
+  destination: string,
+  destinationIsDir: boolean,
+): string {
+  if (!destinationIsDir) {
+    return destination;
+  }
+
+  const basename = posix.basename(sourcePath.replace(/\/+$/g, "")) || ".";
+  return posix.normalize(posix.join(destination, basename));
 }
 
 type DockerfileBuildSource =
@@ -222,9 +219,8 @@ type DockerfileBuildSource =
       cleanup(): Promise<void>;
     }
   | {
-      kind: "workspace";
-      contextRoot: string;
-      runtime: CloudWorkspaceRuntime;
+      kind: "remote";
+      contextRelativePath: string;
       dockerfile: string;
       cleanup(): Promise<void>;
     };
@@ -282,7 +278,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
   async build(config: BuildConfig, logger?: BuildLogger): Promise<BuildResult> {
     const log = logger ?? new BuildLogger();
 
-    if (config.sourceRef?.kind === "cloud-workspace") {
+    if (config.stack === "docker" || config.dockerfilePath) {
       return this.buildDockerfileWorkspace(config, log);
     }
 
@@ -412,10 +408,8 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
 
     try {
       log.log("Build strategy: Dockerfile plan (build in Oblien workspaces)\n");
-      source = await this.resolveDockerfileBuildSource(config);
-      const plan = compileDockerfileToWorkspacePlan(source.dockerfile, {
-        buildArgs: config.envVars,
-      });
+      source = await this.resolveDockerfileBuildSource(config, log);
+      const plan = compileDockerfileToWorkspacePlan(source.dockerfile);
 
       const blocking = plan.diagnostics.filter(
         (item) => item.severity === "error" || item.severity === "unsupported",
@@ -459,6 +453,11 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         workspaceId: built.workspaceId,
         runtime: built.runtime,
       });
+      log.log(
+        `Dockerfile runtime plan: workdir ${built.runtime.workdir}${
+          built.runtime.exposedPort ? ` · port ${built.runtime.exposedPort}` : " · no EXPOSE port"
+        }${built.runtime.startCommand ? ` · start ${built.runtime.startCommand}` : " · no start command"}\n`,
+      );
 
       return {
         sessionId: config.sessionId,
@@ -487,17 +486,32 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
     }
   }
 
-  private async resolveDockerfileBuildSource(config: BuildConfig): Promise<DockerfileBuildSource> {
-    if (config.sourceRef?.kind === "cloud-workspace") {
-      return this.resolveWorkspaceDockerfileBuildSource(config);
+  private async resolveDockerfileBuildSource(
+    config: BuildConfig,
+    logger: BuildLogger,
+  ): Promise<DockerfileBuildSource> {
+    if (config.dockerfileContent?.trim()) {
+      logger.log("Using Dockerfile content from source metadata.\n");
+      return {
+        kind: "remote",
+        contextRelativePath: normalizeDockerRelativePath(config.rootDirectory),
+        dockerfile: config.dockerfileContent,
+        cleanup: async () => {},
+      };
     }
 
+    if (!config.localPath) {
+      return this.resolveRemoteDockerfileBuildSource(config, logger);
+    }
+
+    logger.log("Preparing local Dockerfile source...\n");
     const context = await createDockerBuildContext(config, { requireRepositoryDockerfile: true });
     const dockerfilePath = join(context.contextDir, ...context.dockerfileName.split("/"));
     const dockerfile = await readFile(dockerfilePath, "utf-8");
+
     const contextRoot = join(
       context.contextDir,
-      ...normalizeRelativePath(context.rootDirectory).split("/").filter(Boolean),
+      ...normalizeDockerRelativePath(context.rootDirectory).split("/").filter(Boolean),
     );
 
     return {
@@ -508,61 +522,103 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
     };
   }
 
-  private async resolveWorkspaceDockerfileBuildSource(
+  private async resolveRemoteDockerfileBuildSource(
     config: BuildConfig,
+    logger: BuildLogger,
   ): Promise<DockerfileBuildSource> {
-    const sourceRef = config.sourceRef;
-    if (!sourceRef || sourceRef.kind !== "cloud-workspace") {
-      throw new Error("Cloud Dockerfile build source is missing.");
-    }
+    const candidates = resolveDockerfileCandidates(config.rootDirectory, config.dockerfilePath);
+    const sourceLabel = config.commitSha
+      ? `${config.branch}@${config.commitSha.slice(0, 7)}`
+      : config.branch;
+    const checkoutRef = config.commitSha ?? "FETCH_HEAD";
+    const sourceDir = "/openship/dockerfile-source";
+    let sourceWorkspaceId: string | undefined;
 
-    const runtime = await this.ws(sourceRef.workspaceId).runtime();
-    const sourceRoot = sourceRef.path || COMPOSE_SOURCE_PATH;
-    const rootDirectory = normalizeRelativePath(config.rootDirectory);
-    const dockerfileName = await this.resolveWorkspaceDockerfileName(
-      runtime,
-      sourceRoot,
-      rootDirectory,
-      config.dockerfilePath,
-    );
-
-    if (!dockerfileName) {
-      const expectedDockerfile = config.dockerfilePath?.trim() || "Dockerfile";
-      throw new Error(
-        `No Dockerfile found for this build context. Expected ${expectedDockerfile}${rootDirectory ? ` under ${rootDirectory}` : ""}.`,
+    try {
+      logger.log(`Resolving Dockerfile source in cloud workspace (${sourceLabel})...\n`);
+      const provisioned = await this.provisionWorkspace(
+        {
+          name: `${config.slug ?? config.projectId}-source`.slice(0, 60),
+          image: DOCKERFILE_SOURCE_IMAGE,
+          mode: "temporary",
+          resources: config.resources,
+          env: config.envVars,
+          ttl: "10m",
+        },
+        logger,
       );
-    }
+      sourceWorkspaceId = provisioned.workspaceId;
 
-    const dockerfilePath = joinWorkspacePath(sourceRoot, dockerfileName);
-    const file = await runtime.files.read({ filePath: dockerfilePath });
+      await this.ensureWorkspaceGit(provisioned.runtime, logger, "Dockerfile source workspace");
 
-    return {
-      kind: "workspace",
-      contextRoot: joinWorkspacePath(sourceRoot, rootDirectory),
-      runtime,
-      dockerfile: file.content,
-      cleanup: async () => {},
-    };
-  }
+      const executor = this.workspaceExecutor(provisioned.runtime);
+      const cloneUrl = injectGitToken(config.repoUrl, config.gitToken);
+      const fetchCommand = [
+        "set -e",
+        `rm -rf ${sq(sourceDir)}`,
+        `mkdir -p ${sq(sourceDir)}`,
+        `cd ${sq(sourceDir)}`,
+        "git init -q",
+        `git remote add origin ${sq(cloneUrl)}`,
+        `GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true git -c credential.helper= fetch --depth ${config.commitSha ? "50" : "1"} origin ${sq(config.branch)}`,
+        `git -c credential.helper= -c advice.detachedHead=false checkout -q ${sq(checkoutRef)}`,
+        'echo "Dockerfile source fetch ready."',
+      ].join("\n");
+      const fetchResult = await executor.streamExec(fetchCommand, logger.callback);
+      if (fetchResult.code !== 0) {
+        throw new Error(
+          summarizeCommandOutput(fetchResult.output) || "Failed to fetch Dockerfile source",
+        );
+      }
 
-  private async resolveWorkspaceDockerfileName(
-    runtime: CloudWorkspaceRuntime,
-    sourceRoot: string,
-    rootDirectory?: string,
-    explicitDockerfilePath?: string,
-  ): Promise<string | null> {
-    for (const candidate of resolveDockerfileCandidates(rootDirectory, explicitDockerfilePath)) {
-      const candidatePath = joinWorkspacePath(sourceRoot, candidate);
-      const exists = await runtime.files
-        .stat({ path: candidatePath })
-        .then((stat) => stat.type === "file")
-        .catch(() => false);
-      if (exists) {
-        return candidate;
+      for (const candidate of candidates) {
+        logger.log(`Checking Dockerfile candidate: ${candidate}\n`);
+        const dockerfile = await executor
+          .exec(
+            [
+              `cd ${sq(sourceDir)}`,
+              `test -f ${sq(candidate)}`,
+              `cat ${sq(candidate)}`,
+            ].join(" && "),
+            { timeout: 30_000 },
+          )
+          .catch(() => null);
+        if (dockerfile !== null) {
+          logger.log(`Dockerfile source resolved: ${candidate}\n`);
+          const workspaceId = sourceWorkspaceId;
+          sourceWorkspaceId = undefined;
+          return {
+            kind: "remote",
+            contextRelativePath: normalizeDockerRelativePath(config.rootDirectory),
+            dockerfile,
+            cleanup: async () => {
+              await this.ws(workspaceId)
+                .delete()
+                .catch(() => {});
+            },
+          };
+        }
+      }
+
+      const discovered = await executor
+        .exec(
+          `cd ${sq(sourceDir)} && find . -maxdepth 5 -type f -iname Dockerfile | sed 's#^./##' | head -20`,
+          { timeout: 30_000 },
+        )
+        .then((value) => value.trim())
+        .catch(() => "");
+      throw new Error(
+        `No Dockerfile found. Checked: ${candidates.join(", ")}${
+          discovered ? `. Found: ${discovered.replace(/\n/g, ", ")}` : ""
+        }`,
+      );
+    } finally {
+      if (sourceWorkspaceId) {
+        await this.ws(sourceWorkspaceId)
+          .delete()
+          .catch(() => {});
       }
     }
-
-    return null;
   }
 
   private getUnsupportedDockerfilePlanFeatures(plan: WorkspaceBuildPlan): string[] {
@@ -611,47 +667,73 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
     onWorkspaceCreated(workspaceId: string): void;
   }): Promise<{ workspaceId: string; runtime: WorkspaceRuntimePlan }> {
     const { config, plan, source, logger, onWorkspaceCreated } = opts;
-    const stageRefs = new Map<
-      string,
-      {
-        stage: WorkspaceBuildStagePlan;
-        workspaceId: string;
-        runtime: Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
-      }
-    >();
-    const stageWorkspaceIds: string[] = [];
-    let finalWorkspaceId: string | undefined;
+    const plannedStageRefs = new Map<string, WorkspaceBuildStagePlan>();
+    const resolvedStageBaseImages = new Map<number, string>();
+    const stageBaseLabels = new Map<number, string>();
+    let workspaceBaseImage: string | undefined;
+    let workspaceId: string | undefined;
 
     try {
       for (const stage of plan.stages) {
         const stageName = stage.name ?? String(stage.index);
-        logger.log(`Preparing Dockerfile stage "${stageName}" from ${stage.baseImage}...\n`);
-
         const allArgs = { ...plan.globalArgs, ...stage.args };
-        const baseImage = substituteDockerArgs(stage.baseImage, allArgs);
+        const requestedBaseImage = substituteDockerArgs(stage.baseImage, allArgs);
+        const baseStageRef = plannedStageRefs.get(requestedBaseImage);
+        const baseImage = baseStageRef
+          ? resolvedStageBaseImages.get(baseStageRef.index)
+          : requestedBaseImage;
         if (!baseImage || baseImage.includes("$")) {
           throw new Error(
             `Dockerfile stage "${stageName}" has unresolved base image "${stage.baseImage}".`,
           );
         }
 
-        const provisioned = await this.provisionWorkspace(
-          {
-            name: `${config.slug ?? config.projectId}-${stageName}`.slice(0, 60),
-            image: baseImage,
-            mode: "temporary",
-            resources: config.resources,
-            env: config.envVars,
-            ttl: "15m",
-          },
-          logger,
-        );
-        onWorkspaceCreated(provisioned.workspaceId);
-        stageWorkspaceIds.push(provisioned.workspaceId);
-
-        if (stage.copies.some((copy) => !copy.from)) {
-          await this.transferDockerfileContext(source, provisioned.runtime, logger);
+        const baseLabel = stageBaseLabel(baseImage, requestedBaseImage, baseStageRef?.name);
+        if (workspaceBaseImage && workspaceBaseImage !== baseImage) {
+          throw new Error(
+            `Dockerfile stage "${stageName}" uses base image "${baseLabel}", but cloud Dockerfile builds run one workspace per service and only support one base image per Dockerfile. Use stage aliases that resolve to "${workspaceBaseImage}" or deploy this service with Docker support.`,
+          );
         }
+
+        workspaceBaseImage ??= baseImage;
+        stageBaseLabels.set(stage.index, baseLabel);
+        resolvedStageBaseImages.set(stage.index, baseImage);
+        plannedStageRefs.set(String(stage.index), stage);
+        if (stage.name) plannedStageRefs.set(stage.name, stage);
+      }
+
+      if (!workspaceBaseImage) {
+        throw new Error("Dockerfile did not define a base image.");
+      }
+
+      const provisioned = await this.provisionWorkspace(
+        {
+          name: `${config.slug ?? config.projectId}-dockerfile`.slice(0, 60),
+          image: workspaceBaseImage,
+          mode: "temporary",
+          resources: config.resources,
+          env: config.envVars,
+          ttl: "15m",
+        },
+        logger,
+      );
+      workspaceId = provisioned.workspaceId;
+      onWorkspaceCreated(provisioned.workspaceId);
+
+      if (
+        plan.stages.some((stage) =>
+          stage.steps.some((step) => step.type === "copy" && !step.copy.from),
+        )
+      ) {
+        await this.transferDockerfileContext(config, source, provisioned.runtime, logger);
+      }
+
+      const completedStageRefs = new Map<string, WorkspaceBuildStagePlan>();
+
+      for (const stage of plan.stages) {
+        const stageName = stage.name ?? String(stage.index);
+        const baseLabel = stageBaseLabels.get(stage.index) ?? workspaceBaseImage;
+        logger.log(`Preparing Dockerfile stage "${stageName}" from ${baseLabel}...\n`);
 
         await this.execAndStream(
           provisioned.runtime,
@@ -659,14 +741,13 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
           logger.callback,
         );
 
-        for (const [stepIndex, step] of stage.steps.entries()) {
+        for (const step of stage.steps) {
           if (step.type === "copy") {
             await this.applyDockerfileCopyStep({
               copy: step.copy,
-              stageRefs,
+              stageRefs: completedStageRefs,
               runtime: provisioned.runtime,
               logger,
-              stepIndex,
             });
           } else {
             await this.applyDockerfileRunStep({
@@ -683,30 +764,17 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
           }
         }
 
-        const ref = { stage, workspaceId: provisioned.workspaceId, runtime: provisioned.runtime };
-        stageRefs.set(String(stage.index), ref);
-        if (stage.name) stageRefs.set(stage.name, ref);
-
-        if (stage === plan.finalStage) {
-          finalWorkspaceId = provisioned.workspaceId;
-        }
+        completedStageRefs.set(String(stage.index), stage);
+        if (stage.name) completedStageRefs.set(stage.name, stage);
       }
 
-      if (!finalWorkspaceId || !plan.runtime) {
+      if (!plan.runtime) {
         throw new Error("Dockerfile final stage workspace was not created.");
       }
 
-      for (const workspaceId of stageWorkspaceIds) {
-        if (workspaceId !== finalWorkspaceId) {
-          await this.ws(workspaceId)
-            .delete()
-            .catch(() => {});
-        }
-      }
-
-      return { workspaceId: finalWorkspaceId, runtime: plan.runtime };
+      return { workspaceId: provisioned.workspaceId, runtime: plan.runtime };
     } catch (err) {
-      for (const workspaceId of stageWorkspaceIds) {
+      if (workspaceId) {
         await this.ws(workspaceId)
           .delete()
           .catch(() => {});
@@ -716,6 +784,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
   }
 
   private async transferDockerfileContext(
+    config: BuildConfig,
     source: DockerfileBuildSource,
     runtime: CloudWorkspaceRuntime,
     logger: BuildLogger,
@@ -730,86 +799,66 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
       return;
     }
 
-    await this.transferWorkspaceDirectory(
-      source.runtime,
-      source.contextRoot,
-      runtime,
-      "/openship/context",
-      logger,
-    );
+    await this.cloneDockerfileContext(config, source, runtime, logger);
   }
 
-  private async transferWorkspaceDirectory(
-    sourceRuntime: CloudWorkspaceRuntime,
-    sourcePath: string,
+  private async cloneDockerfileContext(
+    config: BuildConfig,
+    source: Extract<DockerfileBuildSource, { kind: "remote" }>,
     targetRuntime: CloudWorkspaceRuntime,
-    targetPath: string,
     logger: BuildLogger,
   ): Promise<void> {
-    const stagingPath = `${targetPath}-upload-${Date.now()}`;
-    const excludePatterns = [
-      ...TRANSFER_EXCLUDES,
-      ...(await this.readRemoteDockerignorePatterns(sourceRuntime, sourcePath)),
-    ];
+    const repoRoot = "/openship/repo";
+    const contextRoot = "/openship/context";
+    const contextRelativePath = normalizeDockerRelativePath(source.contextRelativePath);
 
-    logger.log(`Transferring ${sourcePath} → ${targetPath}...\n`);
-    const response = await sourceRuntime.transfer.download({
-      paths: [sourcePath],
-      excludePatterns,
-    });
-    const body = await response.arrayBuffer();
-    const result = await targetRuntime.transfer.upload({
-      body: Buffer.from(body),
-      dest: stagingPath,
-    });
-
-    if (!result.files_extracted || result.files_extracted === 0) {
-      throw new Error("Transfer produced 0 files — upload may have failed silently");
+    if (contextRelativePath.startsWith("..")) {
+      throw new Error("Dockerfile build context escapes the repository source.");
     }
 
-    const relativeSourcePath = sourcePath.replace(/^\/+/, "");
-    const basename = posix.basename(sourcePath);
-    const candidates = [
-      joinWorkspacePath(stagingPath, relativeSourcePath),
-      joinWorkspacePath(stagingPath, basename),
-      stagingPath,
-    ];
-    const selectLines = candidates
-      .map((candidate, index) => {
-        const prefix = index === 0 ? "if" : "elif";
-        return `${prefix} [ -d ${sq(candidate)} ]; then src=${sq(candidate)}`;
-      })
-      .join("\n");
-    const command = [
+    const cloneUrl = injectGitToken(config.repoUrl, config.gitToken);
+    const depthArgs = config.commitSha ? "--depth 50 " : "--depth 1 ";
+    const cloneTarget = contextRelativePath ? repoRoot : contextRoot;
+    const contextSource = contextRelativePath
+      ? joinWorkspacePath(repoRoot, contextRelativePath)
+      : contextRoot;
+    const prepareContextCommands = contextRelativePath
+      ? [
+          `echo "Copying Dockerfile context ${contextRelativePath}..."`,
+          `mkdir -p ${sq(contextRoot)}`,
+          `cp -a ${sq(`${contextSource}/.`)} ${sq(contextRoot)}/`,
+        ]
+      : ['echo "Using repository root as Dockerfile context."'];
+    const excludedPaths = TRANSFER_EXCLUDES.map((path) =>
+      `rm -rf ${sq(joinWorkspacePath(contextRoot, path))}`,
+    );
+    const cloneCommand = [
       "set -e",
-      `rm -rf ${sq(targetPath)}`,
-      `mkdir -p ${sq(targetPath)}`,
-      "src=",
-      selectLines,
-      "else",
-      `  echo "Uploaded build context was not found in ${stagingPath}" >&2`,
-      "  exit 1",
-      "fi",
-      `cp -a "$src/." ${sq(targetPath)}/`,
-      `rm -rf ${sq(stagingPath)}`,
+      `rm -rf ${sq(repoRoot)} ${sq(contextRoot)}`,
+      "mkdir -p /openship",
+      `GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true git -c credential.helper= clone ${depthArgs}--branch ${sq(config.branch)} ${sq(cloneUrl)} ${sq(cloneTarget)}`,
+    ].join("\n");
+    const checkoutCommand = config.commitSha
+      ? `cd ${sq(cloneTarget)} && git -c credential.helper= -c advice.detachedHead=false checkout ${sq(config.commitSha)}`
+      : "";
+    const prepareCommand = [
+      "set -e",
+      `rm -rf ${sq(joinWorkspacePath(cloneTarget, ".git"))}`,
+      ...prepareContextCommands,
+      'echo "Pruning Dockerfile context..."',
+      ...excludedPaths,
+      'echo "Dockerfile context prepared."',
     ].join("\n");
 
-    await this.execAndStream(targetRuntime, ["sh", "-c", command], logger.callback);
-    logger.log(`Uploaded ${result.files_extracted} files.\n`);
-  }
-
-  private async readRemoteDockerignorePatterns(
-    runtime: CloudWorkspaceRuntime,
-    sourcePath: string,
-  ): Promise<string[]> {
-    const dockerignorePath = joinWorkspacePath(sourcePath, ".dockerignore");
-    const file = await runtime.files.read({ filePath: dockerignorePath }).catch(() => null);
-    if (!file?.content) return [];
-
-    return file.content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"));
+    logger.log(`Preparing Dockerfile build workspace for repository clone (branch: ${config.branch})...\n`);
+    await this.ensureWorkspaceGit(targetRuntime, logger, "Dockerfile build workspace");
+    logger.log(`Cloning Dockerfile context in build workspace (branch: ${config.branch})...\n`);
+    await this.execAndStream(targetRuntime, ["sh", "-c", cloneCommand], logger.callback, 900);
+    if (checkoutCommand) {
+      await this.execAndStream(targetRuntime, ["sh", "-c", checkoutCommand], logger.callback, 300);
+    }
+    await this.execAndStream(targetRuntime, ["sh", "-c", prepareCommand], logger.callback, 300);
+    logger.log("Dockerfile context ready.\n");
   }
 
   private async applyDockerfileRunStep(opts: {
@@ -826,21 +875,14 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
 
   private async applyDockerfileCopyStep(opts: {
     copy: WorkspaceCopyStep;
-    stageRefs: Map<
-      string,
-      {
-        stage: WorkspaceBuildStagePlan;
-        workspaceId: string;
-        runtime: Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
-      }
-    >;
+    stageRefs: Map<string, WorkspaceBuildStagePlan>;
     runtime: Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
     logger: BuildLogger;
-    stepIndex: number;
   }): Promise<void> {
-    const { copy, stageRefs, runtime, logger, stepIndex } = opts;
+    const { copy, stageRefs, runtime, logger } = opts;
     let sourceBase = "/openship/context";
     let sourcePaths = copy.sources;
+    let copyFromStage = false;
 
     if (copy.from) {
       const sourceStage = stageRefs.get(copy.from);
@@ -859,16 +901,9 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
       const downloadPaths = copy.sources.map(stageArtifactDownloadPath);
       const sourceLabel = downloadPaths.join(" ");
       logger.log(`[Dockerfile] COPY artifacts from stage "${copy.from}": ${sourceLabel}\n`);
-      const response = await sourceStage.runtime.transfer.download({ paths: downloadPaths });
-      const body = await response.arrayBuffer();
-      sourceBase = `/openship/artifacts/${stageArtifactDirectoryName(copy, stepIndex)}`;
+      copyFromStage = true;
+      sourceBase = "";
       sourcePaths = downloadPaths;
-      await runtime.transfer.upload({ body: Buffer.from(body), dest: sourceBase });
-
-      const normalizeCommand = normalizeStageArtifactCommand(sourceBase, downloadPaths);
-      if (normalizeCommand) {
-        await this.execAndStream(runtime, ["sh", "-c", normalizeCommand], logger.callback);
-      }
     }
 
     const destination = resolveVmPath(copy.workdir, copy.destination);
@@ -878,12 +913,38 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
       copy.destination === "." ||
       copy.destination.endsWith("/.");
     const destinationTarget = destinationIsDir ? destination : posix.dirname(destination);
-    const sourceExprs = sourcePaths.map((source) => sourceExpression(sourceBase, source));
-    const targetExpr = destinationIsDir ? sq(destination) : sq(destination);
+    const sourceExprs = copyFromStage
+      ? sourcePaths.map((source) => sq(source))
+      : sourcePaths.map((source) => sourceExpression(sourceBase, source));
+
+    if (copyFromStage) {
+      const samePathCopies = sourcePaths.map((source) => ({
+        source: posix.normalize(source),
+        target: posix.normalize(
+          resolveCopyDestinationPath(copy, source, destination, destinationIsDir),
+        ),
+      }));
+
+      if (samePathCopies.every(({ source, target }) => source === target)) {
+        const verifyCommand = samePathCopies
+          .map(({ source }) => `test -e ${sq(source)}`)
+          .join(" && ");
+        await this.execAndStream(runtime, ["sh", "-c", verifyCommand], logger.callback);
+        logger.log("[Dockerfile] COPY artifacts already available in current workspace.\n");
+        return;
+      }
+    }
+
     const command = [
+      "set -e",
       `mkdir -p ${sq(destinationTarget)}`,
-      `cp -a ${sourceExprs.join(" ")} ${targetExpr}`,
-    ].join(" && ");
+      ...dockerCopyShellCommands({
+        sources: sourceExprs,
+        destination,
+        destinationIsDir,
+        destinationTarget,
+      }),
+    ].join("\n");
 
     logger.log(
       `[Dockerfile] ${copy.kind.toUpperCase()} ${copy.sources.join(" ")} ${copy.destination}\n`,
@@ -1595,17 +1656,6 @@ fi`;
     return this.compose.ensureServiceGroup(config);
   }
 
-  async prepareComposeSource(
-    config: PrepareComposeSourceConfig,
-    logger?: BuildLogger,
-  ): Promise<ComposeSourceHandle> {
-    return this.compose.prepareSource(config, logger);
-  }
-
-  async destroyComposeSource(handle: ComposeSourceHandle): Promise<void> {
-    await this.compose.destroySource(handle);
-  }
-
   async deployServiceWorkload(
     group: MultiServiceGroupHandle,
     config: MultiServiceDeployConfig,
@@ -1664,6 +1714,86 @@ fi`;
   }
 
   // ── Private helpers ────────────────────────────────────────────────────
+
+  private workspaceExecutor(rt: CloudWorkspaceRuntime): CommandExecutor {
+    const run = async (
+      command: string,
+      onLog?: LogCallback,
+      timeoutMs?: number,
+    ): Promise<{ code: number; output: string }> => {
+      let output = "";
+      const collect: LogCallback = (entry) => {
+        output += entry.message;
+        onLog?.(entry);
+      };
+
+      try {
+        await this.execAndStream(
+          rt,
+          ["sh", "-c", command],
+          collect,
+          timeoutMs ? Math.ceil(timeoutMs / 1000) : undefined,
+        );
+        return { code: 0, output };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { code: 1, output: output || message };
+      }
+    };
+
+    return {
+      exec: async (command, opts) => {
+        const result = await run(command, undefined, opts?.timeout);
+        if (result.code !== 0) {
+          throw new Error(result.output);
+        }
+        return result.output;
+      },
+      streamExec: async (command, onLog) => run(command, onLog, WORKSPACE_STREAM_EXEC_TIMEOUT_MS),
+      writeFile: async () => {
+        throw new Error("Workspace file writes are not supported by this executor");
+      },
+      readFile: async () => {
+        throw new Error("Workspace file reads are not supported by this executor");
+      },
+      exists: async () => {
+        throw new Error("Workspace file checks are not supported by this executor");
+      },
+      mkdir: async () => {
+        throw new Error("Workspace mkdir is not supported by this executor");
+      },
+      rm: async () => {
+        throw new Error("Workspace rm is not supported by this executor");
+      },
+      transferIn: async () => {
+        throw new Error("Workspace transferIn is not supported by this executor");
+      },
+      dispose: async () => {},
+    };
+  }
+
+  private async ensureWorkspaceGit(
+    rt: CloudWorkspaceRuntime,
+    logger: BuildLogger,
+    label = "workspace",
+  ): Promise<void> {
+    const executor = this.workspaceExecutor(rt);
+    const git = await checkGit(executor);
+    if (git.healthy) {
+      logger.log(`Git ready in ${label}.\n`);
+      return;
+    }
+
+    const result = await installGit(executor, logger.callback, { label });
+    if (!result.success) {
+      const rechecked = await checkGit(executor);
+      if (rechecked.healthy) {
+        logger.log(`Git ready in ${label}.\n`);
+        return;
+      }
+      throw new Error(result.error ?? rechecked.message ?? "Git installation failed");
+    }
+  }
 
   /**
    * Execute a command via the runtime exec API and stream output to the log callback.

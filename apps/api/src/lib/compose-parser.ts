@@ -211,13 +211,13 @@ function buildInterpolationEnv(options: ComposeParseOptions): Record<string, str
       : [];
 
   for (const content of contents) {
-    Object.assign(env, parseEnvFile(content));
+    Object.assign(env, parseComposeEnvFile(content));
   }
 
   return { ...env, ...(options.env ?? {}) };
 }
 
-function parseEnvFile(content: string): Record<string, string> {
+export function parseComposeEnvFile(content: string): Record<string, string> {
   const result: Record<string, string> = {};
 
   for (const rawLine of content.replace(/^\uFEFF/, "").split(/\r?\n/)) {

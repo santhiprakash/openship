@@ -2,20 +2,14 @@ import type { Oblien, WorkspaceHandle } from "oblien";
 
 import { DEFAULT_RESOURCE_CONFIG, type LogCallback, type ResourceConfig } from "../../types";
 import type { WorkspaceRuntimePlan } from "../../dockerfile";
-import { BuildLogger, injectGitToken, sq } from "../build-pipeline";
+import { sq, type BuildLogger } from "../build-pipeline";
 import type {
-  ComposeSourceHandle,
   MultiServiceDeployConfig,
   MultiServiceDeployResult,
   MultiServiceGroupHandle,
-  PrepareComposeSourceConfig,
 } from "../types";
 
 type CloudWorkspaceRuntime = Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
-
-export const COMPOSE_SOURCE_PATH = "/openship/source";
-
-const SOURCE_WORKSPACE_IMAGE = "node:22";
 
 export interface CloudBuiltArtifact {
   workspaceId: string;
@@ -66,10 +60,6 @@ function toEnvArray(env: Record<string, string>): string[] {
   return Object.entries(env).map(([k, v]) => `${k}=${v}`);
 }
 
-function joinWorkspacePath(base: string, ...parts: string[]): string {
-  return [base, ...parts].filter(Boolean).join("/").replace(/\/+/g, "/");
-}
-
 function firstContainerPort(portSpecs: string[]): number | undefined {
   for (const spec of portSpecs) {
     const clean = spec.trim();
@@ -97,6 +87,26 @@ function errorMessage(err: unknown) {
   return err instanceof Error ? err.message : String(err);
 }
 
+async function withCloudOperationTimeout<T>(
+  operation: Promise<T>,
+  label: string,
+  timeoutMs = 300_000,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export class CloudComposeSupport {
   private readonly groups = new Map<string, CloudComposeGroupState>();
 
@@ -119,79 +129,6 @@ export class CloudComposeSupport {
     return { id };
   }
 
-  async prepareSource(
-    config: PrepareComposeSourceConfig,
-    logger?: BuildLogger,
-  ): Promise<ComposeSourceHandle> {
-    const log = logger ?? new BuildLogger();
-    const provisioned = await this.deps.provisionWorkspace(
-      {
-        name: `${config.slug}-source`.slice(0, 60),
-        image: config.image || SOURCE_WORKSPACE_IMAGE,
-        mode: "temporary",
-        resources: config.resources ?? DEFAULT_RESOURCE_CONFIG,
-        ttl: "30m",
-      },
-      log,
-    );
-
-    try {
-      const cloneUrl = injectGitToken(config.repoUrl, config.gitToken);
-      const depthArgs = config.commitSha ? "--depth 50 " : "--depth 1 ";
-      const checkoutCommand = config.commitSha
-        ? `cd ${sq(COMPOSE_SOURCE_PATH)} && git -c credential.helper= checkout ${sq(config.commitSha)}`
-        : "";
-      const command = [
-        "set -e",
-        "if ! command -v git >/dev/null 2>&1; then",
-        "  if command -v apt-get >/dev/null 2>&1; then",
-        "    export DEBIAN_FRONTEND=noninteractive",
-        "    apt-get update",
-        "    apt-get install -y git ca-certificates",
-        "  elif command -v apk >/dev/null 2>&1; then",
-        "    apk add --no-cache git ca-certificates",
-        "  elif command -v yum >/dev/null 2>&1; then",
-        "    yum install -y git ca-certificates",
-        "  else",
-        '    echo "git is required to clone compose source, but no supported package manager was found." >&2',
-        "    exit 1",
-        "  fi",
-        "fi",
-        "rm -rf /openship",
-        "mkdir -p /openship",
-        `GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true git -c credential.helper= clone ${depthArgs}--branch ${sq(config.branch)} ${sq(cloneUrl)} ${sq(COMPOSE_SOURCE_PATH)}`,
-        checkoutCommand,
-        `rm -rf ${sq(joinWorkspacePath(COMPOSE_SOURCE_PATH, ".git"))}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-      log.log(`Cloning compose source in Oblien workspace (branch: ${config.branch})...\n`);
-      await this.deps.execAndStream(provisioned.runtime, ["sh", "-c", command], log.callback, 900);
-      log.log("Compose source workspace ready.\n");
-
-      return {
-        id: provisioned.workspaceId,
-        kind: "cloud-workspace",
-        workspaceId: provisioned.workspaceId,
-        path: COMPOSE_SOURCE_PATH,
-      };
-    } catch (err) {
-      await this.deps
-        .workspace(provisioned.workspaceId)
-        .delete()
-        .catch(() => {});
-      throw err;
-    }
-  }
-
-  async destroySource(handle: ComposeSourceHandle): Promise<void> {
-    await this.deps
-      .workspace(handle.workspaceId)
-      .delete()
-      .catch(() => {});
-  }
-
   async deployServiceWorkload(
     group: MultiServiceGroupHandle,
     config: MultiServiceDeployConfig,
@@ -205,121 +142,174 @@ export class CloudComposeSupport {
     this.groups.set(group.id, groupState);
 
     const builtArtifact = this.deps.builtArtifacts.get(config.image);
-    const workspaceId =
-      builtArtifact?.workspaceId ?? (await this.createImageServiceWorkspace(config, log));
-    const ws = this.deps.workspace(workspaceId);
+    let workspaceId: string | undefined;
 
     try {
-      await ws.lifecycle.makePermanent();
-    } catch (err) {
-      throw new Error(
-        `Failed to make service workspace permanent: ${err instanceof Error ? err.message : err}`,
-      );
-    }
+      workspaceId =
+        builtArtifact?.workspaceId ?? (await this.createImageServiceWorkspace(config, log));
+      const ws = this.deps.workspace(workspaceId);
 
-    const runtimeEnv = {
-      ...(builtArtifact?.runtime.env ?? {}),
-      ...config.environment,
-    };
-    const port =
-      config.publicPort ?? firstContainerPort(config.ports) ?? builtArtifact?.runtime.exposedPort;
-    const workdir = builtArtifact?.runtime.workdir ?? "/";
-    const startCommand = config.command ?? builtArtifact?.runtime.startCommand;
-
-    log({
-      timestamp: now(),
-      message: `Deploying cloud service "${config.serviceName}" in workspace ${workspaceId}...\n`,
-      level: "info",
-    });
-
-    if (startCommand) {
-      await ws.workloads.delete("app").catch(() => {});
-      await ws.workloads.create({
-        id: "app",
-        name: "app",
-        cmd: ["sh", "-c", `cd ${sq(workdir)} && ${startCommand}`],
-        working_dir: workdir,
-        env: [...toEnvArray(runtimeEnv), ...(port ? [`PORT=${port}`] : [])],
-        restart_policy: restartPolicyForWorkload(config.restart),
-        max_restarts: 10,
+      await withCloudOperationTimeout(
+        ws.lifecycle.makePermanent(),
+        `Making cloud service "${config.serviceName}" permanent`,
+      ).catch((err) => {
+        throw new Error(`Failed to make service workspace permanent: ${errorMessage(err)}`);
       });
-    } else {
+      const runtimeEnv = {
+        ...(builtArtifact?.runtime.env ?? {}),
+        ...config.environment,
+      };
+      const port =
+        config.publicPort ?? firstContainerPort(config.ports) ?? builtArtifact?.runtime.exposedPort;
+      const workdir = builtArtifact?.runtime.workdir ?? "/";
+      const startCommand = config.command ?? builtArtifact?.runtime.startCommand;
+
       log({
         timestamp: now(),
-        message: `No command configured for "${config.serviceName}". Using the workspace image default process.\n`,
-        level: "warn",
+        message: `Deploying cloud service "${config.serviceName}" in workspace ${workspaceId}...\n`,
+        level: "info",
       });
-    }
 
-    if (config.expose && port) {
-      try {
-        await ws.network.update({ ingress_ports: [port] });
-      } catch (err) {
-        throw new Error(
-          `Failed to open ${exposeTarget(port, config.serviceName, config.publicSlug)}: ${errorMessage(err)}`,
+      if (startCommand) {
+        log({
+          timestamp: now(),
+          message: `Creating workload for service "${config.serviceName}"...\n`,
+          level: "info",
+        });
+        await withCloudOperationTimeout(
+          ws.workloads.delete("app").catch(() => {}),
+          `Replacing workload for service "${config.serviceName}"`,
         );
+        await withCloudOperationTimeout(
+          ws.workloads.create({
+            id: "app",
+            name: "app",
+            cmd: ["sh", "-c", `cd ${sq(workdir)} && ${startCommand}`],
+            working_dir: workdir,
+            env: [...toEnvArray(runtimeEnv), ...(port ? [`PORT=${port}`] : [])],
+            restart_policy: restartPolicyForWorkload(config.restart),
+            max_restarts: 10,
+          }),
+          `Creating workload for service "${config.serviceName}"`,
+        );
+        log({
+          timestamp: now(),
+          message: `Workload for service "${config.serviceName}" is ready.\n`,
+          level: "info",
+        });
+      } else {
+        log({
+          timestamp: now(),
+          message: `No command configured for "${config.serviceName}". Using the workspace image default process.\n`,
+          level: "warn",
+        });
       }
 
-      if (config.customDomain) {
-        try {
-          await ws.domains.connect({ domain: config.customDomain, port });
-        } catch (err) {
-          throw new Error(
-            `Failed to connect custom domain "${config.customDomain}" for service "${config.serviceName}" on port ${port}: ${errorMessage(err)}`,
-          );
-        }
-      } else if (config.publicSlug) {
-        try {
+      if (config.expose && port) {
+        if (config.customDomain) {
+          log({
+            timestamp: now(),
+            message: `Opening ${exposeTarget(port, config.serviceName, config.publicSlug)}...\n`,
+            level: "info",
+          });
+          await withCloudOperationTimeout(
+            ws.network.update({ ingress_ports: [port] }),
+            `Opening network port for service "${config.serviceName}"`,
+          ).catch((err) => {
+            throw new Error(
+              `Failed to open ${exposeTarget(port, config.serviceName, config.publicSlug)}: ${errorMessage(err)}`,
+            );
+          });
+          log({
+            timestamp: now(),
+            message: `Opened ${exposeTarget(port, config.serviceName, config.publicSlug)}.\n`,
+            level: "info",
+          });
+          log({
+            timestamp: now(),
+            message: `Connecting custom domain "${config.customDomain}" for service "${config.serviceName}"...\n`,
+            level: "info",
+          });
+          await withCloudOperationTimeout(
+            ws.domains.connect({ domain: config.customDomain, port }),
+            `Connecting custom domain for service "${config.serviceName}"`,
+          ).catch((err) => {
+            throw new Error(
+              `Failed to connect custom domain "${config.customDomain}" for service "${config.serviceName}" on port ${port}: ${errorMessage(err)}`,
+            );
+          });
+          log({
+            timestamp: now(),
+            message: `Custom domain "${config.customDomain}" connected for service "${config.serviceName}".\n`,
+            level: "info",
+          });
+        } else if (config.publicSlug) {
           log({
             timestamp: now(),
             message: `Exposing ${exposeTarget(port, config.serviceName, config.publicSlug)}...\n`,
             level: "info",
           });
-          await ws.publicAccess.expose({
-            port,
-            domain: "opsh.io",
-            slug: config.publicSlug,
-            label: config.serviceName,
+          await withCloudOperationTimeout(
+            ws.publicAccess.expose({
+              port,
+              domain: "opsh.io",
+              slug: config.publicSlug,
+            }),
+            `Exposing public access for service "${config.serviceName}"`,
+          ).catch((err) => {
+            throw new Error(
+              `Failed to expose ${exposeTarget(port, config.serviceName, config.publicSlug)}: ${errorMessage(err)}`,
+            );
           });
-        } catch (err) {
-          throw new Error(
-            `Failed to expose ${exposeTarget(port, config.serviceName, config.publicSlug)}: ${errorMessage(err)}`,
-          );
+          log({
+            timestamp: now(),
+            message: `Exposed ${exposeTarget(port, config.serviceName, config.publicSlug)}.\n`,
+            level: "info",
+          });
         }
       }
+
+      const ip = await this.resolveWorkspaceIp(ws);
+      const ports = [
+        ...new Set([
+          ...config.ports
+            .map((item) => firstContainerPort([item]))
+            .filter((item): item is number => typeof item === "number"),
+          ...(port ? [port] : []),
+        ]),
+      ];
+
+      groupState.services.set(config.serviceName, {
+        serviceName: config.serviceName,
+        workspaceId,
+        ip: ip ?? undefined,
+        ports,
+      });
+
+      await this.syncServiceDiscovery(groupState, log);
+
+      log({
+        timestamp: now(),
+        message: `Cloud service "${config.serviceName}" started${ip ? ` at ${ip}` : ""}.\n`,
+        level: "info",
+      });
+
+      return {
+        containerId: workspaceId,
+        status: "running",
+        ip: ip ?? undefined,
+        hostPort: port,
+      };
+    } catch (err) {
+      if (workspaceId) {
+        groupState.services.delete(config.serviceName);
+        await this.deps
+          .workspace(workspaceId)
+          .delete()
+          .catch(() => {});
+      }
+      throw err;
     }
-
-    const ip = await this.resolveWorkspaceIp(ws);
-    const ports = [
-      ...new Set([
-        ...config.ports
-          .map((item) => firstContainerPort([item]))
-          .filter((item): item is number => typeof item === "number"),
-        ...(port ? [port] : []),
-      ]),
-    ];
-
-    groupState.services.set(config.serviceName, {
-      serviceName: config.serviceName,
-      workspaceId,
-      ip: ip ?? undefined,
-      ports,
-    });
-
-    await this.syncServiceDiscovery(groupState, log);
-
-    log({
-      timestamp: now(),
-      message: `Cloud service "${config.serviceName}" started${ip ? ` at ${ip}` : ""}.\n`,
-      level: "info",
-    });
-
-    return {
-      containerId: workspaceId,
-      status: "running",
-      ip: ip ?? undefined,
-      hostPort: port,
-    };
   }
 
   private async createImageServiceWorkspace(

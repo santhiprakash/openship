@@ -413,6 +413,33 @@ function isPreviousStageReference(
   return stages.some((stage) => stage.index < currentStage.index && stage.name === ref);
 }
 
+function findPreviousStageReference(
+  stages: WorkspaceBuildStagePlan[],
+  ref: string,
+): WorkspaceBuildStagePlan | null {
+  const numeric = Number(ref);
+  if (Number.isInteger(numeric) && String(numeric) === ref) {
+    return stages[numeric] ?? null;
+  }
+
+  return stages.find((stage) => stage.name === ref) ?? null;
+}
+
+function inheritStageImageConfig(
+  target: WorkspaceBuildStagePlan,
+  base: WorkspaceBuildStagePlan,
+): void {
+  target.workdir = base.workdir;
+  target.env = { ...base.env };
+  target.labels = { ...base.labels };
+  target.exposedPorts = [...base.exposedPorts];
+  target.cmd = base.cmd;
+  target.entrypoint = base.entrypoint;
+  target.startCommand = base.startCommand;
+  target.user = base.user;
+  target.shell = base.shell ? [...base.shell] : undefined;
+}
+
 function validateStageArtifactCopies(stages: WorkspaceBuildStagePlan[]): WorkspacePlanDiagnostic[] {
   const diagnostics: WorkspacePlanDiagnostic[] = [];
 
@@ -463,6 +490,10 @@ export function compileDockerfileParseResult(
         diagnostics.push(parsedFrom.diagnostic);
       }
       currentStage = createStage(stages.length, parsedFrom, defaultWorkdir);
+      const baseStage = findPreviousStageReference(stages, parsedFrom.baseImage);
+      if (baseStage) {
+        inheritStageImageConfig(currentStage, baseStage);
+      }
       stages.push(currentStage);
       continue;
     }

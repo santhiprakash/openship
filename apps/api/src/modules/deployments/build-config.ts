@@ -22,7 +22,7 @@ export interface BuildConfigSnapshotLike {
   buildStrategy?: BuildStrategy;
 }
 
-export function createBuildConfig(opts: {
+export interface BuildConfigFactoryOptions {
   project: Project;
   dep: Deployment;
   snapshot: BuildConfigSnapshotLike;
@@ -31,7 +31,9 @@ export function createBuildConfig(opts: {
   resources: ResourceConfig;
   gitToken?: string;
   overrides?: Partial<BuildConfig>;
-}): BuildConfig {
+}
+
+export function createBuildConfig(opts: BuildConfigFactoryOptions): BuildConfig {
   const { project, dep, snapshot, sessionId, envVars, resources, gitToken, overrides } = opts;
 
   return {
@@ -60,4 +62,22 @@ export function createBuildConfig(opts: {
     gitToken,
     ...overrides,
   };
+}
+
+export function createDockerfileBuildConfig(
+  opts: BuildConfigFactoryOptions,
+): BuildConfig {
+  return createBuildConfig({
+    ...opts,
+    overrides: {
+      ...opts.overrides,
+      stack: "docker",
+      buildStrategy: "server",
+      installCommand: "",
+      buildCommand: "",
+      outputDirectory: "",
+      startCommand: "",
+      productionPaths: [],
+    },
+  });
 }

@@ -41,7 +41,10 @@ function truncateError(msg: string): string {
   return msg.length > max ? msg.slice(0, max) + "…" : msg;
 }
 
-async function cleanupBuildArtifact(runtime: RuntimeAdapter, artifactRef: string): Promise<void> {
+export async function cleanupBuildArtifact(
+  runtime: RuntimeAdapter,
+  artifactRef: string,
+): Promise<void> {
   if (runtime instanceof DockerRuntime) {
     await runtime.removeImage(artifactRef);
     return;

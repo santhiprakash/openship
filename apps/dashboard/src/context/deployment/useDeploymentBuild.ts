@@ -46,6 +46,12 @@ function logTypeFromStreamMessage(level: unknown, text: string): BuildLog["type"
   return "info";
 }
 
+function logTypeFromHydratedEntry(entry: Record<string, unknown>, text: string): BuildLog["type"] {
+  if (entry.type === "error" || entry.level === "error") return "error";
+  if (entry.type === "success") return "success";
+  return logTypeFromStreamMessage(entry.level, text);
+}
+
 const STEPS = [
   { label: "Cloning", icon: "git%20branch-159-1658431404.png" },
   { label: "Installing", icon: "npm-184-1693375161.png" },
@@ -95,7 +101,7 @@ export function useDeploymentBuild(
   const writeToTerminal = useCallback((data: Uint8Array) => {
     if (terminalRef.current && isTerminalReady.current) {
       terminalRef.current.write(data);
-    } else if (isTerminalReady.current && config.projectType === "services") {
+    } else if (config.projectType === "services") {
       return;
     } else {
       pendingLogsBuffer.current.push(data);
@@ -230,6 +236,7 @@ export function useDeploymentBuild(
               text: rawText,
               time: new Date().toISOString(),
               serviceName,
+              rawData: typeof message.data === "string" ? message.data : undefined,
             };
             setState((prev) => ({
               ...prev,
@@ -538,13 +545,47 @@ export function useDeploymentBuild(
           }));
         }
 
-        // Parse existing logs
-        const buildLogs: BuildLog[] = data.logs
-          ? data.logs
-              .split("\n")
-              .filter((line: string) => line.trim())
-              .map((line: string) => ({ type: "info" as const, text: line, time: new Date().toISOString() }))
-          : [];
+        // Parse existing logs. Compose needs structured entries so service tabs
+        // keep serviceName/raw terminal data after refresh.
+        const buildLogs: BuildLog[] = Array.isArray(data.logEntries)
+          ? data.logEntries
+              .map((entry: Record<string, unknown>) => {
+                const text =
+                  typeof entry.text === "string"
+                    ? entry.text
+                    : typeof entry.message === "string"
+                      ? entry.message
+                      : "";
+                if (!text.trim()) return null;
+
+                return {
+                  type: logTypeFromHydratedEntry(entry, text),
+                  text,
+                  time:
+                    typeof entry.time === "string"
+                      ? entry.time
+                      : typeof entry.timestamp === "string"
+                        ? entry.timestamp
+                        : new Date().toISOString(),
+                  serviceName:
+                    typeof entry.serviceName === "string" && entry.serviceName.trim()
+                      ? entry.serviceName
+                      : undefined,
+                  rawData: typeof entry.rawData === "string" ? entry.rawData : undefined,
+                  eventId: typeof entry.eventId === "number" ? entry.eventId : undefined,
+                } satisfies BuildLog;
+              })
+              .filter((entry: BuildLog | null): entry is BuildLog => entry !== null)
+          : data.logs
+            ? data.logs
+                .split("\n")
+                .filter((line: string) => line.trim())
+                .map((line: string) => ({
+                  type: "info" as const,
+                  text: line,
+                  time: new Date().toISOString(),
+                }))
+            : [];
 
         const isActive = data.is_active;
         const status = data.status;
@@ -675,8 +716,10 @@ export function useDeploymentBuild(
 
         terminalRef.current?.clear();
         buildStream.disconnect();
-        isTerminalReady.current = false;
         pendingLogsBuffer.current = [];
+        if (!terminalRef.current) {
+          isTerminalReady.current = false;
+        }
 
         setState((prev) => ({
           ...prev,

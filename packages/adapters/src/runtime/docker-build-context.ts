@@ -12,7 +12,7 @@ import type { BuildConfig } from "../types";
 
 import { injectGitToken } from "./build-pipeline";
 import { generateDockerfile } from "./docker-build-plan";
-import { resolveDockerRootDirectory } from "./docker-paths";
+import { resolveDockerfileCandidates, resolveDockerRootDirectory } from "./docker-paths";
 
 const execFileAsync = promisify(cpExecFile);
 
@@ -30,18 +30,6 @@ function shouldCopyPath(root: string, candidate: string, excludes: Set<string>):
   if (!rel || rel === ".") return true;
   const parts = rel.split(sep).filter(Boolean);
   return !parts.some((part) => excludes.has(part));
-}
-
-function normalizeRelativePath(value?: string): string {
-  const normalized = value
-    ?.trim()
-    .replace(/^\.\//, "")
-    .replace(/^\/+|\/+$/g, "");
-  if (!normalized || normalized === ".") {
-    return "";
-  }
-
-  return normalized;
 }
 
 function toPosixPath(value: string): string {
@@ -95,41 +83,6 @@ async function pruneContextDirectory(
       }
     }),
   );
-}
-
-function resolveExplicitDockerfileCandidate(
-  rootDirectory?: string,
-  dockerfilePath?: string,
-): string {
-  const normalizedRootDirectory = normalizeRelativePath(rootDirectory);
-  const normalizedDockerfilePath = normalizeRelativePath(dockerfilePath);
-
-  if (!normalizedDockerfilePath) {
-    return "";
-  }
-
-  if (!normalizedRootDirectory) {
-    return normalizedDockerfilePath;
-  }
-
-  if (normalizedDockerfilePath.startsWith(`${normalizedRootDirectory}/`)) {
-    return normalizedDockerfilePath;
-  }
-
-  return `${normalizedRootDirectory}/${normalizedDockerfilePath}`;
-}
-
-function resolveDockerfileCandidates(
-  rootDirectory?: string,
-  explicitDockerfilePath?: string,
-): string[] {
-  const normalizedRootDirectory = normalizeRelativePath(rootDirectory);
-
-  return [
-    resolveExplicitDockerfileCandidate(rootDirectory, explicitDockerfilePath),
-    normalizedRootDirectory ? `${normalizedRootDirectory}/Dockerfile` : "Dockerfile",
-    "Dockerfile",
-  ].filter((candidate, index, values) => candidate && values.indexOf(candidate) === index);
 }
 
 async function resolveDockerfileName(

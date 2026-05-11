@@ -5,6 +5,18 @@ function toPosixPath(value: string): string {
   return value.split(sep).filter(Boolean).join("/");
 }
 
+export function normalizeDockerRelativePath(value?: string | null): string {
+  const normalized = value
+    ?.trim()
+    .replace(/^\.\//, "")
+    .replace(/^\/+|\/+$/g, "");
+  if (!normalized || normalized === ".") {
+    return "";
+  }
+
+  return normalized.split(/[\\/]/).filter(Boolean).join("/");
+}
+
 export function normalizeDockerRootDirectory(rootDirectory?: string, localPath?: string): string {
   let normalized = rootDirectory?.trim() ?? "";
 
@@ -32,6 +44,43 @@ export function normalizeDockerRootDirectory(rootDirectory?: string, localPath?:
   }
 
   return toPosixPath(normalized);
+}
+
+function resolveExplicitDockerfileCandidate(
+  rootDirectory?: string | null,
+  dockerfilePath?: string | null,
+): string {
+  const normalizedRootDirectory = normalizeDockerRelativePath(rootDirectory);
+  const normalizedDockerfilePath = normalizeDockerRelativePath(dockerfilePath);
+
+  if (!normalizedDockerfilePath) {
+    return "";
+  }
+
+  if (!normalizedRootDirectory) {
+    return normalizedDockerfilePath;
+  }
+
+  if (normalizedDockerfilePath.startsWith(`${normalizedRootDirectory}/`)) {
+    return normalizedDockerfilePath;
+  }
+
+  return `${normalizedRootDirectory}/${normalizedDockerfilePath}`;
+}
+
+export function resolveDockerfileCandidates(
+  rootDirectory?: string | null,
+  explicitDockerfilePath?: string | null,
+): string[] {
+  const normalizedRootDirectory = normalizeDockerRelativePath(rootDirectory);
+
+  return [
+    resolveExplicitDockerfileCandidate(rootDirectory, explicitDockerfilePath),
+    normalizedRootDirectory ? `${normalizedRootDirectory}/Dockerfile` : "Dockerfile",
+    "Dockerfile",
+  ].filter(
+    (candidate, index, values) => Boolean(candidate) && values.indexOf(candidate) === index,
+  );
 }
 
 const ROOT_MANIFESTS = [

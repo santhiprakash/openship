@@ -60,18 +60,16 @@ const BuildPage: React.FC = () => {
   ]);
 
   // Handle redeploy with URL update.
-  // After router.replace the page remounts — the init effect sees
-  // state.isDeploying === true and calls connectToBuild() once.
-  // We must NOT call connectToBuild here too, or it fires twice.
+  // `/redeploy` only creates a queued deployment; the SSE build endpoint is what
+  // starts the actual build, so start it directly for the returned deployment id.
   const handleRedeploy = useCallback(async () => {
     const newDeploymentId = await redeploy(deploymentId);
 
     if (newDeploymentId) {
+      initializedDeploymentRef.current = newDeploymentId;
+      void connectToBuild(newDeploymentId);
       if (newDeploymentId !== deploymentId) {
         router.replace(`/build/${newDeploymentId}`, { scroll: false });
-      } else {
-        // Same ID (shouldn't happen normally) — start build directly
-        await connectToBuild(newDeploymentId);
       }
     }
   }, [redeploy, deploymentId, router, connectToBuild]);

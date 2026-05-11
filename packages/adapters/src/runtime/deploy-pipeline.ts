@@ -149,7 +149,7 @@ export async function runDeployPipeline(
     }
 
     // ── Step 2: Activate new deployment ──────────────────────────────
-    const onLog: LogCallback = (entry) => logger.log(entry.message, entry.level);
+    const onLog: LogCallback = (entry) => logger.callback(entry);
     const { containerId, url } = await env.activate(config, onLog);
 
     if (!containerId) {

@@ -17,7 +17,6 @@ import type { BuildLog } from "@/utils/deploymentPhaseDetector";
 
 const warningDismissedKey = (deploymentId: string) => `compose-warning-dismissed:${deploymentId}`;
 const ANSI_ESCAPE_PATTERN = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-const PROCESS_LOG_TAB = "__process__";
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
@@ -35,7 +34,7 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
   const promptModalRef = React.useRef<string | null>(null);
   const warningModalRef = React.useRef<string | null>(null);
   const handledWarningDeploymentRef = React.useRef<string | null>(null);
-  const [activeLogTab, setActiveLogTab] = useState(PROCESS_LOG_TAB);
+  const [activeLogTab, setActiveLogTab] = useState("");
 
   const hasWarning = deploymentStatus === "ready" && !!state.warningMessage;
   const isFinished =
@@ -66,11 +65,15 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
   }, [onTerminalReady]);
 
   useEffect(() => {
-    if (
-      activeLogTab !== PROCESS_LOG_TAB &&
-      (activeLogTab.length === 0 || !logServiceNames.includes(activeLogTab))
-    ) {
-      setActiveLogTab(PROCESS_LOG_TAB);
+    if (logServiceNames.length === 0) {
+      if (activeLogTab) {
+        setActiveLogTab("");
+      }
+      return;
+    }
+
+    if (!activeLogTab || !logServiceNames.includes(activeLogTab)) {
+      setActiveLogTab(logServiceNames[0] ?? "");
     }
   }, [activeLogTab, logServiceNames]);
 
@@ -266,7 +269,7 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
             </div>
           )}
 
-          <ComposeProcessPanel
+          <ComposeServiceLogsPanel
             logs={state.buildLogs}
             serviceNames={logServiceNames}
             services={services}
@@ -336,6 +339,7 @@ interface ParsedLogLine {
   text: string;
   type: BuildLog["type"];
   serviceName: string | null;
+  rawData?: string;
 }
 
 function stripAnsi(text: string) {
@@ -411,6 +415,7 @@ function parseLogLines(logs: BuildLog[], serviceNames: string[]): ParsedLogLine[
         text,
         serviceName: detectedServiceName,
         type: log.type,
+        rawData: log.rawData,
       };
     })
     .filter((log) => log.text.trim().length > 0);
@@ -459,7 +464,7 @@ function serviceTabClass(status: ServiceDeployStatus["status"] | undefined, isAc
     : "border-border/60 bg-muted/30 text-muted-foreground hover:text-foreground hover:bg-muted/50";
 }
 
-function ComposeProcessPanel({
+function ComposeServiceLogsPanel({
   logs,
   serviceNames,
   services,
@@ -502,33 +507,21 @@ function ComposeProcessPanel({
     const byService = new Map<string, ParsedLogLine[]>();
     serviceNames.forEach((serviceName) => byService.set(serviceName, []));
 
-    const processLogs: ParsedLogLine[] = [];
     parsedLogs.forEach((log) => {
       if (!log.serviceName) {
-        processLogs.push(log);
         return;
       }
       byService.get(log.serviceName)?.push(log);
     });
 
-    return [
-      {
-        id: PROCESS_LOG_TAB,
-        label: "Process",
-        logs: processLogs,
-        emptyMessage: hasFinished
-          ? "No process logs were recorded for this deployment."
-          : "Waiting for deployment process logs...",
-      },
-      ...serviceNames.map((serviceName) => ({
-        id: serviceName,
-        label: serviceName,
-        logs: byService.get(serviceName) ?? [],
-        emptyMessage: hasFinished
-          ? `No logs were recorded for ${serviceName}.`
-          : `Waiting for ${serviceName} logs...`,
-      })),
-    ];
+    return serviceNames.map((serviceName) => ({
+      id: serviceName,
+      label: serviceName,
+      logs: byService.get(serviceName) ?? [],
+      emptyMessage: hasFinished
+        ? `No logs were recorded for ${serviceName}.`
+        : `Waiting for ${serviceName} logs...`,
+    }));
   }, [hasFinished, parsedLogs, serviceNames]);
 
   return (
@@ -558,21 +551,6 @@ function ComposeProcessPanel({
         )}
 
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          <button
-            type="button"
-            onClick={() => onTabChange(PROCESS_LOG_TAB)}
-            className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${serviceTabClass(
-              !isFinished ? "building" : "built",
-              activeTab === PROCESS_LOG_TAB,
-            )}`}
-          >
-            {!isFinished ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass("built")}`} />
-            )}
-            Process
-          </button>
           {serviceNames.length > 0 ? (
             serviceNames.map((serviceName) => {
               const status = serviceStatusByName.get(serviceName);
@@ -602,15 +580,21 @@ function ComposeProcessPanel({
         </div>
 
         <div className="relative h-[420px] overflow-hidden rounded-xl border border-border/50 bg-white dark:bg-black">
-          {terminalTabs.map((tab) => (
-            <ComposeLogTerminal
-              key={tab.id}
-              logs={tab.logs}
-              active={activeTab === tab.id}
-              emptyMessage={tab.emptyMessage}
-              theme={terminalTheme}
-            />
-          ))}
+          {terminalTabs.length > 0 ? (
+            terminalTabs.map((tab) => (
+              <ComposeLogTerminal
+                key={tab.id}
+                logs={tab.logs}
+                active={activeTab === tab.id}
+                emptyMessage={tab.emptyMessage}
+                theme={terminalTheme}
+              />
+            ))
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center px-6 text-center">
+              <p className="text-sm text-muted-foreground">Preparing service logs...</p>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -625,6 +609,29 @@ function terminalLine(log: ParsedLogLine) {
   if (log.type === "error") return `\x1b[31m${text}\x1b[0m${suffix}`;
   if (log.type === "success") return `\x1b[32m${text}\x1b[0m${suffix}`;
   return `${text}${suffix}`;
+}
+
+function terminalBytes(log: ParsedLogLine) {
+  if (!log.rawData) {
+    return terminalLine(log);
+  }
+
+  try {
+    const binary = atob(log.rawData);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  } catch {
+    return terminalLine(log);
+  }
+}
+
+function isTerminalAtBottom(terminal: any) {
+  const buffer = terminal?.buffer?.active;
+  if (!buffer) return true;
+  return buffer.viewportY >= buffer.baseY - 1;
 }
 
 function ComposeLogTerminal({
@@ -651,12 +658,15 @@ function ComposeLogTerminal({
       writtenCountRef.current = 0;
     }
 
+    const shouldScroll = active && isTerminalAtBottom(terminal);
     logs.slice(writtenCountRef.current).forEach((log) => {
-      terminal.write(terminalLine(log));
+      terminal.write(terminalBytes(log));
     });
     writtenCountRef.current = logs.length;
-    terminal.scrollToBottom();
-  }, [logs, ready]);
+    if (shouldScroll) {
+      terminal.scrollToBottom();
+    }
+  }, [active, logs, ready]);
 
   return (
     <div

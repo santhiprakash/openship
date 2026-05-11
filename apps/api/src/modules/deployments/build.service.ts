@@ -78,11 +78,17 @@ function collapseTerminalLogs(entries: LogEntry[]): LogEntry[] {
   let currentLine = "";
   let currentLevel: LogEntry["level"] = "info";
   let currentTimestamp = "";
+  let currentServiceName: string | undefined;
 
   const flushLine = () => {
     const trimmed = currentLine.trimEnd();
     if (trimmed) {
-      result.push({ timestamp: currentTimestamp, message: trimmed, level: currentLevel });
+      result.push({
+        timestamp: currentTimestamp,
+        message: trimmed,
+        level: currentLevel,
+        serviceName: currentServiceName,
+      });
     }
     currentLine = "";
   };
@@ -95,9 +101,14 @@ function collapseTerminalLogs(entries: LogEntry[]): LogEntry[] {
       continue;
     }
 
+    if (currentLine && entry.serviceName !== currentServiceName) {
+      flushLine();
+    }
+
     const text = entry.message;
     currentLevel = entry.level;
     currentTimestamp = entry.timestamp;
+    currentServiceName = entry.serviceName;
 
     for (let i = 0; i < text.length; i++) {
       const ch = text[i];
@@ -302,6 +313,15 @@ function buildConfigSnapshot(
 
 function snapshotSlug(snapshot: DeploymentConfigSnapshot, project: Project) {
   return snapshot.domain || project.slug;
+}
+
+async function resolveLatestCommitInfo(userId: string, project: Project, branch: string) {
+  if (!project.gitOwner || !project.gitRepo) {
+    return {};
+  }
+
+  const head = await getLatestCommit(userId, project.gitOwner, project.gitRepo, branch);
+  return head ? { commitSha: head.sha, commitMessage: head.message } : {};
 }
 
 async function resolveProjectBranch(userId: string, project: Project, branch?: string) {
@@ -526,16 +546,12 @@ export async function requestBuildAccess(userId: string, input: BuildAccessInput
   }
   const env = environment || "production";
 
-  // ── Resolve commit info: fetch HEAD from GitHub if not provided ────
-  let commitSha: string | undefined;
-  let commitMessage: string | undefined;
-  if (project.gitOwner && project.gitRepo) {
-    const head = await getLatestCommit(userId, project.gitOwner, project.gitRepo, snapshot.branch);
-    if (head) {
-      commitSha = head.sha;
-      commitMessage = head.message;
-    }
-  }
+  // ── Resolve commit info from the branch HEAD ────
+  const { commitSha, commitMessage } = await resolveLatestCommitInfo(
+    userId,
+    project,
+    snapshot.branch,
+  );
 
   const dep = await createQueuedDeployment({
     projectId: project.id,
@@ -584,8 +600,18 @@ export async function getBuildSessionStatus(deploymentId: string, userId: string
     ? (memSession?.logs ?? (buildSessionRow?.logs as LogEntry[] | null) ?? [])
     : ((buildSessionRow?.logs as LogEntry[] | null) ?? memSession?.logs ?? []);
   // Filter out step-metadata entries — they drive the progress bar, not the terminal
-  const terminalEntries = logEntries.filter((l) => !(l.step && l.stepStatus));
-  const logsText = terminalEntries.map((l) => l.message).join("\n");
+  const terminalEntries = logEntries
+    .map((entry, eventId) => ({ entry, eventId }))
+    .filter(({ entry }) => !(entry.step && entry.stepStatus));
+  const logsText = terminalEntries.map(({ entry }) => entry.message).join("\n");
+  const structuredLogs = terminalEntries.map(({ entry, eventId }) => ({
+    text: entry.message,
+    time: entry.timestamp,
+    level: entry.level,
+    serviceName: entry.serviceName,
+    rawData: entry.rawData,
+    eventId,
+  }));
   const lastEventId = (() => {
     for (let index = logEntries.length - 1; index >= 0; index--) {
       const entry = logEntries[index];
@@ -676,6 +702,7 @@ export async function getBuildSessionStatus(deploymentId: string, userId: string
     status: effectiveStatus,
     is_active: isActive,
     logs: logsText,
+    logEntries: structuredLogs,
     lastEventId,
     config: {
       repo: project.gitRepo,
@@ -763,13 +790,15 @@ export async function redeployBuildSession(deploymentId: string, userId: string)
   const meta =
     (oldDep.meta as DeploymentConfigSnapshot | null) ??
     buildConfigSnapshot(project, resolvedBranch);
+  const branch = meta.branch || resolvedBranch;
+  const { commitSha, commitMessage } = await resolveLatestCommitInfo(userId, project, branch);
 
   const dep = await createQueuedDeployment({
     projectId: project.id,
     userId,
-    branch: meta.branch,
-    commitSha: oldDep.commitSha ?? undefined,
-    commitMessage: oldDep.commitMessage ?? undefined,
+    branch,
+    commitSha,
+    commitMessage,
     trigger: "redeploy",
     environment: oldDep.environment,
     framework: oldDep.framework || meta.framework,
@@ -858,12 +887,10 @@ export async function triggerDeployment(
   // ── Resolve commit info: fetch HEAD from GitHub if not provided ────
   let commitSha = data.commitSha;
   let commitMessage = data.commitMessage;
-  if (!commitSha && project.gitOwner && project.gitRepo) {
-    const head = await getLatestCommit(userId, project.gitOwner, project.gitRepo, branch);
-    if (head) {
-      commitSha = head.sha;
-      commitMessage = commitMessage ?? head.message;
-    }
+  if (!commitSha) {
+    const head = await resolveLatestCommitInfo(userId, project, branch);
+    commitSha = head.commitSha;
+    commitMessage = commitMessage ?? head.commitMessage;
   }
 
   const dep = await createQueuedDeployment({

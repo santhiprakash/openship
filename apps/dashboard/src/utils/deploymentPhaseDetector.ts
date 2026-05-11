@@ -11,6 +11,8 @@ export interface BuildLog {
   text: string;
   time: string;
   serviceName?: string;
+  rawData?: string;
+  eventId?: number;
 }
 
 export interface SSEMessage {

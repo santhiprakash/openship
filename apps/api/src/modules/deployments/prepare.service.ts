@@ -7,7 +7,7 @@
 
 import * as githubService from "../github/github.service";
 import { detectStack, MANIFEST_FILES, type RepoFile, type StackResult } from "../../lib/stack-detector";
-import { parseComposeFile, type ComposeService } from "../../lib/compose-parser";
+import { parseComposeEnvFile, parseComposeFile, type ComposeService } from "../../lib/compose-parser";
 import type { ProjectType } from "@repo/core";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
@@ -43,6 +43,7 @@ export interface ProjectInfo {
   productionPaths: string[];
   port: number;
   services?: ComposeService[];
+  rootEnv?: Record<string, string>;
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -248,6 +249,7 @@ function toProjectInfo(
   composeEnvContent?: string,
 ): ProjectInfo {
   const stack = detectStack(files, packageJson, fileContents);
+  const rootEnv = composeEnvContent ? parseComposeEnvFile(composeEnvContent) : {};
 
   // Parse compose file if detected as a services project
   let services: ComposeService[] | undefined;
@@ -284,5 +286,6 @@ function toProjectInfo(
     productionPaths: stack.productionPaths,
     port: stack.port,
     ...(services && { services }),
+    ...(Object.keys(rootEnv).length > 0 && { rootEnv }),
   };
 }

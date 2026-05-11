@@ -105,6 +105,7 @@ export async function installDocker(
 export async function installGit(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
+  opts?: { label?: string },
 ): Promise<InstallResult> {
   const profile = await resolveEnvironment(executor);
   const plan = systemCatalog.installs.git(profile);
@@ -112,14 +113,14 @@ export async function installGit(
     return { component: "git", success: false, error: plan.unsupportedReason ?? "Git install not supported" };
   }
 
-  onLog(log("Installing Git..."));
+  onLog(log(opts?.label ? `Installing Git in ${opts.label}...` : "Installing Git..."));
   try {
     const { code } = await executor.streamExec(plan.installCommand, onLog as (log: LogEntry) => void);
     if (code !== 0) return { component: "git", success: false, error: "Git installation failed" };
 
     const version = await executor.exec(plan.verifyCommand);
     const parsed = systemCatalog.checks.git.parseVersion(version);
-    onLog(log(`Git ${parsed} installed`));
+    onLog(log(opts?.label ? `Git ${parsed} installed in ${opts.label}` : `Git ${parsed} installed`));
     return { component: "git", success: true, version: parsed };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

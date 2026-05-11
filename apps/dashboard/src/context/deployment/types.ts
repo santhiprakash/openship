@@ -87,6 +87,8 @@ export interface DeploymentConfig {
   customDomain: string;
   domainType: "free" | "custom";
   envVars: EnvironmentVariable[];
+  /** Root .env values detected during prepare; user must import before they apply. */
+  rootEnvVars: EnvironmentVariable[];
   branch: string;
   branches: string[];
   services: ComposeServiceInfo[];
@@ -135,6 +137,7 @@ export const DEFAULT_CONFIG: DeploymentConfig = {
     hasBuild: true,
   },
   envVars: [],
+  rootEnvVars: [],
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

@@ -15,7 +15,6 @@ export type {
   ResourceConfig,
   ContainerStatus,
   BuildStrategy,
-  BuildSourceRef,
   BuildConfig,
   DeployConfig,
   BuildResult,
@@ -41,8 +40,6 @@ export type {
   RuntimeCapability,
   MultiServiceRuntimeAdapter,
   MultiServiceGroupHandle,
-  ComposeSourceHandle,
-  PrepareComposeSourceConfig,
   MultiServiceDeployConfig,
   MultiServiceDeployResult,
 } from "./runtime/types";
@@ -70,6 +67,7 @@ export {
   ensurePortAvailable,
 } from "./runtime/port-conflict";
 export { type RuntimeMode, type CreateRuntimeOptions, createRuntime } from "./runtime/index";
+export { resolveDockerfileCandidates } from "./runtime/docker-paths";
 
 // ─── Infrastructure layer ────────────────────────────────────────────────────
 export type { RoutingProvider, SslProvider } from "./infra/types";

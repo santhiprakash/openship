@@ -267,6 +267,7 @@ export const useBuildStream = (options: UseBuildStreamOptions = {}): UseBuildStr
   const reconnectAttemptsRef = useRef(0);
   const activeDeploymentIdRef = useRef<string | null>(null);
   const hasConnectedRef = useRef(false);
+  const isConnectedRef = useRef(false);
   const isReconnectingRef = useRef(false);
   const terminalStateRef = useRef(false);
   const manualDisconnectRef = useRef(false);
@@ -328,6 +329,7 @@ export const useBuildStream = (options: UseBuildStreamOptions = {}): UseBuildStr
     onConnect: () => {
       const wasReconnecting = isReconnectingRef.current;
       hasConnectedRef.current = true;
+      isConnectedRef.current = true;
       reconnectAttemptsRef.current = 0;
       isReconnectingRef.current = false;
       setReconnectAttempts(0);
@@ -341,12 +343,14 @@ export const useBuildStream = (options: UseBuildStreamOptions = {}): UseBuildStr
       }
     },
     onDisconnect: () => {
+      isConnectedRef.current = false;
       setIsConnected(false);
       setIsConnecting(false);
       onDisconnectRef.current?.();
       scheduleReconnect();
     },
     onError: (err) => {
+      isConnectedRef.current = false;
       setError(err);
       setIsConnected(false);
       setIsConnecting(false);
@@ -360,6 +364,7 @@ export const useBuildStream = (options: UseBuildStreamOptions = {}): UseBuildStr
     return () => {
       manualDisconnectRef.current = true;
       activeDeploymentIdRef.current = null;
+      isConnectedRef.current = false;
       clearReconnectTimer();
       disconnectSSE();
     };
@@ -458,6 +463,13 @@ export const useBuildStream = (options: UseBuildStreamOptions = {}): UseBuildStr
    * Connect to build stream
    */
   const connect = useCallback(async (deploymentId: string, startBuild: boolean = true) => {
+    if (
+      activeDeploymentIdRef.current === deploymentId &&
+      (connectingRef.current || isConnectedRef.current || isReconnectingRef.current)
+    ) {
+      return;
+    }
+
     // Prevent duplicate concurrent connections (double-click, remount race)
     if (connectingRef.current) return;
 
@@ -482,6 +494,7 @@ export const useBuildStream = (options: UseBuildStreamOptions = {}): UseBuildStr
     connectingRef.current = false;
     activeDeploymentIdRef.current = null;
     hasConnectedRef.current = false;
+    isConnectedRef.current = false;
     isReconnectingRef.current = false;
     reconnectAttemptsRef.current = 0;
     clearReconnectTimer();

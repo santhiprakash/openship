@@ -61,8 +61,6 @@ export interface BuildConfig {
   commitSha?: string;
   /** Absolute path to a local project directory (used instead of repoUrl for local projects) */
   localPath?: string;
-  /** Remote source prepared by the runtime, used by cloud compose builds to avoid API-host clones. */
-  sourceRef?: BuildSourceRef;
   /** Where the build runs: "server" (clone/copy to workspace) or "local" (build on host, transfer dist) */
   buildStrategy?: BuildStrategy;
   /** Detected framework / stack */
@@ -89,6 +87,8 @@ export interface BuildConfig {
   rootDirectory?: string;
   /** Explicit Dockerfile path relative to the build root/context. */
   dockerfilePath?: string;
+  /** Preloaded Dockerfile contents, used when the caller already read the file from the source provider. */
+  dockerfileContent?: string;
   /** Whether the deployment needs a long-running server process. */
   hasServer?: boolean;
   /** Environment variables injected at build time */
@@ -98,12 +98,6 @@ export interface BuildConfig {
   /** Ephemeral token for cloning private repos — never persisted */
   gitToken?: string;
 }
-
-export type BuildSourceRef = {
-  kind: "cloud-workspace";
-  workspaceId: string;
-  path: string;
-};
 
 export interface DeployConfig {
   /** Unique deployment id */

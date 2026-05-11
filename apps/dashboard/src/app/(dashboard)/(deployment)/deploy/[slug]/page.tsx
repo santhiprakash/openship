@@ -189,12 +189,12 @@ const DeployRepository: React.FC = () => {
                                 <DockerSettings />
                             )}
 
-                            {/* Services flow: compose parsed services (env is per-service) */}
+                            {/* Services flow: shared env + compose parsed services */}
                             {config.projectType === "services" && (
                                 <ComposeServices />
                             )}
 
-                            {/* Global env vars — app & docker only (compose has per-service env) */}
+                            {/* Global env vars — app & docker only (compose owns its shared env inside the services card) */}
                             {config.projectType !== "services" && (
                                 <EnvironmentVariables />
                             )}

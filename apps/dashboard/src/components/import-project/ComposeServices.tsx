@@ -277,6 +277,124 @@ const ServiceCardSkeleton: React.FC = () => (
   </div>
 );
 
+const SharedEnvironmentCard: React.FC<{
+  envVars: EnvVarRow[];
+  rootEnvVars: EnvVarRow[];
+  onChange: (envVars: EnvVarRow[]) => void;
+}> = ({ envVars, rootEnvVars, onChange }) => {
+  const [envModalOpen, setEnvModalOpen] = useState(false);
+  const envCount = envVars.filter((env) => env.key.trim()).length;
+  const importedKeys = new Set(envVars.map((env) => env.key).filter(Boolean));
+  const importableRootVars = rootEnvVars.filter((env) => env.key && !importedKeys.has(env.key));
+
+  const importRootEnv = useCallback(() => {
+    if (importableRootVars.length === 0) return;
+    onChange([...envVars, ...importableRootVars.map((env) => ({ ...env, visible: false }))]);
+  }, [envVars, importableRootVars, onChange]);
+
+  return (
+    <div className="rounded-xl border border-border/40 bg-muted/20 px-4 py-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+            <KeyRound className="size-4 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-medium text-foreground">Shared environment</p>
+              {rootEnvVars.length > 0 && (
+                <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                  Root .env found
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {envCount === 0
+                ? "Optional vars applied to every service"
+                : `${envCount} shared variable${envCount === 1 ? "" : "s"}`}
+              {" "}· service values override shared values
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {importableRootVars.length > 0 && (
+            <button
+              type="button"
+              onClick={importRootEnv}
+              className="rounded-lg bg-muted/60 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              Import .env
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setEnvModalOpen(true)}
+            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            Manage
+          </button>
+        </div>
+      </div>
+
+      <Modal
+        isOpen={envModalOpen}
+        onClose={() => setEnvModalOpen(false)}
+        maxWidth="760px"
+        maxHeight="86vh"
+        overflow="hidden"
+        showCloseButton={false}
+      >
+        <div className="border-b border-border/50 px-5 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
+                <KeyRound className="size-5 text-primary" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-foreground">
+                  Shared environment
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Applied to every service. Service variables win on conflict.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setEnvModalOpen(false)}
+              className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+              aria-label="Close shared environment"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+          {importableRootVars.length > 0 && (
+            <button
+              type="button"
+              onClick={importRootEnv}
+              className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-600 transition-colors hover:bg-emerald-500/15 dark:text-emerald-400"
+            >
+              Import {importableRootVars.length} variable{importableRootVars.length === 1 ? "" : "s"} from root .env
+            </button>
+          )}
+        </div>
+
+        <div className="max-h-[calc(86vh-92px)] overflow-y-auto">
+          <EnvironmentVariables
+            mode="settings"
+            showEditControls={true}
+            isEditingMode={true}
+            showSettingsActions={false}
+            borderless
+            envVars={envVars}
+            onEnvVarsChange={onChange}
+          />
+        </div>
+      </Modal>
+    </div>
+  );
+};
+
 // ─── Service card ────────────────────────────────────────────────────────────
 
 const ServiceCard: React.FC<{
@@ -485,6 +603,8 @@ const ComposeServices: React.FC = () => {
   const iconUrl = STACK_ICONS["docker-compose"];
 
   const services = config.services || [];
+  const sharedEnvVars = config.envVars || [];
+  const rootEnvVars = config.rootEnvVars || [];
 
   const updateService = useCallback(
     (index: number, updates: Partial<ComposeServiceInfo>) => {
@@ -507,6 +627,13 @@ const ComposeServices: React.FC = () => {
       updateConfig({ services: services.filter((_, i) => i !== index) });
     },
     [services, updateConfig],
+  );
+
+  const updateSharedEnv = useCallback(
+    (envVars: EnvVarRow[]) => {
+      updateConfig({ envVars });
+    },
+    [updateConfig],
   );
 
   const buildCount = services.filter((s) => s.build).length;
@@ -533,6 +660,12 @@ const ComposeServices: React.FC = () => {
             </p>
           </div>
         </div>
+
+        <SharedEnvironmentCard
+          envVars={sharedEnvVars}
+          rootEnvVars={rootEnvVars}
+          onChange={updateSharedEnv}
+        />
 
         {/* Services list */}
         {services.length > 0 ? (
