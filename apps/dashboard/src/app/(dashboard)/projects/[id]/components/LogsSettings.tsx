@@ -47,9 +47,25 @@ export const LogsSettings = () => {
   const servicesLoading = servicesData.isLoading;
   const servicesLoaded = !servicesData.isLoading;
   const hasServices = services.length > 0;
-  const canShowLogs = effectiveHasServer || hasServices;
-  const canShowTerminal = canShowLogs;
-  const hasResolvedLogTargets = hasResolvedServerMode && (effectiveHasServer || servicesLoaded);
+  // Cloud deploys (including static apps) always have edge-access
+  // logs available via the same /server-logs/* endpoints — those
+  // endpoints route by `resolveProjectTrafficSource` server-side and
+  // fall back to Oblien's edge proxy when there's no runtime
+  // container. So a static .opsh.io page still has request logs even
+  // with no runtime stdout to stream.
+  const deployTarget = projectData?.deployTarget as string | null | undefined;
+  const canShowRequestLogs = deployTarget === "cloud";
+  const canShowRuntimeLogs = effectiveHasServer || hasServices;
+  const canShowLogs = canShowRuntimeLogs || canShowRequestLogs;
+  // Terminal (container stdout) still requires an actual runtime —
+  // no terminal output exists for static pages.
+  const canShowTerminal = canShowRuntimeLogs;
+  const hasResolvedLogTargets =
+    hasResolvedServerMode && (effectiveHasServer || servicesLoaded || canShowRequestLogs);
+  // True when the only signal available is edge access logs — used to
+  // relabel the Server tab as "Requests" so the operator knows what
+  // they're looking at.
+  const isRequestLogsOnly = canShowRequestLogs && !canShowRuntimeLogs;
   // True when there's more than one runtime to stream from - used to gate
   // the switcher UI. A "target" is the project's own runtime OR a service.
   // Previously this was `hasMultipleServices` (services count > 1) which
@@ -66,9 +82,12 @@ export const LogsSettings = () => {
     }
 
     if (!hasSelectedTabRef.current) {
-      setActiveTab("terminal");
+      // Static-only projects have no Terminal tab — land directly on
+      // Server (which renders as "Requests"). Otherwise default to
+      // Terminal as before.
+      setActiveTab(canShowTerminal ? "terminal" : "server");
     }
-  }, [hasResolvedLogTargets, canShowLogs]);
+  }, [hasResolvedLogTargets, canShowLogs, canShowTerminal]);
 
   // Apply `?service=X` once services are loaded: force the Terminal tab,
   // pin the selection, then strip the param from the URL so a refresh
@@ -248,7 +267,10 @@ export const LogsSettings = () => {
             }`}
           >
             <Server className="size-4" />
-            Server
+            {/* Rename to "Requests" when there's no runtime — the
+                same endpoint backs both, but for static apps it's
+                purely edge access logs, not server logs. */}
+            {isRequestLogsOnly ? "Requests" : "Server"}
             {activeTab === "server" && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
             )}

@@ -2,6 +2,7 @@
 
 import React from "react";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
+import { useProjectInfo, useAnalyticsData } from "@/hooks/useProjectEndpoints";
 import {
   ExternalLink,
   GitBranch,
@@ -21,12 +22,18 @@ export const OverviewTab = () => {
     projectData,
     gitData,
     buildData,
-    analyticsData,
-    isLoadingAnalytics,
     setActiveTab,
     id,
     servicesData,
   } = useProjectSettings();
+
+  // ATOMIC PER-ENDPOINT HOOKS — each one owns its own skeleton state.
+  // No context coupling, no useMemo soup. Module-level caches dedup
+  // concurrent fetches across components (e.g. OverviewTab and
+  // MonitoringTab share one summary fetch).
+  const projectInfoQuery = useProjectInfo(id);
+  const analytics = useAnalyticsData(id);
+  const analyticsData = analytics.data;
   const services = servicesData.services;
   const serviceCount = servicesData.isLoading
     ? (projectData.serviceCount ?? services.length)
@@ -59,23 +66,14 @@ export const OverviewTab = () => {
     return num?.toString() || "0";
   };
 
-  // Three-way render: loading (skeleton) → loaded-empty (empty state)
-  // → loaded-with-data (real). The trigger AND-combines:
-  //
-  //   isLoadingAnalytics  - fetch in flight
-  //   !analyticsData      - no payload yet (covers fetch errors too,
-  //                         since the catch branch sets analyticsData
-  //                         to null)
-  //
-  // Both true → still resolving, show skeleton.
-  // Loading flips false with analyticsData still null → genuinely no
-  // data (API returned empty, or fetch errored) → empty state below.
-  // analyticsData populated → real chart, regardless of loading flag.
-  //
-  // Earlier we gated on `!analyticsData` alone, which kept the
-  // skeleton spinning forever for projects that had no traffic data -
-  // the API legitimately resolves with null in that case.
-  const showSkeleton = isLoadingAnalytics && !analyticsData;
+  // Each skeleton gate reads STRICTLY from its own hook's isLoading.
+  // No cross-coupling possible — info, summary, periods each own a
+  // module-level cache and an independent isLoading boolean. A slow
+  // periods endpoint cannot pin the stats; a slow getInfo cannot pin
+  // the analytics widgets.
+  const showProjectInfoSkeleton = projectInfoQuery.isLoading;
+  const showStatsSkeleton = analytics.isLoadingSummary;
+  const showChartSkeleton = analytics.isLoadingPeriods;
   type Stat = {
     label: string;
     value: string;
@@ -84,7 +82,7 @@ export const OverviewTab = () => {
     loading?: boolean;
   };
   const hasAnalytics = !!analyticsData;
-  const stats: Stat[] = showSkeleton
+  const stats: Stat[] = showStatsSkeleton
     ? [
         { label: "Server Requests", value: "", icon: <Server className="size-4" />, loading: true },
         { label: "Unique IPs", value: "", icon: <Users className="size-4" />, loading: true },
@@ -137,16 +135,27 @@ export const OverviewTab = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Infrastructure */}
         <Card title="Infrastructure" icon={Cpu} iconColor="primary">
-          <Item label="Platform" value={platformLabel} />
-          <Item label="Mode" value={modeLabel} />
-          {!isStaticRuntime && <Item label="Port" value={String(projectData.port || 3000)} />}
+          <Item label="Platform" value={platformLabel} loading={showProjectInfoSkeleton} />
+          <Item label="Mode" value={modeLabel} loading={showProjectInfoSkeleton} />
+          {/* Port row shown when loading (we don't know hasServer yet)
+              or when there's an actual server runtime. Once project
+              info hydrates and we know it's static, the row is hidden. */}
+          {(showProjectInfoSkeleton || !isStaticRuntime) && (
+            <Item
+              label="Port"
+              value={String(projectData.port || 3000)}
+              loading={showProjectInfoSkeleton}
+            />
+          )}
         </Card>
 
         {/* Source & CI/CD */}
         <Card title="Source & CI/CD" icon={GitBranch} iconColor="orange">
           <div className="flex items-center justify-between">
             <span className="text-[13px] text-muted-foreground">Repository</span>
-            {hasGit ? (
+            {showProjectInfoSkeleton ? (
+              <div className="h-[14px] w-28 rounded bg-muted-foreground/20 animate-pulse" />
+            ) : hasGit ? (
               <a
                 href={`https://github.com/${projectData.gitOwner}/${projectData.gitRepo}`}
                 target="_blank"
@@ -160,9 +169,21 @@ export const OverviewTab = () => {
               <span className="text-[13px] text-muted-foreground/60">Not connected</span>
             )}
           </div>
-          <Item label="Branch" value={projectData.gitBranch || projectData.branch || "main"} />
-          <StatusItem label="Auto Deploy" active={!!gitData?.autoDeployEnabled} />
-          <StatusItem label="Webhook" active={!!gitData?.webhookActive} />
+          <Item
+            label="Branch"
+            value={projectData.gitBranch || projectData.branch || "main"}
+            loading={showProjectInfoSkeleton}
+          />
+          <StatusItem
+            label="Auto Deploy"
+            active={!!gitData?.autoDeployEnabled}
+            loading={showProjectInfoSkeleton}
+          />
+          <StatusItem
+            label="Webhook"
+            active={!!gitData?.webhookActive}
+            loading={showProjectInfoSkeleton}
+          />
         </Card>
       </div>
 
@@ -208,13 +229,13 @@ export const OverviewTab = () => {
           </div>
           {dateRange && <span className="text-[11px] text-muted-foreground">{dateRange}</span>}
         </div>
-        {showSkeleton ? (
+        {showChartSkeleton ? (
           // Chart-shaped skeleton - animated bars at varied heights so
           // the placeholder reads as "a chart is coming" instead of a
-          // bare text line. Shares `showSkeleton` (loading AND no
-          // data) with the stats above so the whole row resolves at
-          // once and the empty state shows when there's genuinely no
-          // traffic.
+          // bare text line. Gated on `showChartSkeleton` (periods
+          // hydration) only — the stat cards above use their own
+          // `showStatsSkeleton`, so a fast `summary` endpoint can flip
+          // those even while `periods` is still in flight.
           <div className="flex items-end gap-[3px] h-[120px] px-1 pb-1">
             {Array.from({ length: 32 }).map((_, i) => {
               // Deterministic varied heights - sine-based so the bars
@@ -400,33 +421,41 @@ function Card({
   );
 }
 
-function Item({ label, value }: { label: string; value: string }) {
+function Item({ label, value, loading }: { label: string; value: string; loading?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4">
       <span className="text-[13px] text-muted-foreground">{label}</span>
-      <span className="text-[13px] font-medium text-foreground truncate max-w-[200px]">
-        {value}
-      </span>
+      {loading ? (
+        <div className="h-[14px] w-24 rounded bg-muted-foreground/20 animate-pulse" />
+      ) : (
+        <span className="text-[13px] font-medium text-foreground truncate max-w-[200px]">
+          {value}
+        </span>
+      )}
     </div>
   );
 }
 
-function StatusItem({ label, active }: { label: string; active: boolean }) {
+function StatusItem({ label, active, loading }: { label: string; active: boolean; loading?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4">
       <span className="text-[13px] text-muted-foreground">{label}</span>
-      <span
-        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
-          active
-            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-            : "bg-muted/60 text-muted-foreground/60"
-        }`}
-      >
+      {loading ? (
+        <div className="h-[18px] w-14 rounded-full bg-muted-foreground/20 animate-pulse" />
+      ) : (
         <span
-          className={`w-1.5 h-1.5 rounded-full ${active ? "bg-emerald-500" : "bg-muted-foreground/30"}`}
-        />
-        {active ? "Active" : "Off"}
-      </span>
+          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+            active
+              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              : "bg-muted/60 text-muted-foreground/60"
+          }`}
+        >
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${active ? "bg-emerald-500" : "bg-muted-foreground/30"}`}
+          />
+          {active ? "Active" : "Off"}
+        </span>
+      )}
     </div>
   );
 }

@@ -10,7 +10,7 @@ import type { Deployment } from "@repo/db";
 import { repos } from "@repo/db";
 import type { DeployTarget, RuntimeMode } from "@repo/core";
 import { env } from "../config";
-import { getCloudToken } from "./cloud-client";
+import { cloudPagesProxy, getCloudToken } from "./cloud-client";
 import { platform } from "./controller-helpers";
 import { buildSshConfig, sshManager } from "./ssh-manager";
 
@@ -78,7 +78,18 @@ async function resolveCloudPlatformForUser(userId?: string): Promise<Platform> {
     );
   }
 
-  return createPlatform({ target: "cloud", cloudToken: result.token });
+  // Inject the admin-scoped pages proxy so CloudRuntime can create
+  // static pages on shared `.opsh.io` even though our `cloudToken` is
+  // namespace-scoped. The proxy hits the SaaS, which performs the call
+  // with master credentials. SaaS itself (no token here, master creds)
+  // skips `resolveCloudPlatformForUser` entirely.
+  return createPlatform({
+    target: "cloud",
+    cloudToken: result.token,
+    cloudAdminProxy: {
+      createPage: (input) => cloudPagesProxy(userId, input),
+    },
+  });
 }
 
 export async function resolveDeploymentPlatform(

@@ -103,7 +103,7 @@ const DomainSettings: React.FC<DomainSettingsProps> = ({
       hasServer={hasServer}
       runtimePort={runtimePort}
       allowPortEdit={false}
-      saveMode="explicit"
+      saveMode="change"
       onChange={handleChange}
     />
   );

@@ -77,6 +77,25 @@ export interface PlatformConfig {
   /** Oblien namespace-scoped token (cloud target - local instances) */
   cloudToken?: string;
   /**
+   * Admin-scoped Oblien operations that namespace tokens can't perform.
+   * Local/desktop instances inject these so CloudRuntime can hand them
+   * off to the SaaS (which runs them with the master client). SaaS
+   * instances leave this unset — the direct client already has admin
+   * scope.
+   *
+   * Currently scoped to static-page creation on shared zones like
+   * `opsh.io`; same shape as analytics/edge-proxy proxy pattern.
+   */
+  cloudAdminProxy?: {
+    createPage: (input: {
+      workspace_id: string;
+      path: string;
+      name: string;
+      slug: string;
+      domain?: string;
+    }) => Promise<{ page: { slug: string; url?: string | null } }>;
+  };
+  /**
    * SSH config for remote server management (self-hosted only).
    *
   * When provided, all system checks, installations, and Nginx file
@@ -171,7 +190,7 @@ async function createCloudPlatform(config: PlatformConfig): Promise<Platform> {
 
   return {
     target: "cloud",
-    runtime: new CloudRuntime(client),
+    runtime: new CloudRuntime(client, { adminProxy: config.cloudAdminProxy }),
     routing: infra,
     ssl: infra,
     system: null,

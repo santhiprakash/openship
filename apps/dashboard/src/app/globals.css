@@ -55,3 +55,20 @@
 button {
   cursor: pointer;
 }
+
+/* Slide-in from the right, used by the cloud power picker when it
+   appears next to the deploy-target column. Kept tiny on purpose —
+   long animations on layout-changing elements feel laggy, not delightful. */
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.animate-slide-in-right {
+  animation: slideInRight 0.25s ease-out;
+}

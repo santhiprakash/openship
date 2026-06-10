@@ -8,6 +8,7 @@
  *   POST /api/cloud/token           - mint namespace-scoped Oblien tokens
  *   POST /api/cloud/analytics       - proxy Oblien analytics (master client)
  *   POST /api/cloud/edge-proxy      - sync Oblien edge proxy for managed domains
+ *   POST /api/cloud/pages           - proxy Oblien pages.create (master client)
  *   POST /api/cloud/preflight       - cloud deployment preflight check
  *   GET  /api/cloud/desktop-handoff - OAuth → one-time code → redirect to desktop
  *   GET  /api/cloud/connect-handoff - OAuth → one-time code → redirect to self-hosted
@@ -288,6 +289,62 @@ export async function syncEdgeProxy(c: Context) {
       : undefined;
 
     console.error("[CLOUD] Edge proxy sync failed", { slug, baseDomain, target, status, code, details, message });
+    c.status(status as 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500);
+    return c.json({ error: message, code, details });
+  }
+}
+
+// ─── Pages proxy (master client) ─────────────────────────────────────────────
+
+/**
+ * POST /api/cloud/pages  { workspace_id, path, name, slug, domain? }
+ *
+ * Local/desktop instances call this to create an Oblien static page on
+ * a shared zone (e.g. `opsh.io`). Page creation on `opsh.io` touches
+ * the master account's DNS — namespace tokens can't perform it, so
+ * the SaaS executes the call with the master client on the user's
+ * behalf. Pages without a `domain` (custom-domain or slug-only) don't
+ * need this proxy — the namespace token can create them directly.
+ *
+ * Returns the raw `{ page }` shape the Oblien SDK returns so the
+ * caller can drop it straight into the existing CloudRuntime code path.
+ */
+export async function pagesProxy(c: Context) {
+  const body = await c.req.json<{
+    workspace_id?: string;
+    path?: string;
+    name?: string;
+    slug?: string;
+    domain?: string;
+  }>();
+
+  if (!body.workspace_id || !body.path || !body.name || !body.slug) {
+    return c.json({ error: "workspace_id, path, name and slug are required" }, 400);
+  }
+
+  try {
+    const client = getOblienClient();
+    const result = await client.pages.create({
+      workspace_id: body.workspace_id,
+      path: body.path,
+      name: body.name,
+      slug: body.slug,
+      ...(body.domain ? { domain: body.domain } : {}),
+    });
+    return c.json(result);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Page creation failed";
+    const status = typeof err === "object" && err !== null && "status" in err && typeof (err as { status?: unknown }).status === "number"
+      ? (err as { status: number }).status
+      : 500;
+    const code = typeof err === "object" && err !== null && "code" in err
+      ? (err as { code?: unknown }).code
+      : undefined;
+    const details = typeof err === "object" && err !== null && "details" in err
+      ? (err as { details?: unknown }).details
+      : undefined;
+
+    console.error("[CLOUD] Pages proxy failed", { slug: body.slug, domain: body.domain, status, code, details, message });
     c.status(status as 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500);
     return c.json({ error: message, code, details });
   }

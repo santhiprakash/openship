@@ -31,7 +31,6 @@ import { useEffect, useState, useCallback } from "react";
 import { Github, HardDrive, Key, Loader2 } from "lucide-react";
 import { settingsApi, type CloneStrategyPreference } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
-import { useDeployment } from "@/context/DeploymentContext";
 
 interface CloneStrategyGateResult {
   /** True when this deploy SHOULD prompt before continuing. */
@@ -86,6 +85,12 @@ interface CloneStrategyModalContentProps {
   /** Called after the user picks a choice (or dismisses). The caller
    *  should `hideModal()` AND continue the deploy. */
   onDone: () => void;
+  /** Invoked when the user picks "Build locally" so the parent can flip
+   *  the deployment's `buildStrategy` to "local". Lifted out of the
+   *  modal because the modal renders inside a portal (outside the
+   *  DeploymentProvider tree) — calling useDeployment() directly here
+   *  throws when the modal opens. */
+  onChooseLocal?: () => void;
 }
 
 /**
@@ -97,9 +102,9 @@ interface CloneStrategyModalContentProps {
 export function CloneStrategyModalContent({
   hasGlobalToken,
   onDone,
+  onChooseLocal,
 }: CloneStrategyModalContentProps) {
   const { showToast } = useToast();
-  const { updateConfig } = useDeployment();
   const [saving, setSaving] = useState<CloneStrategyPreference | "dismiss" | null>(null);
 
   const choose = useCallback(
@@ -135,7 +140,7 @@ export function CloneStrategyModalContent({
           disabled={saving !== null}
           onClick={() =>
             choose("local", () => {
-              updateConfig({ buildStrategy: "local" });
+              onChooseLocal?.();
               showToast(
                 "We'll build locally for this and future deploys",
                 "success",

@@ -2,6 +2,8 @@
 import React, { useCallback, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronUp,
   Eye,
   EyeOff,
   FileText,
@@ -38,6 +40,12 @@ interface EnvironmentVariablesPropsOptional {
   showSettingsActions?: boolean;
   /** When true, removes the outer card border and inner divider - for embedding inside another card. */
   borderless?: boolean;
+  /** When true, the body (paste zone + variable list) starts hidden and a
+   *  chevron toggle is added to the header. Paste / upload actions
+   *  auto-expand so the operator sees the parsed result land. The header
+   *  itself - including Paste .env and Upload .env - stays visible at all
+   *  times so the primary affordances aren't hidden behind the chevron. */
+  collapsible?: boolean;
   // For settings mode - external env vars
   envVars?: EnvironmentVariableRow[];
   envMeta?: Record<string, EnvironmentVariableMeta>;
@@ -55,6 +63,7 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
   isSaving = false,
   showSettingsActions = true,
   borderless = false,
+  collapsible = false,
   envVars: externalEnvVars,
   envMeta,
   onEnvVarsChange,
@@ -65,6 +74,10 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
   const pasteZoneRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [internalIsEditingMode, setInternalIsEditingMode] = useState(mode === "deploy");
+  // Body starts hidden when `collapsible` is set. Auto-expanded by the
+  // paste / upload handlers below so the user sees parsed rows land
+  // without an extra click.
+  const [expanded, setExpanded] = useState(!collapsible);
   
   // Use external state if provided, otherwise use internal state
   const isEditingMode = externalIsEditingMode !== undefined ? externalIsEditingMode : internalIsEditingMode;
@@ -260,8 +273,11 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
   );
 
   const handlePasteFromClipboard = useCallback(async () => {
-    if (!isEditingMode) return;
-
+    // No early-return on isEditingMode: settings-mode now also exposes
+    // Paste .env in the header and enters edit mode on click. The
+    // explicit button press IS the operator's intent — gating on
+    // isEditingMode here would early-return because the setIsEditingMode
+    // call happens in the same tick and the state hasn't propagated yet.
     if (
       typeof navigator === "undefined" ||
       typeof window === "undefined" ||
@@ -290,6 +306,10 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
           "error",
           "Environment Variables"
         );
+      } else {
+        // Successful paste — reveal the body so the operator sees the
+        // rows that just landed (no-op if not in collapsible mode).
+        setExpanded(true);
       }
     } catch {
       showToast(
@@ -319,13 +339,14 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
     reader.onload = (e) => {
       const content = e.target?.result as string;
       const parsedVars = parseEnvFile(content);
-      
+
       if (parsedVars.length > 0) {
         // Merge with existing vars, avoiding duplicates
         const existingKeys = new Set(currentEnvVars.map(v => v.key));
         const newVars = parsedVars.filter(v => !existingKeys.has(v.key));
         updateEnvVars([...currentEnvVars, ...newVars]);
         maybeAutoApplyDetectedPort(parsedVars);
+        setExpanded(true);
       }
     };
     reader.readAsText(file);
@@ -365,6 +386,7 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
         const newVars = parsedVars.filter(v => !existingKeys.has(v.key));
         updateEnvVars([...currentEnvVars, ...newVars]);
         maybeAutoApplyDetectedPort(parsedVars);
+        setExpanded(true);
       }
     };
     reader.readAsText(file);
@@ -433,13 +455,39 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
         </div>
         <div className="flex items-center gap-2">
           {mode === "settings" && !isEditingMode && (
-            <button
-              onClick={() => setIsEditingMode(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-lg transition-colors"
-            >
-              <Pencil className="size-3.5" />
-              Edit
-            </button>
+            <>
+              {/* Paste / Upload always available — clicking either
+                  flips the section into edit mode and runs the action.
+                  Matches the deploy-page UI so the operator doesn't
+                  have to click Edit first just to dump in a .env. */}
+              <button
+                onClick={() => {
+                  setIsEditingMode(true);
+                  void handlePasteFromClipboard();
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+              >
+                <FileText className="size-3.5" />
+                Paste .env
+              </button>
+              <button
+                onClick={() => {
+                  setIsEditingMode(true);
+                  handleUploadClick();
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+              >
+                <Upload className="size-3.5" />
+                Upload .env
+              </button>
+              <button
+                onClick={() => setIsEditingMode(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+              >
+                <Pencil className="size-3.5" />
+                Edit
+              </button>
+            </>
           )}
           {mode === "settings" && isEditingMode && (
             <>
@@ -495,6 +543,20 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
               </button>
             </>
           )}
+          {collapsible && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              aria-label={expanded ? "Collapse environment variables" : "Expand environment variables"}
+            >
+              {expanded ? (
+                <ChevronUp className="size-4" />
+              ) : (
+                <ChevronDown className="size-4" />
+              )}
+            </button>
+          )}
         </div>
       </div>
       
@@ -506,6 +568,7 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
         className="hidden"
       />
 
+      {expanded && (
       <div
         ref={pasteZoneRef}
         className={`px-5 pb-5 space-y-3 pt-4 transition-all ${
@@ -615,6 +678,7 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 };

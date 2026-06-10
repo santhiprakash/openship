@@ -221,6 +221,7 @@ const Sidebar: React.FC = () => {
           customContent: (
             <CloneStrategyModalContent
               hasGlobalToken={cloneGate.hasGlobalToken}
+              onChooseLocal={() => updateConfig({ buildStrategy: "local" })}
               onDone={() => {
                 hideModal(modalId);
                 resolve();

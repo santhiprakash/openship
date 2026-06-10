@@ -26,6 +26,7 @@ import { OverviewTab } from "../components/OverviewTab";
 import { ServicesTab } from "../components/ServicesTab";
 import { ProjectSidebar, ProjectMobileTabs } from "../components/ProjectSidebar";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
+import { useProjectInfo } from "@/hooks/useProjectEndpoints";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/context/ToastContext";
@@ -445,8 +446,12 @@ const ProjectSettingsContent = () => {
     errorType,
     activeTab,
     tabs,
-    isLoadingAnalytics,
+    id,
   } = useProjectSettings();
+  // Project shell waits for project info specifically (not analytics).
+  // Analytics is per-card now; the page-level gate is about whether we
+  // know enough about the project to even render its tabs.
+  const { isLoading: isLoadingProjectInfo } = useProjectInfo(id);
 
   const { showToast } = useToast();
   const router = useRouter();
@@ -542,7 +547,7 @@ const ProjectSettingsContent = () => {
     return <ErrorState type={errorType || "project-not-found"} />;
   }
 
-  if (isLoadingAnalytics) {
+  if (isLoadingProjectInfo) {
     return (
       <PageContainer fullScreen={false}>
         <div className="space-y-5 py-6">

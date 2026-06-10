@@ -25,3 +25,6 @@ cloudSaasRoutes.post("/edge-proxy", saas.syncEdgeProxy);
 
 cloudSaasRoutes.use("/analytics", cloudSessionAuth);
 cloudSaasRoutes.post("/analytics", saas.analyticsProxy);
+
+cloudSaasRoutes.use("/pages", cloudSessionAuth);
+cloudSaasRoutes.post("/pages", saas.pagesProxy);

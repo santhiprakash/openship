@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React from "react";
 import { ArrowUpDown, Gauge, Server, Users } from "lucide-react";
 import {
   TrafficChart,
@@ -8,14 +8,15 @@ import {
   StatsCards,
 } from "./general";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
+import { useAnalyticsData } from "@/hooks/useProjectEndpoints";
 
 export const MonitoringTab = () => {
-  const { analyticsData, isLoadingAnalytics, refreshAnalytics } = useProjectSettings();
+  const { id } = useProjectSettings();
+  // Atomic analytics fetch — own state, own loading, no context coupling.
+  // The hook backs onto the same module-level caches as OverviewTab so
+  // both tabs share one network request per endpoint.
+  const { data: analyticsData, isLoading: isLoadingAnalytics } = useAnalyticsData(id);
   const hasAnalytics = !!analyticsData;
-
-  useEffect(() => {
-    void refreshAnalytics(true);
-  }, [refreshAnalytics]);
 
   const formatNumber = (num: number): string => {
     if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;

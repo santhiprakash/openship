@@ -423,6 +423,9 @@ export const useBuildStream = (options: UseBuildStreamOptions = {}): UseBuildStr
       return;
     }
 
+    // If a fresh connect is already in progress, don't queue a parallel
+   if (connectingRef.current) return;
+
     const deploymentId = activeDeploymentIdRef.current;
     const canReconnect =
       deploymentId &&

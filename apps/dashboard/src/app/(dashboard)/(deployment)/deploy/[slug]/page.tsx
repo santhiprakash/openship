@@ -179,10 +179,16 @@ const DeployRepository: React.FC = () => {
 
     return (
         <PageContainer>
-                {/* Step 1: Deploy target picker - centered onboarding style (desktop only) */}
+                {/* Step 1: Deploy target picker - centered onboarding style (desktop only).
+                    Container widens when cloud is picked so the step's right-column
+                    power picker fits beside the deploy options without crushing them. */}
                 {step === "target" && isDesktop && (
                     <div className="flex items-center justify-center min-h-[calc(100vh-8rem)]">
-                        <div className="w-full max-w-lg">
+                        <div
+                            className={`w-full ${
+                                config.deployTarget === "cloud" ? "max-w-4xl" : "max-w-lg"
+                            }`}
+                        >
                             <DeployTargetStep
                                 targets={targets}
                                 autoSkipAllowed={autoSkipTargetRef.current}
@@ -202,6 +208,8 @@ const DeployRepository: React.FC = () => {
                                     deployTarget={config.deployTarget}
                                     buildStrategy={config.buildStrategy}
                                     showBuildStrategy={isSingleAppFlow}
+                                    cloudResourceTier={config.cloudResourceTier}
+                                    hasServer={config.options.hasServer}
                                     serverName={
                                       config.serverId
                                         ? (targets.servers.find((s) => s.id === config.serverId)?.name ??
@@ -247,7 +255,7 @@ const DeployRepository: React.FC = () => {
                                 the global editor renders. */}
                             {!isServiceDeployment &&
                                 !(isMonorepoFlow && config.serviceDeploymentMode !== "single") && (
-                                <EnvironmentVariables />
+                                <EnvironmentVariables collapsible />
                             )}
                             <ProjectName />
                         </div>

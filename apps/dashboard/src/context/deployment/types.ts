@@ -126,6 +126,28 @@ export interface DeploymentModeSnapshots {
   single?: DeploymentSingleModeSnapshot;
 }
 
+/**
+ * Resource tier IDs for Openship Cloud deploys. The label, RAM/CPU/disk
+ * shape and price are placeholder values defined alongside the picker UI
+ * — see `CLOUD_RESOURCE_TIERS` in `DeployTargetStep.tsx`. The backend
+ * is the source of truth for what each tier actually provisions.
+ */
+export type CloudResourceTier = "micro" | "low" | "medium" | "high" | "custom";
+
+/**
+ * User-supplied resource values when `cloudResourceTier === "custom"`.
+ * Stored in the same shape the backend's ResourceConfig uses (cores +
+ * megabytes) so the handoff is a direct copy with no unit conversion.
+ */
+export interface CloudResourceCustom {
+  /** Fractional vCPU cores (e.g. 0.25, 0.5, 1, 2). */
+  cpuCores: number;
+  /** RAM in megabytes. */
+  memoryMb: number;
+  /** Disk in megabytes. */
+  diskMb: number;
+}
+
 export interface DeploymentConfig {
   /** Existing deployable environment to update/deploy, when launched from a project page. */
   projectId?: string;
@@ -171,6 +193,19 @@ export interface DeploymentConfig {
   monorepoApps?: MonorepoAppConfig[];
   /** Shared workspace metadata (package manager + root install) for monorepo deploys. */
   monorepoWorkspace?: MonorepoWorkspaceConfig;
+  /**
+   * Resource tier picked for Openship Cloud deploys. Self-hosted servers
+   * inherit the host's capacity, so this field is meaningless for them
+   * — kept on the config (not nested under cloud) because operators
+   * sometimes preview the cost before picking the target. The backend
+   * is responsible for translating the tier into a real ResourceConfig
+   * (cpuCores/memoryMb/diskMb) and the corresponding billing line. See
+   * `CLOUD_RESOURCE_TIERS` in the deploy-target step for placeholder
+   * values; real numbers come from the pricing service later.
+   */
+  cloudResourceTier?: CloudResourceTier;
+  /** Custom CPU/RAM/disk values, used only when cloudResourceTier === "custom". */
+  cloudResourceCustom?: CloudResourceCustom;
   /** Local-only flag so env imports don't overwrite a user-edited runtime port. */
   productionPortTouched: boolean;
   /** Last runtime port auto-applied from env detection in this deploy flow. */
@@ -197,6 +232,7 @@ export const DEFAULT_CONFIG: DeploymentConfig = {
   branches: [],
   services: [],
   serviceDeploymentMode: "single",
+  cloudResourceTier: "low",
   productionPortTouched: false,
   lastAutoDetectedEnvPort: null,
   options: {
@@ -529,7 +565,7 @@ export interface DeploymentContextType {
 
   // Build lifecycle
   startDeployment: (overrides?: { runtimeMode?: RuntimeMode }) => Promise<string | null>;
-  connectToBuild: (deploymentId?: string) => Promise<void>;
+  connectToBuild: (deploymentId?: string, startBuild?: boolean) => Promise<void>;
   loadBuildSession: (deploymentId: string) => Promise<{ success: boolean; error?: string }>;
   stopDeployment: () => Promise<void>;
   redeploy: (deploymentId: string) => Promise<string | null>;

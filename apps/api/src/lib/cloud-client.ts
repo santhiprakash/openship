@@ -220,6 +220,50 @@ export async function cloudAnalyticsProxy<T>(
   return res.json() as Promise<T>;
 }
 
+// ─── Pages proxy ─────────────────────────────────────────────────────────────
+
+/**
+ * Proxy an Oblien pages.create call through the SaaS using master
+ * credentials. Required for `domain: "opsh.io"` (or any shared zone) —
+ * namespace tokens can't create on account-level DNS.
+ *
+ * Returns the raw `{ page: { slug, url? } }` shape Oblien's SDK
+ * returns, so the call site can drop it into the existing flow with
+ * no changes. Throws on failure (caller wraps with a friendly error).
+ */
+export async function cloudPagesProxy(
+  userId: string,
+  input: {
+    workspace_id: string;
+    path: string;
+    name: string;
+    slug: string;
+    domain?: string;
+  },
+): Promise<{ page: { slug: string; url?: string | null } }> {
+  const res = await cloudFetch(userId, "/api/cloud/pages", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+  if (!res) {
+    throw new Error("Not connected to Openship Cloud — connect your account in Settings.");
+  }
+
+  if (!res.ok) {
+    let detail = `Status ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) detail = body.error;
+    } catch {
+      // ignore JSON parse errors — keep the status code as the message
+    }
+    throw new Error(detail);
+  }
+
+  return res.json() as Promise<{ page: { slug: string; url?: string | null } }>;
+}
+
 // ─── Billing ─────────────────────────────────────────────────────────────────
 
 /**

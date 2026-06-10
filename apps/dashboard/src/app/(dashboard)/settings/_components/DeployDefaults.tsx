@@ -18,7 +18,7 @@ const TARGET_OPTIONS: {
 }[] = [
   { value: "local", label: "This Machine", desc: "Local Docker / runtime", icon: Cpu },
   { value: "server", label: "My Server", desc: "A configured SSH server", icon: Server },
-  { value: "cloud", label: "Openship Cloud", desc: "Managed cloud infra", icon: Cloud },
+  { value: "cloud", label: "OpenShip Cloud", desc: "Managed cloud infra", icon: Cloud },
 ];
 
 export function DeployDefaults() {

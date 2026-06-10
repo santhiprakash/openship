@@ -61,14 +61,21 @@ const BuildPage: React.FC = () => {
   ]);
 
   // Handle redeploy with URL update.
-  // `/redeploy` only creates a queued deployment; the SSE build endpoint is what
-  // starts the actual build, so start it directly for the returned deployment id.
+  //
+  // `redeployBuildSession` on the server already calls `kickoffBuild`
+  // for us (see build.service.ts:1050), so the build is running by the
+  // time the response lands here. We attach via GET /:id/stream
+  // (`startBuild = false`) instead of re-POSTing /:id/build, mirroring
+  // the page-refresh codepath. The previous start-build round-trip was
+  // racy: if the POST stalled or transiently failed, the reconnect gate
+  // (`hasConnected || !lastStartBuild`) refused to retry and the user
+  // saw an empty terminal until they hit refresh.
   const handleRedeploy = useCallback(async () => {
     const newDeploymentId = await redeploy(deploymentId);
 
     if (newDeploymentId) {
       initializedDeploymentRef.current = newDeploymentId;
-      void connectToBuild(newDeploymentId);
+      void connectToBuild(newDeploymentId, false);
       if (newDeploymentId !== deploymentId) {
         router.replace(`/build/${newDeploymentId}`, { scroll: false });
       }

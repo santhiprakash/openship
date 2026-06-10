@@ -562,12 +562,21 @@ export function useDeploymentBuild(
     }
   }, [baseDomain, config, deployMode, requireCloud, selfHosted, showToast]);
 
-  const connectToBuild = useCallback(async (deploymentId?: string) => {
+  // `startBuild` controls which SSE endpoint to hit:
+  //   - true  → POST /:id/build, which ALSO kicks off the build (used by
+  //             the initial deploy flow where `requestBuildAccess` only
+  //             queues the deployment).
+  //   - false → GET /:id/stream, attach-only (used after a redeploy,
+  //             where the server has already kicked off the build via
+  //             `redeployBuildSession` → `kickoffBuild`). Same path as
+  //             the page-refresh codepath in `loadBuildSession`.
+  // Defaults to true to preserve the initial-deploy behavior.
+  const connectToBuild = useCallback(async (deploymentId?: string, startBuild: boolean = true) => {
     const id = deploymentId || state.deploymentId;
     if (!id) {
       throw new Error("No deployment ID available");
     }
-    await buildStream.connect(id, true);
+    await buildStream.connect(id, startBuild);
   }, [state.deploymentId, buildStream]);
 
   const loadBuildSession = useCallback(

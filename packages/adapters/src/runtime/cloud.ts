@@ -90,6 +90,25 @@ function exposeTarget(port: number, slug?: string, domain = "opsh.io") {
 
 type DeployPrimaryEndpoint = NonNullable<DeployConfig["publicEndpoints"]>[number];
 
+/**
+ * Admin-scoped Oblien operations CloudRuntime needs but a namespace
+ * token can't perform. Provided by the API layer when this runtime is
+ * constructed for a local/desktop instance — the implementation
+ * forwards each call to the SaaS, which performs it with master creds.
+ *
+ * Today this is just `createPage` (Oblien Pages on shared `.opsh.io`).
+ * Add new fields here when more admin-scoped paths need proxying.
+ */
+export interface CloudAdminProxy {
+  createPage: (input: {
+    workspace_id: string;
+    path: string;
+    name: string;
+    slug: string;
+    domain?: string;
+  }) => Promise<{ page: { slug: string; url?: string | null } }>;
+}
+
 function primaryPublicEndpoint(config: Pick<DeployConfig, "publicEndpoints">): DeployPrimaryEndpoint | undefined {
   return config.publicEndpoints?.[0];
 }
@@ -272,6 +291,13 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
   ]);
 
   private readonly client: Oblien;
+  // Optional admin-scoped proxy. Set when this runtime is constructed
+  // by a local/desktop instance whose `client` is a namespace token —
+  // admin-scoped operations (e.g. creating pages on shared `.opsh.io`)
+  // get handed off to the SaaS through this callback. SaaS instances
+  // construct CloudRuntime with master creds and leave it null;
+  // `this.client` already has the needed scope there.
+  private readonly adminProxy?: CloudAdminProxy;
   private readonly builtArtifacts = new Map<string, CloudBuiltArtifact>();
   private readonly activeBuilds = new Map<string, {
     abort: AbortController;
@@ -279,8 +305,9 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
   }>();
   private readonly compose: CloudComposeSupport;
 
-  constructor(client: Oblien) {
+  constructor(client: Oblien, opts?: { adminProxy?: CloudAdminProxy }) {
     this.client = client;
+    this.adminProxy = opts?.adminProxy;
     this.compose = new CloudComposeSupport({
       client,
       builtArtifacts: this.builtArtifacts,
@@ -1476,10 +1503,17 @@ fi`;
 
       page = { ...pg, url: pg.url ?? `https://${primaryCustomDomain}` };
     } else if (primarySlug) {
-      // Deploy with free subdomain (slug.opsh.io)
+      // Deploy with free subdomain (slug.opsh.io). Creating a page on
+      // the shared `.opsh.io` zone is an account-level (admin) op —
+      // namespace tokens can't do it. When this runtime was given an
+      // adminProxy (i.e. we're running on a local/desktop instance),
+      // hand off to the SaaS; otherwise use the direct client (SaaS
+      // master creds path).
+      const createOnSharedZone = this.adminProxy?.createPage ??
+        ((input) => this.client.pages.create(input));
       let pg: { slug: string; url?: string | null };
       try {
-        const result = await this.client.pages.create({
+        const result = await createOnSharedZone({
           workspace_id: workspaceId,
           path: outputPath,
           name: config.projectName ?? pageSlug,

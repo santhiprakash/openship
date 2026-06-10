@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { Server, Cloud, Cpu, ArrowRight, Pencil, ChevronDown, CheckCircle2, Loader2, Plus, Sparkles } from "lucide-react";
+import { Server, Cloud, Cpu, ArrowRight, Pencil, ChevronDown, ChevronUp, CheckCircle2, Loader2, Plus, Sparkles, Settings2, Zap, Globe } from "lucide-react";
 import { useDeployment } from "@/context/DeploymentContext";
 import { usesServiceDeployment } from "@/context/deployment/types";
+import type { DeploymentConfig } from "@/context/deployment/types";
 import { useCloud } from "@/context/CloudContext";
 import { usePlatform } from "@/context/PlatformContext";
 import { systemApi } from "@/lib/api/system";
@@ -136,13 +137,22 @@ interface CompactSummaryProps {
   buildStrategy: BuildStrategy;
   serverName?: string | null;
   showBuildStrategy?: boolean;
+  /** When deployTarget is "cloud", the chosen resource tier — rendered
+   *  as a small chip on the right of the summary so the operator sees
+   *  their power pick at a glance without re-opening the picker. */
+  cloudResourceTier?: CloudResourceTier;
+  /** False when the project deploys as static files (no Start command,
+   *  no long-running process). For cloud deploys this swaps the power
+   *  tier chip for a "Static" chip — there's no machine to size when
+   *  the workload is just files served from the edge. */
+  hasServer?: boolean;
   onEdit: () => void;
 }
 
 const targetLabels: Record<DeployTarget, { label: string; icon: React.ReactNode }> = {
   local: { label: "This Machine", icon: <Cpu className="size-3.5" /> },
   server: { label: "My Server", icon: <Server className="size-3.5" /> },
-  cloud: { label: "Oblien Cloud", icon: <Cloud className="size-3.5" /> },
+  cloud: { label: "OpenShip Cloud", icon: <Cloud className="size-3.5" /> },
 };
 
 const buildLabels: Record<BuildStrategy, { label: string; icon: React.ReactNode }> = {
@@ -155,6 +165,8 @@ export const DeployTargetSummary: React.FC<CompactSummaryProps> = ({
   buildStrategy,
   serverName,
   showBuildStrategy = true,
+  cloudResourceTier,
+  hasServer = true,
   onEdit,
 }) => {
   const target = targetLabels[deployTarget];
@@ -165,29 +177,82 @@ export const DeployTargetSummary: React.FC<CompactSummaryProps> = ({
     ? serverName
     : target.label;
 
+  // Build "destination" derived from (deployTarget, buildStrategy):
+  //   - buildStrategy === "local" → local machine
+  //   - buildStrategy === "server" → runs ON the deploy target
+  // Same destination → collapse Build + Deploy into a single chip with
+  // the two icons stacked + a `+` between them, instead of two
+  // sections separated by an arrow. Most users have matching targets
+  // (cloud-on-cloud, server-on-server), so this is the common case.
+  const buildDest = buildStrategy === "local" ? "local" : deployTarget;
+  const sameDestination = showBuildStrategy && buildDest === deployTarget;
+
+  // Cloud-only chip on the right of the summary. Two shapes:
+  //   - Static workloads (no Start command, files served from the edge)
+  //     have no machine to size — show a neutral "Static" chip instead
+  //     of a power tier. Otherwise "Low" / "Medium" / etc. would imply
+  //     a runtime that doesn't exist.
+  //   - Otherwise the picked resource tier with a Zap (power) icon.
+  const tierChip =
+    deployTarget === "cloud"
+      ? !hasServer
+        ? (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-500/10 text-[11px] font-medium text-sky-500 shrink-0">
+            <Globe className="size-3" />
+            Static
+          </span>
+        )
+        : cloudResourceTier
+          ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 text-[11px] font-medium text-amber-500 shrink-0">
+              <Zap className="size-3" />
+              <span className="capitalize">{cloudResourceTier}</span>
+            </span>
+          )
+          : null
+      : null;
+
   return (
     <button
       type="button"
       onClick={onEdit}
       className="w-full flex items-center gap-3 px-4 py-3 bg-card rounded-xl border border-border/50 hover:border-primary/30 transition-all group"
     >
-      <div className="flex items-center gap-4 flex-1 min-w-0">
-        {showBuildStrategy && (
-          <>
-            <div className="flex items-center gap-1.5 text-sm">
+      <div className="flex items-center gap-3 flex-1 min-w-0">
+        {sameDestination ? (
+          // Merged view — single line, two icons with a + between to
+          // signal "both build and deploy go here", followed by one
+          // label. Saves horizontal space vs the two-section layout.
+          <div className="flex items-center gap-1.5 text-sm min-w-0">
+            <div className="flex items-center gap-0.5 text-muted-foreground shrink-0">
               {build.icon}
-              <span className="text-muted-foreground">Build:</span>
-              <span className="font-medium text-foreground">{build.label}</span>
+              <Plus className="size-2.5" strokeWidth={2.5} />
+              {target.icon}
             </div>
-            <ArrowRight className="size-3 text-muted-foreground/50" />
+            <span className="text-muted-foreground">Build &amp; deploy:</span>
+            <span className="font-medium text-foreground truncate">{deployLabel}</span>
+          </div>
+        ) : (
+          <>
+            {showBuildStrategy && (
+              <>
+                <div className="flex items-center gap-1.5 text-sm shrink-0">
+                  {build.icon}
+                  <span className="text-muted-foreground">Build:</span>
+                  <span className="font-medium text-foreground">{build.label}</span>
+                </div>
+                <ArrowRight className="size-3 text-muted-foreground/50 shrink-0" />
+              </>
+            )}
+            <div className="flex items-center gap-1.5 text-sm min-w-0">
+              {target.icon}
+              <span className="text-muted-foreground">Deploy:</span>
+              <span className="font-medium text-foreground truncate">{deployLabel}</span>
+            </div>
           </>
         )}
-        <div className="flex items-center gap-1.5 text-sm">
-          {target.icon}
-          <span className="text-muted-foreground">Deploy:</span>
-          <span className="font-medium text-foreground">{deployLabel}</span>
-        </div>
       </div>
+      {tierChip}
       <Pencil className="size-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
     </button>
   );
@@ -300,6 +365,285 @@ interface DeployTargetStepProps {
   autoSkipAllowed?: boolean;
 }
 
+// ─── Cloud resource tiers ────────────────────────────────────────────────────
+// Placeholder runtime shapes for the Openship Cloud power picker. The
+// numbers here are the UX surface only — the backend owns the
+// authoritative cpu/mem/disk values per tier and translates them at
+// provision time. Billing is credits-based (no $/mo shown here).
+type CloudResourceTier = NonNullable<DeploymentConfig["cloudResourceTier"]>;
+
+const CLOUD_RESOURCE_TIERS: Array<{
+    id: Exclude<CloudResourceTier, "custom">;
+    label: string;
+    cpu: string;
+    ram: string;
+    disk: string;
+    bestFor: string;
+}> = [
+    {
+        id: "micro",
+        label: "Micro",
+        cpu: "0.25 vCPU",
+        ram: "256 MB",
+        disk: "4 GB",
+        bestFor: "Side projects, low traffic",
+    },
+    {
+        id: "low",
+        label: "Low",
+        cpu: "0.5 vCPU",
+        ram: "512 MB",
+        disk: "8 GB",
+        bestFor: "Small apps, light APIs",
+    },
+    {
+        id: "medium",
+        label: "Medium",
+        cpu: "1 vCPU",
+        ram: "1 GB",
+        disk: "16 GB",
+        bestFor: "Most production apps",
+    },
+    {
+        id: "high",
+        label: "High",
+        cpu: "2 vCPU",
+        ram: "2 GB",
+        disk: "32 GB",
+        bestFor: "Heavy workloads, fast builds",
+    },
+];
+
+const CUSTOM_DEFAULTS = { cpuCores: 1, memoryMb: 1024, diskMb: 16384 };
+
+// ─── Custom-values modal ─────────────────────────────────────────────────────
+// Rendered via showModal() so the inputs get proper breathing room
+// instead of trying to fit beside the static spec line in a 320px card.
+// Modal is portal-rendered (outside DeploymentProvider) — values are
+// passed in via props rather than read from useDeployment here.
+interface CustomPowerModalContentProps {
+    initial: { cpuCores: number; memoryMb: number; diskMb: number };
+    onSave: (values: { cpuCores: number; memoryMb: number; diskMb: number }) => void;
+    onCancel: () => void;
+}
+
+const CustomPowerModalContent: React.FC<CustomPowerModalContentProps> = ({
+    initial,
+    onSave,
+    onCancel,
+}) => {
+    const [values, setValues] = useState(initial);
+    const set = (patch: Partial<typeof values>) =>
+        setValues((prev) => ({ ...prev, ...patch }));
+    return (
+        <div className="p-6 space-y-5">
+            <div className="space-y-1.5">
+                <h3 className="text-base font-semibold text-foreground">Custom runtime</h3>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                    Pick the CPU, RAM, and disk this deployment should run with.
+                </p>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+                <label className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">vCPU</span>
+                    <input
+                        type="number"
+                        inputMode="decimal"
+                        step="0.25"
+                        min="0.25"
+                        value={values.cpuCores}
+                        onChange={(e) => set({ cpuCores: Number(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 bg-background border border-border/50 rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                </label>
+                <label className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">RAM (MB)</span>
+                    <input
+                        type="number"
+                        inputMode="numeric"
+                        step="128"
+                        min="128"
+                        value={values.memoryMb}
+                        onChange={(e) => set({ memoryMb: Number(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 bg-background border border-border/50 rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                </label>
+                <label className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">Disk (GB)</span>
+                    <input
+                        type="number"
+                        inputMode="numeric"
+                        step="1"
+                        min="1"
+                        // Stored in MB internally; display as GB so the
+                        // input matches what an operator types.
+                        value={Math.round(values.diskMb / 1024)}
+                        onChange={(e) =>
+                            set({ diskMb: Math.max(0, Number(e.target.value) || 0) * 1024 })
+                        }
+                        className="w-full px-3 py-2 bg-background border border-border/50 rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                </label>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                    type="button"
+                    onClick={onCancel}
+                    className="px-4 py-2 rounded-xl text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                >
+                    Cancel
+                </button>
+                <button
+                    type="button"
+                    onClick={() => onSave(values)}
+                    className="px-4 py-2 rounded-xl text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                    Save
+                </button>
+            </div>
+        </div>
+    );
+};
+
+const CloudPowerPicker: React.FC = () => {
+    const { config, updateConfig } = useDeployment();
+    const { showModal, hideModal } = useModal();
+    const selected = config.cloudResourceTier ?? "low";
+    const custom = config.cloudResourceCustom ?? CUSTOM_DEFAULTS;
+
+    // Click on Custom card → open modal. Pre-selects the tier so the choice
+    // sticks even if the user cancels (matches the rest of the picker:
+    // clicking any tier card commits the selection). Saving from the
+    // modal also writes the new values; cancel leaves them as-was.
+    const openCustomModal = () => {
+        updateConfig({
+            cloudResourceTier: "custom",
+            cloudResourceCustom: config.cloudResourceCustom ?? CUSTOM_DEFAULTS,
+        });
+        const id = showModal({
+            maxWidth: "480px",
+            customContent: (
+                <CustomPowerModalContent
+                    initial={config.cloudResourceCustom ?? CUSTOM_DEFAULTS}
+                    onCancel={() => hideModal(id)}
+                    onSave={(values) => {
+                        updateConfig({
+                            cloudResourceTier: "custom",
+                            cloudResourceCustom: values,
+                        });
+                        hideModal(id);
+                    }}
+                />
+            ),
+        });
+    };
+
+    return (
+        // Header lives OUTSIDE the cards (matching the left column's
+        // "Where do you want to deploy?" heading rhythm) so the first
+        // tier card visually aligns with the first deploy option across
+        // the grid row.
+        <div className="space-y-3">
+            <div>
+                <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
+                    <Zap className="size-4 text-amber-500" />
+                    Power
+                </h3>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                    Pick a runtime size for Openship Cloud
+                </p>
+            </div>
+            <div className="space-y-2">
+                {CLOUD_RESOURCE_TIERS.map((tier) => {
+                    const isSelected = selected === tier.id;
+                    return (
+                        <button
+                            key={tier.id}
+                            type="button"
+                            onClick={() => updateConfig({ cloudResourceTier: tier.id })}
+                            className={`w-full rounded-xl border p-4 text-left transition-all ${
+                                isSelected
+                                    ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                                    : "border-border/50 bg-card hover:border-primary/30 hover:bg-primary/[0.02]"
+                            }`}
+                        >
+                            {/* Row 1 — label + description inline with a · divider. */}
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0 flex items-baseline gap-2">
+                                    <span className={`text-sm font-semibold shrink-0 ${isSelected ? "text-foreground" : "text-foreground/80"}`}>
+                                        {tier.label}
+                                    </span>
+                                    <span className="text-muted-foreground/70 shrink-0">·</span>
+                                    <span className="text-xs text-muted-foreground truncate">
+                                        {tier.bestFor}
+                                    </span>
+                                </div>
+                                {isSelected && (
+                                    <div className="size-5 rounded-full bg-primary flex items-center justify-center shrink-0">
+                                        <div className="size-2 rounded-full bg-primary-foreground" />
+                                    </div>
+                                )}
+                            </div>
+                            {/* Row 2 — resources with RAM / Disk labels so each
+                                value reads on its own without context. */}
+                            <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground tabular-nums">
+                                <span>{tier.cpu}</span>
+                                <span className="text-muted-foreground/70">·</span>
+                                <span>RAM {tier.ram}</span>
+                                <span className="text-muted-foreground/70">·</span>
+                                <span>Disk {tier.disk}</span>
+                            </div>
+                        </button>
+                    );
+                })}
+
+                {/* Custom — clicking the card selects it; the inline
+                    inputs only appear once selected, so the collapsed
+                    state stays tidy. */}
+                {/* Custom — clicking opens a modal where the operator can
+                    edit CPU / RAM / disk. The card itself mirrors the tier
+                    layout exactly: row 1 = label · description, row 2 =
+                    current values in the same `vCPU · RAM x · Disk y` shape
+                    as the tier cards. Identical height, no in-card inputs
+                    bleeding past the border. */}
+                <button
+                    type="button"
+                    onClick={openCustomModal}
+                    className={`w-full rounded-xl border p-4 text-left transition-all ${
+                        selected === "custom"
+                            ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                            : "border-border/50 bg-card hover:border-primary/30 hover:bg-primary/[0.02]"
+                    }`}
+                >
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 flex items-baseline gap-2">
+                            <span className={`text-sm font-semibold shrink-0 ${selected === "custom" ? "text-foreground" : "text-foreground/80"}`}>
+                                Custom
+                            </span>
+                            <span className="text-muted-foreground/70 shrink-0">·</span>
+                            <span className="text-xs text-muted-foreground truncate">
+                                Dial in CPU, RAM, and storage yourself
+                            </span>
+                        </div>
+                        {selected === "custom" && (
+                            <div className="size-5 rounded-full bg-primary flex items-center justify-center shrink-0">
+                                <div className="size-2 rounded-full bg-primary-foreground" />
+                            </div>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground tabular-nums">
+                        <span>{custom.cpuCores} vCPU</span>
+                        <span className="text-muted-foreground/70">·</span>
+                        <span>RAM {custom.memoryMb} MB</span>
+                        <span className="text-muted-foreground/70">·</span>
+                        <span>Disk {Math.round(custom.diskMb / 1024)} GB</span>
+                    </div>
+                </button>
+            </div>
+        </div>
+    );
+};
+
 const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue, autoSkipAllowed = true }) => {
   const { config, updateConfig } = useDeployment();
   const { requireCloud } = useCloud();
@@ -328,6 +672,11 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
   // User can opt into picking the build location manually from inside the
   // hint - when true, the hint hides and the full Build picker is shown.
   const [revealBuildPicker, setRevealBuildPicker] = useState(false);
+  // Build picker on subsequent deploys lives under an "Advanced" disclosure
+  // so the screen leads with the deploy-target decision. Folded by default
+  // because the build strategy is correctly seeded from the user's saved
+  // default — most operators never need to touch it on a per-deploy basis.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   // Add server inline via modal. On create, refresh the server list and
   // auto-select the new one so the user lands on it immediately - no extra
@@ -690,8 +1039,21 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
     onContinue();
   };
 
+  // When cloud is the picked target, lay out the step as 2 columns:
+  // existing flow on the left, power picker on the right. Anything else
+  // (server, local, compact summary, loading) stays single-column. The
+  // parent page widens its container to match — see page.tsx.
+  const showCloudPicker = showFullPicker && config.deployTarget === "cloud";
+
   return (
-    <div className="space-y-8">
+    <div
+      className={
+        showCloudPicker
+          ? "grid grid-cols-1 lg:grid-cols-[1fr_1px_320px] gap-0 items-start"
+          : ""
+      }
+    >
+    <div className={`space-y-8 ${showCloudPicker ? "lg:pr-6" : ""}`}>
       {showLoading && (
         <div className="space-y-3">
           <div>
@@ -839,30 +1201,58 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
       )}
 
       {showFullPicker && showBuildStrategy && (!isFirstBuildHint || revealBuildPicker) && (
-        <div className="space-y-3">
-          <div>
-            <h3 className="text-base font-semibold text-foreground">
-              {config.options.hasBuild ? "Where do you want to build?" : "Where do you want to prepare it?"}
-            </h3>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {config.options.hasBuild
-                ? "Choose where the build process runs"
-                : "Choose where the repository is cloned and staged before deploy"}
-            </p>
-          </div>
-          <div className="space-y-2">
-            {visibleBuildOptions.map((opt) => (
-              <OptionCard
-                key={opt.value}
-                value={opt.value}
-                selected={config.buildStrategy === opt.value}
-                onSelect={() => updateConfig({ buildStrategy: opt.value })}
-                icon={opt.icon}
-                label={opt.label}
-                description={opt.description}
-              />
-            ))}
-          </div>
+        <div className="rounded-2xl border border-border/50 bg-card">
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex size-9 items-center justify-center rounded-xl bg-muted/40">
+                <Settings2 className="size-4 text-muted-foreground" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">Advanced</p>
+                <p className="text-xs text-muted-foreground">
+                  {config.options.hasBuild ? "Build" : "Prepare"} on{" "}
+                  {visibleBuildOptions.find((o) => o.value === config.buildStrategy)?.label ?? "—"}
+                </p>
+              </div>
+            </div>
+            {advancedOpen ? (
+              <ChevronUp className="size-4 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="size-4 text-muted-foreground" />
+            )}
+          </button>
+
+          {advancedOpen && (
+            <div className="border-t border-border/50 px-5 py-4 space-y-3">
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">
+                  {config.options.hasBuild ? "Where do you want to build?" : "Where do you want to prepare it?"}
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {config.options.hasBuild
+                    ? "Choose where the build process runs"
+                    : "Choose where the repository is cloned and staged before deploy"}
+                </p>
+              </div>
+              <div className="space-y-2">
+                {visibleBuildOptions.map((opt) => (
+                  <OptionCard
+                    key={opt.value}
+                    value={opt.value}
+                    selected={config.buildStrategy === opt.value}
+                    onSelect={() => updateConfig({ buildStrategy: opt.value })}
+                    icon={opt.icon}
+                    label={opt.label}
+                    description={opt.description}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -896,6 +1286,22 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
         Continue
         <ArrowRight className="size-4" />
       </button>
+    </div>
+    {showCloudPicker && (
+      <>
+        {/* Vertical divider line between the two columns. Sits in its
+            own 1px-wide grid track so the column widths stay clean and
+            the line is perfectly centered in the gutter. Hidden on
+            mobile where the layout collapses to a single column. */}
+        <div className="hidden lg:block w-px bg-border self-stretch" />
+        {/* Slide-in keyed on deployTarget so the animation re-fires
+            each time the user flips back to "cloud" (not only on the
+            first selection). */}
+        <div key={config.deployTarget} className="lg:pl-6 animate-slide-in-right">
+          <CloudPowerPicker />
+        </div>
+      </>
+    )}
     </div>
   );
 };

@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
+import { invalidateProjectCaches } from "@/hooks/useProjectEndpoints";
 import { getApiErrorMessage, projectsApi, deployApi, serviceKind, servicesApi, type Service, type ServiceInput } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
 import { usePlatform } from "@/context/PlatformContext";
@@ -191,7 +192,6 @@ export const DomainSettings = () => {
     projectData,
     setProjectData,
     buildData,
-    refreshAnalytics,
     servicesData,
     refreshServices,
   } = useProjectSettings();
@@ -498,7 +498,9 @@ export const DomainSettings = () => {
         };
       }));
 
-      await refreshAnalytics(true);
+      // Drop the cached project info so the next mount of Overview /
+      // any hook consumer refetches with the new domain state.
+      if (id) invalidateProjectCaches(id);
       showToast("Domain routing updated", "success", "Domains");
       setIsEditingDomains(false);
       return true;
