@@ -1,10 +1,16 @@
 /**
  * Service controller - Hono request handlers for compose services.
+ *
+ * Access is enforced by the secureRouter middleware mounted on each
+ * route (project:service:read|write|admin tags). By the time a handler
+ * runs, the user's membership in the project's org is verified.
+ * Controllers pull the resolved organizationId from the context and
+ * pass it down to the service layer for defense-in-depth.
  */
 
 import type { Context } from "hono";
 import { streamSSE } from "../../lib/sse";
-import { getUserId, param } from "../../lib/controller-helpers";
+import { getActiveOrganizationId, param } from "../../lib/controller-helpers";
 import { sshManager } from "../../lib/ssh-manager";
 import * as serviceService from "./service.service";
 import type {
@@ -16,11 +22,11 @@ import type {
 // ─── List services for a project ─────────────────────────────────────────────
 
 export async function list(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
 
   try {
-    const services = await serviceService.listServices(projectId, userId);
+    const services = await serviceService.listServices(projectId, organizationId);
     return c.json({ success: true, services });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to list services";
@@ -31,12 +37,12 @@ export async function list(c: Context) {
 // ─── Get single service ──────────────────────────────────────────────────────
 
 export async function getById(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const serviceId = param(c, "serviceId");
 
   try {
-    const svc = await serviceService.getService(projectId, serviceId, userId);
+    const svc = await serviceService.getService(projectId, serviceId, organizationId);
     return c.json({ success: true, service: svc });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to get service";
@@ -48,12 +54,12 @@ export async function getById(c: Context) {
 // ─── Create / update / delete service config ─────────────────────────────────
 
 export async function create(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const body = await c.req.json<TCreateServiceBody>();
 
   try {
-    const svc = await serviceService.createService(projectId, userId, body);
+    const svc = await serviceService.createService(projectId, organizationId, body);
     return c.json({ success: true, service: svc }, 201);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to create service";
@@ -62,13 +68,13 @@ export async function create(c: Context) {
 }
 
 export async function update(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const serviceId = param(c, "serviceId");
   const body = await c.req.json<TUpdateServiceBody>();
 
   try {
-    const svc = await serviceService.updateService(projectId, serviceId, userId, body);
+    const svc = await serviceService.updateService(projectId, serviceId, organizationId, body);
     return c.json({ success: true, service: svc });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to update service";
@@ -77,12 +83,12 @@ export async function update(c: Context) {
 }
 
 export async function remove(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const serviceId = param(c, "serviceId");
 
   try {
-    await serviceService.deleteService(projectId, serviceId, userId);
+    await serviceService.deleteService(projectId, serviceId, organizationId);
     return c.json({ success: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to delete service";
@@ -93,13 +99,13 @@ export async function remove(c: Context) {
 // ─── Service environment variables ───────────────────────────────────────────
 
 export async function listEnvVars(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const serviceId = param(c, "serviceId");
   const environment = c.req.query("environment") || undefined;
 
   try {
-    const vars = await serviceService.listServiceEnvVars(projectId, serviceId, userId, environment);
+    const vars = await serviceService.listServiceEnvVars(projectId, serviceId, organizationId, environment);
     return c.json({ success: true, vars });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to list env vars";
@@ -108,13 +114,13 @@ export async function listEnvVars(c: Context) {
 }
 
 export async function setEnvVars(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const serviceId = param(c, "serviceId");
   const body = await c.req.json<TSetServiceEnvVarsBody>();
 
   try {
-    const result = await serviceService.setServiceEnvVars(projectId, serviceId, userId, body);
+    const result = await serviceService.setServiceEnvVars(projectId, serviceId, organizationId, body);
     return c.json({ success: true, ...result });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to set env vars";
@@ -125,11 +131,11 @@ export async function setEnvVars(c: Context) {
 // ─── Active containers (for observability) ───────────────────────────────────
 
 export async function activeContainers(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
 
   try {
-    const containers = await serviceService.getActiveServiceContainers(projectId, userId);
+    const containers = await serviceService.getActiveServiceContainers(projectId, organizationId);
     return c.json({ success: true, containers });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to get containers";
@@ -140,7 +146,7 @@ export async function activeContainers(c: Context) {
 // ─── Sync from compose file ──────────────────────────────────────────────────
 
 export async function syncFromCompose(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const body = await c.req.json<{
     services: Array<{
@@ -171,7 +177,7 @@ export async function syncFromCompose(c: Context) {
   }
 
   try {
-    const services = await serviceService.syncComposeServices(projectId, userId, body.services);
+    const services = await serviceService.syncComposeServices(projectId, organizationId, body.services);
     return c.json({ success: true, services });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to sync services";
@@ -182,11 +188,11 @@ export async function syncFromCompose(c: Context) {
 // ─── Per-service container actions ───────────────────────────────────────────
 
 export async function startContainer(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const serviceId = param(c, "serviceId");
   try {
-    await serviceService.startServiceContainer(projectId, serviceId, userId);
+    await serviceService.startServiceContainer(projectId, serviceId, organizationId);
     return c.json({ success: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to start container";
@@ -195,11 +201,11 @@ export async function startContainer(c: Context) {
 }
 
 export async function stopContainer(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const serviceId = param(c, "serviceId");
   try {
-    await serviceService.stopServiceContainer(projectId, serviceId, userId);
+    await serviceService.stopServiceContainer(projectId, serviceId, organizationId);
     return c.json({ success: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to stop container";
@@ -208,11 +214,11 @@ export async function stopContainer(c: Context) {
 }
 
 export async function restartContainer(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const serviceId = param(c, "serviceId");
   try {
-    await serviceService.restartServiceContainer(projectId, serviceId, userId);
+    await serviceService.restartServiceContainer(projectId, serviceId, organizationId);
     return c.json({ success: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to restart container";
@@ -221,13 +227,13 @@ export async function restartContainer(c: Context) {
 }
 
 export async function runtimeLogs(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const serviceId = param(c, "serviceId");
   const tail = c.req.query("tail") ? Number(c.req.query("tail")) : undefined;
 
   try {
-    const entries = await serviceService.getServiceRuntimeLogs(projectId, serviceId, userId, tail);
+    const entries = await serviceService.getServiceRuntimeLogs(projectId, serviceId, organizationId, tail);
     return c.json({ data: entries });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to get logs";
@@ -236,7 +242,7 @@ export async function runtimeLogs(c: Context) {
 }
 
 export async function runtimeLogStream(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "id");
   const serviceId = param(c, "serviceId");
   const tail = c.req.query("tail") ? Number(c.req.query("tail")) : undefined;
@@ -249,7 +255,7 @@ export async function runtimeLogStream(c: Context) {
       const result = await serviceService.streamServiceRuntimeLogs(
         projectId,
         serviceId,
-        userId,
+        organizationId,
         (entry) => {
           void sseStream.writeSSE({
             event: "log",

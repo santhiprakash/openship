@@ -13,6 +13,7 @@
 
 import { Oblien } from "@repo/adapters";
 import { env } from "../config/env";
+import { safeErrorMessage } from "@repo/core";
 
 // ─── Oblien client (master credentials - SaaS only) ─────────────────────────
 
@@ -112,7 +113,7 @@ export async function issueNamespaceToken(userId: string): Promise<NamespaceToke
     };
   } catch (err: unknown) {
     console.error("Oblien SDK token issuance error", err);
-    const message = err instanceof Error ? err.message : String(err);
+    const message = safeErrorMessage(err);
     throw new Error(`Failed to issue Oblien namespace token for ${namespace}: ${message}`);
   }
 }

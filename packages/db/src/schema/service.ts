@@ -5,6 +5,7 @@ import {
   boolean,
   integer,
   jsonb,
+  index,
 } from "drizzle-orm/pg-core";
 import { project } from "./project";
 import { deployment } from "./deployment";
@@ -101,7 +102,10 @@ export const service = pgTable("service", {
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (t) => [
+  // Build pipeline + deployment setup iterate services per project.
+  index("idx_service_project_id").on(t.projectId),
+]);
 
 // ─── Service deployments ─────────────────────────────────────────────────────
 

@@ -40,8 +40,9 @@ import {
 import { Readable } from "node:stream";
 import { resolveDeploymentPlatform } from "../../lib/deployment-runtime";
 import { decryptEnvMap } from "../../lib/encryption";
-import { safeErrorMessage } from "../../lib/safe-error";
+import { notification } from "../../lib/notification-dispatcher";
 import crypto from "node:crypto";
+import { safeErrorMessage } from "@repo/core";
 
 const TRUNCATE_ERROR = 4096;
 const TRUNCATE_HOOK_LOG = 64 * 1024;
@@ -78,6 +79,14 @@ export class BackupOrchestrator {
       throw new Error(`Destination ${policy.destinationId} not found for policy ${policy.id}`);
     }
 
+    // Derive the org scope from the policy's project first, fall back
+    // to the destination's org. Both should agree (ownership-aligned);
+    // the explicit fallback keeps cron/webhook triggers working when
+    // a destination has a NULL organizationId.
+    const policyProject = await repos.project.findById(policy.projectId);
+    const organizationId =
+      policyProject?.organizationId ?? destination.organizationId ?? null;
+
     const runId = `bkr_${crypto.randomUUID()}`;
     await repos.backupRun.create({
       id: runId,
@@ -85,7 +94,7 @@ export class BackupOrchestrator {
       destinationId: destination.id,
       projectId: policy.projectId,
       serviceId: policy.serviceId,
-      userId: destination.userId,
+      organizationId,
       status: "queued",
       triggeredBy: input.trigger.source,
       triggeredByUserId:
@@ -163,17 +172,13 @@ export class BackupOrchestrator {
       const project = await repos.project.findById(serviceRow.projectId);
       if (!project) throw new Error(`Project ${serviceRow.projectId} disappeared`);
 
-      // Defense-in-depth: ALL three owners must align. The controller
-      // allow-lists PATCH fields to prevent mass-assignment, but a
-      // future bug or a hand-written DB row could still misalign these.
-      // Refuse to back up unless the policy's project, the destination,
-      // and the policy's creator all point at the same user.
-      if (
-        project.userId !== destinationRow.userId ||
-        (policy.createdBy && policy.createdBy !== destinationRow.userId)
-      ) {
+      // Defense-in-depth: project and destination must belong to the
+      // same organization. The controller allow-lists PATCH fields to
+      // prevent mass-assignment, but a future bug or a hand-written DB
+      // row could still misalign these. Refuse to back up across orgs.
+      if (project.organizationId !== destinationRow.organizationId) {
         throw new Error(
-          `Ownership mismatch — refusing to run: project.userId=${project.userId}, destination.userId=${destinationRow.userId}, policy.createdBy=${policy.createdBy}`,
+          `Org mismatch — refusing to run: project.org=${project.organizationId}, destination.org=${destinationRow.organizationId}`,
         );
       }
       // Also: if the service's project doesn't match the policy's project,
@@ -209,7 +214,7 @@ export class BackupOrchestrator {
         : null;
       const platform = await resolveDeploymentPlatform(
         (activeDeployment?.meta ?? {}) as Parameters<typeof resolveDeploymentPlatform>[0],
-        { userId: destinationRow.userId },
+        { organizationId: destinationRow.organizationId },
       );
       executor = resolveExecutor(platform.platform.runtime.name, platform.platform.runtime);
 
@@ -308,7 +313,7 @@ export class BackupOrchestrator {
           );
         } catch (err) {
           hookLog.push(
-            `[post-hook] continued past failure: ${err instanceof Error ? err.message : String(err)}`,
+            `[post-hook] continued past failure: ${safeErrorMessage(err)}`,
           );
         }
       }
@@ -318,6 +323,20 @@ export class BackupOrchestrator {
         bytesTransferred: totalBytes,
         artifacts: artifactsRecorded,
         hookLog: hookLog.join("\n").slice(0, TRUNCATE_HOOK_LOG),
+      });
+
+      notification.emit({
+        organizationId: destinationRow.organizationId,
+        eventType: "backup_run.succeeded",
+        resourceType: "backup_run",
+        resourceId: runId,
+        payload: {
+          projectName: project.name,
+          serviceName: serviceRow.name,
+          destinationName: destinationRow.name,
+          bytesTransferred: totalBytes,
+          artifactCount: artifactsRecorded.length,
+        },
       });
     } catch (err) {
       const message = safeErrorMessage(err);
@@ -333,6 +352,27 @@ export class BackupOrchestrator {
       await this.transition(runId, "failed", {
         errorMessage: message.slice(0, TRUNCATE_ERROR),
       });
+
+      // Fan-out to subscribers. We re-fetch destination if needed —
+      // the catch block may have lost the closure depending on where
+      // we threw, so look it up by policy.
+      if (policy?.destinationId) {
+        const destForNotify = await repos.backupDestination
+          .findById(policy.destinationId)
+          .catch(() => null);
+        if (destForNotify) {
+          notification.emit({
+            organizationId: destForNotify.organizationId,
+            eventType: "backup_run.failed",
+            resourceType: "backup_run",
+            resourceId: runId,
+            payload: {
+              destinationName: destForNotify.name,
+              errorMessage: message.slice(0, 500),
+            },
+          });
+        }
+      }
     }
   }
 

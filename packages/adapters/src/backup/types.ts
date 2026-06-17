@@ -271,7 +271,7 @@ export type DestinationKind =
  *  the plaintext immediately. */
 export interface BackupDestinationRow {
   id: string;
-  userId: string;
+  organizationId: string;
   name: string;
   kind: DestinationKind;
   endpoint: string | null;

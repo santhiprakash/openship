@@ -1,6 +1,6 @@
 import { backgroundQueueAtom, isThreadInBackgroundQueueAtom } from '@/store/backgroundQueue';
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import type { IGetThreadResponse } from '../../server/src/lib/driver/types';
+import type { ThreadResponse as IGetThreadResponse } from '../../server/src/lib/imap-driver';
 import { useSearchValue } from '@/hooks/use-search-value';
 import { useTRPC } from '@/providers/query-provider';
 import useSearchLabels from './use-labels-search';

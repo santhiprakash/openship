@@ -3,16 +3,17 @@
  */
 
 import { repos } from "@repo/db";
-import { NotFoundError, ValidationError } from "@repo/core";
+import { ValidationError } from "@repo/core";
 import type { ResourceConfig } from "@repo/adapters";
 import { encodeResources, decodeResources } from "../../lib/resources";
+import { assertResourceInOrg } from "../../lib/controller-helpers";
 import type { TUpdateResourcesBody } from "./project.schema";
 
 // ─── Get resources ───────────────────────────────────────────────────────────
 
-export async function getResources(projectId: string, userId: string) {
+export async function getResources(projectId: string, organizationId: string) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   const production = p.resources as ResourceConfig | null;
   const build = p.buildResources as ResourceConfig | null;
@@ -21,9 +22,13 @@ export async function getResources(projectId: string, userId: string) {
 
 // ─── Update resources ────────────────────────────────────────────────────────
 
-export async function updateResources(projectId: string, userId: string, data: TUpdateResourcesBody) {
+export async function updateResources(
+  projectId: string,
+  data: TUpdateResourcesBody,
+  organizationId: string,
+) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   const update: Record<string, unknown> = {};
 
@@ -41,14 +46,18 @@ export async function updateResources(projectId: string, userId: string, data: T
   }
 
   await repos.project.update(projectId, update);
-  return getResources(projectId, userId);
+  return getResources(projectId, organizationId);
 }
 
 // ─── Sleep mode ──────────────────────────────────────────────────────────────
 
-export async function setSleepMode(projectId: string, userId: string, sleepMode: string) {
+export async function setSleepMode(
+  projectId: string,
+  sleepMode: string,
+  organizationId: string,
+) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   if (!["auto_sleep", "always_on"].includes(sleepMode)) {
     throw new ValidationError("Invalid sleep mode. Must be 'auto_sleep' or 'always_on'");
@@ -57,3 +66,5 @@ export async function setSleepMode(projectId: string, userId: string, sleepMode:
   await repos.project.update(projectId, { sleepMode });
   return { success: true, sleepMode };
 }
+
+

@@ -7,7 +7,8 @@ export type DomainSslAction = "provision" | "renew";
 
 interface DomainSslOptions {
   action: DomainSslAction;
-  userId?: string;
+  /** Restrict to a specific project (defense-in-depth; route layer
+   *  already verified access). */
   projectId?: string;
   includeWww?: boolean;
 }
@@ -19,10 +20,9 @@ async function resolveAuthorizedDomain(hostname: string, opts: DomainSslOptions)
   const project = await repos.project.findById(domainRecord.projectId);
   if (!project) throw new NotFoundError("Domain", hostname);
 
-  if (opts.userId && project.userId !== opts.userId) {
-    throw new NotFoundError("Domain", hostname);
-  }
-
+  // Access verification is enforced at the route boundary
+  // (requirePermission middleware checks org membership before the
+  // controller runs). opts.userId is forensic-only here.
   if (opts.projectId && domainRecord.projectId !== opts.projectId) {
     throw new NotFoundError("Domain", hostname);
   }

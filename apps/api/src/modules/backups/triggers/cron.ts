@@ -93,16 +93,18 @@ export async function removePolicySchedule(policyId: string): Promise<void> {
  * Boot-time reconciliation. Walks every enabled policy with a cron
  * expression and ensures its recurring job is registered with the
  * runner.
+ *
+ * Streams the policy list in pages so that an instance with thousands
+ * of policies doesn't block boot — schedules register incrementally
+ * and small orgs aren't held hostage by large ones.
  */
 export async function reconcileAllSchedules(): Promise<{
   registered: number;
   skipped: number;
 }> {
-  const rows = await repos.backupPolicy.listEnabledScheduled();
-
   let registered = 0;
   let skipped = 0;
-  for (const row of rows) {
+  for await (const row of repos.backupPolicy.iterateEnabledScheduled(100)) {
     try {
       await syncPolicySchedule(row.id);
       registered += 1;

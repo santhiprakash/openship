@@ -48,9 +48,9 @@ export function handleApiError(err: unknown, c: Context) {
 }
 
 /**
- * Legacy try/catch-around-next middleware. Kept for parity but DOES NOT
- * catch downstream thrown errors — see the note on `handleApiError`. The
- * real handler is `app.onError(handleApiError)` in app.ts.
+ * try/catch-around-next middleware. DOES NOT catch downstream thrown
+ * errors — see the note on `handleApiError`. The real handler is
+ * `app.onError(handleApiError)` in app.ts.
  */
 export async function errorHandler(c: Context, next: Next) {
   try {

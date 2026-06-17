@@ -1,5 +1,5 @@
-import { mkdirSync, existsSync } from "fs";
-import { resolve, dirname } from "path";
+import { mkdirSync, existsSync, readFileSync, unlinkSync } from "fs";
+import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PgliteDatabase } from "drizzle-orm/pglite";
@@ -95,12 +95,64 @@ async function createPgClient(url: string): Promise<Database> {
 
 // ─── PGlite (embedded PostgreSQL) ────────────────────────────────────────────
 
+/**
+ * Clear a stale postmaster.pid before opening pglite. PGlite WASM can
+ * abort during startup (migration crash, sigkill, OOM) without cleaning
+ * up its own lock file — and the next boot then refuses to open the
+ * data dir at all. The lock is process-local; if no live process is
+ * holding it, removing it is safe.
+ *
+ * We detect "stale" two ways:
+ *   1. The PID line in the file points at a process that no longer
+ *      exists (the normal Postgres convention).
+ *   2. The PID is pglite's sentinel value -42 — it never refers to a
+ *      real process and is always a previous crash that didn't unwind.
+ */
+function clearStalePgliteLock(dataDir: string): void {
+  const lockPath = join(dataDir, "postmaster.pid");
+  if (!existsSync(lockPath)) return;
+  let pid: number | null = null;
+  try {
+    const contents = readFileSync(lockPath, "utf8");
+    const firstLine = contents.split("\n", 1)[0]?.trim();
+    pid = firstLine ? Number.parseInt(firstLine, 10) : null;
+  } catch {
+    // Can't read — treat as stale and remove.
+  }
+
+  const isPgliteSentinel = pid === -42 || pid === 0;
+  let processAlive = false;
+  if (!isPgliteSentinel && pid && Number.isFinite(pid) && pid > 0) {
+    try {
+      process.kill(pid, 0); // signal 0 = liveness check
+      processAlive = true;
+    } catch {
+      processAlive = false;
+    }
+  }
+
+  if (!processAlive) {
+    try {
+      unlinkSync(lockPath);
+      console.warn(
+        `[db] removed stale pglite lock at ${lockPath} (pid=${pid ?? "unknown"})`,
+      );
+    } catch (err) {
+      console.warn(
+        `[db] failed to remove stale pglite lock at ${lockPath}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+}
+
 async function createPgliteClient(): Promise<Database> {
   _driver = "pglite";
   const dataDir = resolvePgliteDataDir();
   if (!existsSync(dataDir)) {
     mkdirSync(dataDir, { recursive: true });
   }
+  clearStalePgliteLock(dataDir);
 
   const { PGlite } = await import("@electric-sql/pglite");
   const { drizzle } = await import("drizzle-orm/pglite");

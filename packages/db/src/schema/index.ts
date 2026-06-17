@@ -1,4 +1,8 @@
 export { user, session, account, verification } from "./auth";
+export { organization, member, invitation } from "./organization";
+export { auditEvent } from "./audit-event";
+export { resourceGrant } from "./resource-grant";
+export { invitationPendingGrant } from "./invitation-pending-grant";
 export { gitInstallation } from "./github";
 export { projectApp, project, envVar } from "./project";
 export { deployment, buildSession } from "./deployment";
@@ -17,3 +21,9 @@ export {
   backupRun,
   backupRestore,
 } from "./backup";
+export {
+  notificationChannel,
+  notificationSubscription,
+  notificationDefault,
+  notificationDelivery,
+} from "./notification";

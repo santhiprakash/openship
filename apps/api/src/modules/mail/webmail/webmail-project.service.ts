@@ -27,6 +27,7 @@ import { resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { repos, type Project } from "@repo/db";
 import { sshManager } from "../../../lib/ssh-manager";
+import { assertResourceInOrg } from "../../../lib/controller-helpers";
 import {
   buildConfigSnapshot,
   createQueuedDeployment,
@@ -344,16 +345,14 @@ export async function cleanupWebmailInstall(input: {
  * step entirely (see runBuildPipeline at line 211 in build-pipeline.ts).
  */
 export async function ensureWebmailProject(
-  userId: string,
+  organizationId: string,
   mailServerId: string,
   releaseDistPath: string,
 ): Promise<{ projectId: string; appId: string; project: Project }> {
   const slug = `webmail-${mailServerId}`;
 
   // Fixed config - the user can't edit these on the project row, and we
-  // reconcile every deploy so old rows from earlier code paths (which
-  // used `bun install` + `bun run build` against `apps/email/` source)
-  // pick up the new dist-based shape.
+  // reconcile every deploy.
   //
   // Layout of the shipped dist (see apps/email/scripts/build-release.ts):
   //   <remoteDir>/
@@ -395,19 +394,34 @@ export async function ensureWebmailProject(
     localPath: releaseDistPath,
   };
 
-  let app = await repos.projectApp.findBySlug(userId, slug);
+  // Webmail slug is `webmail-<mailServerId>` which is deterministically
+  // unique per mail server, but the row must also be scoped to the active
+  // org so a different org redeploying webmail against its own mail server
+  // creates a fresh project row instead of finding a cross-org one.
+  //
+  // Look up by globally-unique slug, then assert org ownership. If the
+  // existing row belongs to a different org, treat it as "not found" and
+  // create a fresh one — assertResourceInOrg throws NotFoundError for
+  // out-of-org rows, which we catch and fall through to create.
+  let app = await repos.projectApp.findFirstBySlug(slug);
+  if (app && app.organizationId !== organizationId) {
+    app = undefined;
+  }
   if (!app) {
     app = await repos.projectApp.create({
-      userId,
+      organizationId,
       name: PROJECT_NAME,
       slug,
     });
   }
 
-  let project = await repos.project.findBySlug(userId, slug);
+  let project = await repos.project.findFirstBySlug(slug);
+  if (project && project.organizationId !== organizationId) {
+    project = undefined;
+  }
   if (!project) {
     project = await repos.project.create({
-      userId,
+      organizationId,
       appId: app.id,
       name: PROJECT_NAME,
       slug,
@@ -417,6 +431,9 @@ export async function ensureWebmailProject(
       ...WEBMAIL_CONFIG,
     });
   } else {
+    // Defensive: confirm the row really is in this org before we mutate it.
+    // findFirstBySlug is unscoped so we double-check here.
+    assertResourceInOrg(project, "Project", organizationId, project.id);
     // Reconcile every deploy: fixed commands aren't user-editable, so a
     // divergence means we shipped a change since this row was created.
     const diverged = (Object.keys(WEBMAIL_CONFIG) as Array<keyof typeof WEBMAIL_CONFIG>).some(
@@ -443,6 +460,7 @@ export type WebmailDeployTarget =
 
 export interface StartWebmailDeployInput {
   userId: string;
+  organizationId: string;
   mailServerId: string;
   hostname: string;
   internalPort?: number;
@@ -492,7 +510,7 @@ export async function startWebmailDeploy(
 
   // ── 2. Project row carries localPath (the dist) + fixed config ──────
   const { project, projectId } = await ensureWebmailProject(
-    input.userId,
+    input.organizationId,
     input.mailServerId,
     releaseDistPath,
   );
@@ -652,6 +670,7 @@ export async function startWebmailDeploy(
   const dep = await createQueuedDeployment({
     projectId,
     userId: input.userId,
+    organizationId: input.organizationId,
     branch: "main",
     environment: "production",
     framework: snapshot.framework,
@@ -665,3 +684,5 @@ export async function startWebmailDeploy(
 
   return { deploymentId: dep.id, projectId };
 }
+
+

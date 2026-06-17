@@ -4,8 +4,10 @@ import {
   timestamp,
   boolean,
   integer,
+  index,
 } from "drizzle-orm/pg-core";
 import { project } from "./project";
+import { service } from "./service";
 
 // ─── Domains ─────────────────────────────────────────────────────────────────
 
@@ -20,7 +22,7 @@ export const domain = pgTable("domain", {
     .notNull()
     .references(() => project.id, { onDelete: "cascade" }),
   /** Service ID for service-scoped domain routing (null = project-level / main service) */
-  serviceId: text("service_id"),
+  serviceId: text("service_id").references(() => service.id, { onDelete: "cascade" }),
 
   /** The custom domain (e.g. "app.example.com") */
   hostname: text("hostname").notNull().unique(),
@@ -52,4 +54,8 @@ export const domain = pgTable("domain", {
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (t) => [
+  // Routing hot path — every request that resolves a hostname hits this.
+  index("idx_domain_project").on(t.projectId),
+  index("idx_domain_project_hostname").on(t.projectId, t.hostname),
+]);

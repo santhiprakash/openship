@@ -26,6 +26,7 @@ import { env } from "../../config/env";
 import { TtlCache } from "../../lib/cache";
 import { systemDebug } from "../../lib/system-debug";
 import { getGitHubAuthMode } from "./github.auth";
+import { safeErrorMessage } from "@repo/core";
 
 // ─── Cache ───────────────────────────────────────────────────────────────────
 
@@ -100,7 +101,7 @@ export async function getLocalGhStatus(): Promise<
   } catch (err) {
     systemDebug(
       "gh-cli",
-      `/user verify threw: ${err instanceof Error ? err.message : String(err)}`,
+      `/user verify threw: ${safeErrorMessage(err)}`,
     );
     return { available: false };
   }

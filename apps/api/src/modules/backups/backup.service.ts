@@ -1,28 +1,30 @@
 /**
  * Backup service — thin CRUD over policies + runs.
  *
- * The orchestrator owns the FSM. This file owns the per-user
+ * The orchestrator owns the FSM. This file owns the per-org
  * ownership / authorization checks and the dashboard query shapes
- * (list runs by project, etc.).
+ * (list runs by project, etc.). userId is preserved as a forensic
+ * "actor" stamp on writes (createdBy etc.) but org membership is the
+ * authorization gate.
  */
 
 import { repos } from "@repo/db";
 import crypto from "node:crypto";
+import { assertResourceInOrg } from "../../lib/controller-helpers";
 import { syncPolicySchedule, removePolicySchedule, validateCronExpression } from "./triggers/cron";
 import { generateWebhookToken } from "./triggers/webhook";
 
 // ─── Policy CRUD ─────────────────────────────────────────────────────────────
 
-export async function listPoliciesByProject(projectId: string, userId: string) {
+export async function listPoliciesByProject(projectId: string, organizationId: string) {
   const project = await repos.project.findById(projectId);
-  if (!project || project.userId !== userId) {
-    throw new Error("Project not found");
-  }
+  assertResourceInOrg(project, "Project", organizationId, projectId);
   return repos.backupPolicy.listByProject(projectId);
 }
 
 export async function createPolicy(
   userId: string,
+  organizationId: string,
   data: {
     projectId: string;
     serviceId: string | null;
@@ -40,13 +42,9 @@ export async function createPolicy(
   },
 ) {
   const project = await repos.project.findById(data.projectId);
-  if (!project || project.userId !== userId) {
-    throw new Error("Project not found");
-  }
+  assertResourceInOrg(project, "Project", organizationId, data.projectId);
   const destination = await repos.backupDestination.findById(data.destinationId);
-  if (!destination || destination.userId !== userId) {
-    throw new Error("Destination not accessible");
-  }
+  assertResourceInOrg(destination, "Destination", organizationId, data.destinationId);
 
   // Cron validation upfront — otherwise saving an invalid cron silently
   // disables the schedule when the cron-trigger reconciler skips it.
@@ -110,19 +108,17 @@ export interface UpdatePolicyPatch {
 
 export async function updatePolicy(
   policyId: string,
-  userId: string,
+  organizationId: string,
   patch: UpdatePolicyPatch,
 ) {
   const policy = await repos.backupPolicy.findById(policyId);
   if (!policy) throw new Error("Policy not found");
   const project = await repos.project.findById(policy.projectId);
-  if (!project || project.userId !== userId) throw new Error("Policy not found");
+  assertResourceInOrg(project, "Policy", organizationId, policyId);
 
   if (patch.destinationId) {
     const destination = await repos.backupDestination.findById(patch.destinationId);
-    if (!destination || destination.userId !== userId) {
-      throw new Error("Destination not accessible");
-    }
+    assertResourceInOrg(destination, "Destination", organizationId, patch.destinationId);
   }
 
   if (patch.cronExpression) {
@@ -165,11 +161,11 @@ export async function updatePolicy(
   return updated;
 }
 
-export async function deletePolicy(policyId: string, userId: string) {
+export async function deletePolicy(policyId: string, organizationId: string) {
   const policy = await repos.backupPolicy.findById(policyId);
   if (!policy) return;
   const project = await repos.project.findById(policy.projectId);
-  if (!project || project.userId !== userId) throw new Error("Policy not found");
+  assertResourceInOrg(project, "Policy", organizationId, policyId);
   await repos.backupPolicy.softDelete(policyId);
   // Drop the BullMQ repeat schedule.
   await removePolicySchedule(policyId);
@@ -179,24 +175,20 @@ export async function deletePolicy(policyId: string, userId: string) {
 
 export async function listRunsForProject(
   projectId: string,
-  userId: string,
+  organizationId: string,
   opts?: { limit?: number; serviceId?: string },
 ) {
   const project = await repos.project.findById(projectId);
-  if (!project || project.userId !== userId) {
-    throw new Error("Project not found");
-  }
-  return repos.backupRun.listByUser(userId, {
+  assertResourceInOrg(project, "Project", organizationId, projectId);
+  return repos.backupRun.listByOrganization(organizationId, {
     limit: opts?.limit,
     projectId,
     serviceId: opts?.serviceId,
   });
 }
 
-export async function getRun(runId: string, userId: string) {
+export async function getRun(runId: string, organizationId: string) {
   const run = await repos.backupRun.findById(runId);
-  if (!run || run.userId !== userId) {
-    throw new Error("Run not found");
-  }
+  assertResourceInOrg(run, "Run", organizationId, runId);
   return run;
 }

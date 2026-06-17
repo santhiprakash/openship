@@ -1,4 +1,4 @@
-import { DeployError } from "@repo/core";
+import { DeployError, safeErrorMessage } from "@repo/core";
 import { posix as pathPosix } from "node:path";
 
 import type { RouteConfig } from "../types";
@@ -85,7 +85,24 @@ export async function registerResolvedRoutes(
 
     if (domain.provisionSsl && ssl) {
       logger.log(`Checking SSL for ${domain.hostname}...\n`);
-      await ssl.provisionCert(domain.hostname);
+      // SSL is best-effort. The HTTP route is already written to disk
+      // and reachable on port 80, which is what serves the ACME HTTP-01
+      // challenge — so even when certbot fails right now (rate limit,
+      // upstream Let's Encrypt outage, an unverified-custom-domain that
+      // somehow slipped past the verified gate in buildProjectRouteDomains)
+      // the user can still hit the box. The cert gets retried from the
+      // Domains tab (POST /domains/:id/verify), from /renew-all, or on
+      // the next deploy. Failing the whole deploy because of one cert is
+      // a deeply hostile UX — the box is up, treat SSL as a follow-up.
+      try {
+        await ssl.provisionCert(domain.hostname);
+      } catch (err) {
+        const message = safeErrorMessage(err);
+        logger.log(
+          `SSL provisioning failed for ${domain.hostname} (route is up on HTTP, retry from the Domains tab): ${message}\n`,
+          "warn",
+        );
+      }
     }
   }
 }

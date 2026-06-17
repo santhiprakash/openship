@@ -3,6 +3,7 @@ import type { Oblien, WorkspaceHandle } from "oblien";
 import { DEFAULT_RESOURCE_CONFIG, type LogCallback, type ResourceConfig } from "../../types";
 import type { WorkspaceRuntimePlan } from "../../dockerfile";
 import { sq, type BuildLogger } from "../build-pipeline";
+import { safeErrorMessage } from "@repo/core";
 import type {
   MultiServiceDeployConfig,
   MultiServiceDeployResult,
@@ -84,7 +85,7 @@ function exposeTarget(port: number, serviceName: string, slug?: string, domain =
 }
 
 function errorMessage(err: unknown) {
-  return err instanceof Error ? err.message : String(err);
+  return safeErrorMessage(err);
 }
 
 async function withCloudOperationTimeout<T>(
@@ -342,7 +343,7 @@ export class CloudComposeSupport {
         },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       onLog({
         timestamp: now(),
         message: `Failed to create cloud service "${config.serviceName}" from image "${config.image}": ${message}\n`,

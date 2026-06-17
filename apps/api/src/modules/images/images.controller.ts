@@ -3,16 +3,16 @@
  */
 
 import type { Context } from "hono";
-import { getUserId } from "../../lib/controller-helpers";
+import { getActiveOrganizationId } from "../../lib/controller-helpers";
 import * as imagesService from "./images.service";
 
 export async function list(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const search = c.req.query("search")?.trim() || undefined;
   const category = c.req.query("category")?.trim() || undefined;
 
   try {
-    const images = await imagesService.listImages(userId, { search, category });
+    const images = await imagesService.listImages(organizationId, { search, category });
     return c.json({ success: true, images });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to list images";

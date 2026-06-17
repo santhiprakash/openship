@@ -17,7 +17,7 @@ export { deployComposeServices, type ComposeDeployResult } from "./deploy.servic
 
 // Project service-shape helpers
 export {
-  isLegacyComposeProject,
+  isMultiServiceProject,
   listProjectComposeServices,
   listProjectMonorepoApps,
   projectServicesToDeployableServices,

@@ -23,6 +23,25 @@ export function createGitInstallationRepo(db: Database) {
       });
     },
 
+    /**
+     * Find installation by organization + owner.
+     *
+     * Multi-user/org scoping path: a single GitHub App installation may be
+     * accessed by any member of the owning org. Resolution by org is the
+     * preferred path for multi-user — `findByOwner(userId, ...)` ties the
+     * installation to whichever member happened to install it, which breaks
+     * the moment that user leaves the org.
+     */
+    async findByOrgAndOwner(organizationId: string, owner: string) {
+      return db.query.gitInstallation.findFirst({
+        where: and(
+          eq(gitInstallation.organizationId, organizationId),
+          eq(gitInstallation.provider, "github"),
+          eq(gitInstallation.owner, owner.toLowerCase()),
+        ),
+      });
+    },
+
     /** Find all installations for a user */
     async listByUser(userId: string) {
       return db.query.gitInstallation.findMany({
@@ -33,25 +52,38 @@ export function createGitInstallationRepo(db: Database) {
       });
     },
 
-    /** Upsert installation (create or update installation_id) */
+    /**
+     * Atomic upsert keyed on (provider, owner, userId). Concurrent
+     * webhook redeliveries converge on a single row via the unique
+     * index. Updates installationId + ownership metadata on conflict
+     * so a re-install (new installationId for the same GitHub account)
+     * refreshes the row in place.
+     */
     async upsert(data: Omit<NewGitInstallation, "id">) {
-      const existing = await this.findByOwner(data.userId, data.owner);
-
-      if (existing) {
-        await db
-          .update(gitInstallation)
-          .set({
-            installationId: data.installationId,
-            updatedAt: new Date(),
-          })
-          .where(eq(gitInstallation.id, existing.id));
-        return { ...existing, installationId: data.installationId };
-      }
-
       const id = randomUUID();
       const row = { id, ...data, owner: data.owner.toLowerCase() };
-      await db.insert(gitInstallation).values(row);
-      return { ...row, createdAt: new Date(), updatedAt: new Date() };
+      const now = new Date();
+      const [returned] = await db
+        .insert(gitInstallation)
+        .values(row)
+        .onConflictDoUpdate({
+          target: [
+            gitInstallation.provider,
+            gitInstallation.owner,
+            gitInstallation.userId,
+          ],
+          set: {
+            installationId: data.installationId,
+            organizationId: data.organizationId,
+            ownerType: data.ownerType,
+            providerUserId: data.providerUserId ?? null,
+            providerOwnerId: data.providerOwnerId ?? null,
+            isOrg: data.isOrg ?? false,
+            updatedAt: now,
+          },
+        })
+        .returning();
+      return returned ?? { ...row, createdAt: now, updatedAt: now };
     },
 
     /** Replace all GitHub App installations for a user with a fresh snapshot */

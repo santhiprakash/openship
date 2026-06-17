@@ -8,27 +8,37 @@
  * in Electron's ConfigStore - they never touch this API.
  */
 import { Hono } from "hono";
-import { authMiddleware } from "../../middleware/auth";
+import { secureRouter } from "../../lib/secure-router";
 import * as ctrl from "./settings.controller";
 
-export const settingsRoutes = new Hono();
+const r = secureRouter(new Hono(), {
+  module: "settings",
+  basePath: "/api/settings",
+});
 
-settingsRoutes.use("*", authMiddleware);
 
-/** GET  /            - get current user's workspace settings */
-settingsRoutes.get("/", ctrl.get);
+// `settings` is an org-singleton resource (declared in
+// ORG_SINGLETON_RESOURCES). The middleware automatically passes
+// resourceId="*" and resolves the org context from the X-Organization-Id
+// header or session default — no per-route id mapping needed.
+
+/** GET  /            - get current org's workspace settings */
+r.get("/", { tag: "settings:read" }, ctrl.get);
 
 /** PUT  /            - create or update workspace settings */
-settingsRoutes.put("/", ctrl.upsert);
+r.put("/", { tag: "settings:write" }, ctrl.upsert);
 
 /** PATCH /build-mode - update only build mode preference */
-settingsRoutes.patch("/build-mode", ctrl.updateBuildMode);
+r.patch("/build-mode", { tag: "settings:write" }, ctrl.updateBuildMode);
 
 /** PATCH /deploy-defaults - set/clear the default deploy target + server */
-settingsRoutes.patch("/deploy-defaults", ctrl.updateDeployDefaults);
+r.patch("/deploy-defaults", { tag: "settings:write" }, ctrl.updateDeployDefaults);
 
 /** PATCH /clone-credentials - set/clear the user-global git clone token */
-settingsRoutes.patch("/clone-credentials", ctrl.updateCloneCredentials);
+r.patch("/clone-credentials", { tag: "settings:write" }, ctrl.updateCloneCredentials);
 
 /** PATCH /clone-strategy-preference - save the first-time deploy nudge choice */
-settingsRoutes.patch("/clone-strategy-preference", ctrl.updateCloneStrategyPreference);
+r.patch("/clone-strategy-preference", { tag: "settings:write" }, ctrl.updateCloneStrategyPreference);
+
+export const settingsRoutes = r.hono;
+

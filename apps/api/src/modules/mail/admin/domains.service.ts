@@ -15,6 +15,7 @@ import { sshManager } from "../../../lib/ssh-manager";
 import { readState } from "../mail-state";
 import { provisionDomainDkim, genSecret } from "../mail.service";
 import { execute, queryOne, queryRows, q, qInt } from "./psql-runner";
+import { safeErrorMessage } from "@repo/core";
 import {
   buildDomainDnsRecords,
   recordDomainDns,
@@ -169,7 +170,7 @@ export async function createDomain(
     });
   } catch (err) {
     console.warn(
-      `createDomain: postmaster mailbox creation failed for ${domain}: ${err instanceof Error ? err.message : String(err)}`,
+      `createDomain: postmaster mailbox creation failed for ${domain}: ${safeErrorMessage(err)}`,
     );
     postmasterPassword = undefined;
   }
@@ -208,7 +209,7 @@ export async function createDomain(
           return {
             installDomain,
             dkimValue: undefined,
-            dkimError: err instanceof Error ? err.message : String(err),
+            dkimError: safeErrorMessage(err),
             ipv4,
             ipv6,
           };
@@ -231,7 +232,7 @@ export async function createDomain(
       }
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = safeErrorMessage(err);
     console.warn(
       `createDomain: DNS record persistence failed for ${domain}: ${message}`,
     );

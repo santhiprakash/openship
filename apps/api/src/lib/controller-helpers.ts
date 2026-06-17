@@ -24,6 +24,72 @@ export function getUserId(c: Context): string {
   return user.id;
 }
 
+/**
+ * Extract the active organization ID from Hono context.
+ * Set by activeOrganizationMiddleware — every authed route should mount
+ * that middleware after authMiddleware.
+ */
+export function getActiveOrganizationId(c: Context): string {
+  const orgId = c.get("activeOrganizationId");
+  if (!orgId || typeof orgId !== "string") {
+    throw new Error("No active organization in context");
+  }
+  return orgId;
+}
+
+/** Combined getter — both userId (actor) and activeOrgId (scoping). */
+export function getActorContext(c: Context): { userId: string; organizationId: string } {
+  return {
+    userId: getUserId(c),
+    organizationId: getActiveOrganizationId(c),
+  };
+}
+
+/**
+ * Assert a resource belongs to the caller's active organization. Throws a
+ * 404-shaped error if it doesn't, to avoid leaking the resource's existence
+ * across orgs (404, not 403 — IDOR-safe).
+ *
+ * Use on every per-resource detail/update/delete endpoint:
+ *   const project = await repos.project.findById(id);
+ *   assertResourceInOrg(project, "Project", organizationId);
+ *
+ * Resources with `organizationId === null` are rejected (fail-closed).
+ * Use `requireResourceInOrg` for an explicit strict variant.
+ */
+import { NotFoundError } from "@repo/core";
+
+export function assertResourceInOrg<T extends { organizationId?: string | null }>(
+  resource: T | null | undefined,
+  resourceLabel: string,
+  organizationId: string,
+  resourceId?: string,
+): asserts resource is T {
+  if (!resource) {
+    throw new NotFoundError(resourceLabel, resourceId);
+  }
+  // 404-shape rather than 403 — never confirm existence of out-of-org
+  // resources. NULL org_id is treated as "not in any org" and fails closed.
+  if (resource.organizationId !== organizationId) {
+    throw new NotFoundError(resourceLabel, resourceId);
+  }
+}
+
+/**
+ * Stricter version: rejects resources with NULL organizationId too.
+ * Use this in NEW code paths where every resource should be org-stamped.
+ */
+export function requireResourceInOrg<T extends { organizationId?: string | null }>(
+  resource: T | null | undefined,
+  resourceLabel: string,
+  organizationId: string,
+  resourceId?: string,
+): asserts resource is T {
+  if (!resource || resource.organizationId !== organizationId) {
+    throw new NotFoundError(resourceLabel, resourceId);
+  }
+}
+
 /** Extract and validate a required route parameter */
 export function param(c: Context, name: string): string {
   const val = c.req.param(name);
@@ -92,17 +158,14 @@ export function platform(): Platform {
 
 // ─── Project access ──────────────────────────────────────────────────────────
 
-import { repos, type Project } from "@repo/db";
 
-/**
- * Verify the project exists and belongs to the user.
- * Throws a descriptive string ("project-not-found") on failure - callers
- * catch and map to the appropriate HTTP status.
- */
-export async function assertProjectAccess(projectId: string, userId: string): Promise<Project> {
-  const project = await repos.project.findById(projectId);
-  if (!project || project.userId !== userId) {
-    throw new Error("project-not-found");
-  }
-  return project;
-}
+// Access-control model:
+//   - Route-level `requirePermission` middleware loads the resource and
+//     verifies org membership before the controller runs.
+//   - For list/create endpoints, the org is resolved from the
+//     X-Organization-Id header (or the session default cookie).
+//   - Service layers receive `organizationId` directly from controllers
+//     and use `assertResourceInOrg(...)` for defense-in-depth.
+//
+// For a user-scoped access check, use `permission.assert(c, {...})` or
+// `assertResourceInOrg(resource, ...)`.

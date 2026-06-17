@@ -1,24 +1,8 @@
 /**
- * Extract a safe string description from an unknown caught value.
+ * Re-export of `safeErrorMessage` from @repo/core.
  *
- * Why: ssh2, the AWS SDK, and other libraries attach credentials and
- * full request/response objects to their Error subclasses. Passing
- * those Error objects to console.error logs the entire object graph —
- * including private keys, signed headers, and bucket configs — into
- * log aggregators (Datadog, Loki, sometimes shared with vendors).
- *
- * `String(err)` / `err.message` strips the structured fields and keeps
- * only what's safe to surface: the human-readable message string.
- * Non-Error values fall through to `String()` so we never throw inside
- * a catch block.
+ * Kept as a thin re-export so the many `import { safeErrorMessage }
+ * from "../lib/safe-error"` call sites across the api stay working
+ * after the canonical home moved to @repo/core/errors.ts.
  */
-export function safeErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    // err.message strips associated metadata that SDKs attach to the
-    // Error object (e.g. ssh2's `level`, AWS's `$metadata`, request
-    // bodies). Bound to 2000 chars so a deeply nested message can't
-    // bloat the log entry.
-    return err.message.slice(0, 2000);
-  }
-  return String(err).slice(0, 2000);
-}
+export { safeErrorMessage } from "@repo/core";

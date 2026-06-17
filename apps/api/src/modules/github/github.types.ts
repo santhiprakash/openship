@@ -163,7 +163,7 @@ export interface MappedRepository {
    *
    * Used by the dashboard repo picker to render a "Local builds only"
    * chip + install-App-on-this-owner prompt where appropriate.
-   * Undefined for legacy code paths and SaaS mode (App is the only source).
+   * Undefined in SaaS mode (App is the only source).
    */
   source?: "app" | "cli" | "both";
 }
@@ -173,6 +173,20 @@ export interface MappedAccount {
   id: number;
   avatar_url: string;
   type: string;
+  /**
+   * Where this account came from. Critical for telling the dashboard which
+   * accounts represent real GitHub App installations vs gh CLI org
+   * memberships — they look identical otherwise, and the settings card
+   * MUST NOT claim the App is connected to a CLI-only org. Without an
+   * explicit source, callers must assume "cli" and gate any App claims
+   * behind state.sources.openshipApp.connected.
+   *
+   *  - "app" → real GitHub App installation (deployable anywhere via
+   *            short-lived install tokens)
+   *  - "cli" → gh CLI org membership (local-only via clone-auth.ts; the
+   *            App may not be installed on this owner at all)
+   */
+  source?: "app" | "cli";
 }
 
 export interface RepositoryDetail {

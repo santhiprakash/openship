@@ -66,6 +66,7 @@ import type {
 import { BuildLogger, parseLogLevel, sq } from "./build-pipeline";
 import { createDockerBuildContext } from "./docker-build-context";
 import { transferLocalDirectory } from "./transfer";
+import { safeErrorMessage } from "@repo/core";
 import {
   type DockerConnectionOptions,
   type DockerTransport,
@@ -421,7 +422,7 @@ export class DockerRuntime implements RuntimeAdapter {
   }
 
   private formatDockerConnectivityError(error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = safeErrorMessage(error);
 
     if (/^Cannot reach Docker daemon:/i.test(message)) {
       return message;
@@ -737,7 +738,7 @@ export class DockerRuntime implements RuntimeAdapter {
       const durationMs = Date.now() - startTime;
       return { sessionId: config.sessionId, status: "deploying", imageRef: tag, durationMs };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = safeErrorMessage(err);
       log.step("build", "failed", `Docker build failed: ${msg}`);
       return { sessionId: config.sessionId, status: "failed", durationMs: Date.now() - startTime, errorMessage: `Docker build failed: ${msg}` };
     }

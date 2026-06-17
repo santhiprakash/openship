@@ -2,12 +2,13 @@
  * Project CRUD service - create, read, update, list, ensure.
  */
 
-import { repos, type NewProject, type Project } from "@repo/db";
+import { repos, type Deployment, type NewProject, type Project, type Server } from "@repo/db";
 import { slugify, NotFoundError, ConflictError, ValidationError, SYSTEM } from "@repo/core";
 import type { ResourceConfig } from "@repo/adapters";
 import { encodeResources } from "../../lib/resources";
 import { normalizeRollbackWindow } from "../../lib/release-retention";
 import { env } from "../../config";
+import { assertResourceInOrg } from "../../lib/controller-helpers";
 import { getRepository, listBranches as listGitHubBranches } from "../github/github.service";
 import {
   deriveEnvironmentPublicEndpoints,
@@ -53,6 +54,60 @@ export async function enrichProject(p: Project) {
   };
 }
 
+/**
+ * Batch variant of enrichProject — pre-fetches every active deployment
+ * + every referenced server in two SQL round trips for N projects,
+ * then enriches each project from the lookup maps. Used by the home
+ * page (getHome) where the per-project query fan-out is the hottest
+ * source of N+1 latency.
+ *
+ * Per-project query count: 0 (data is pre-fetched).
+ * Total SQL cost: 1 (deployment.findManyById) + 1 (server.getMany).
+ */
+export async function enrichProjectsBatch(
+  projects: Project[],
+): Promise<Array<Awaited<ReturnType<typeof enrichProject>>>> {
+  const activeDeploymentIds = projects
+    .map((p) => p.activeDeploymentId)
+    .filter((id): id is string => Boolean(id));
+  const deployments = await repos.deployment
+    .findManyById(activeDeploymentIds)
+    .catch(() => new Map<string, Deployment>());
+
+  const serverIds = new Set<string>();
+  for (const d of deployments.values()) {
+    const meta = d.meta as { serverId?: string } | null;
+    if (meta?.serverId) serverIds.add(meta.serverId);
+  }
+  const servers = await repos.server
+    .getMany(Array.from(serverIds))
+    .catch(() => new Map<string, Server>());
+
+  return projects.map((p) => {
+    const production = p.resources as ResourceConfig | null;
+    const build = p.buildResources as ResourceConfig | null;
+
+    let deployTarget: string | null = null;
+    let serverName: string | null = null;
+    if (p.activeDeploymentId) {
+      const dep = deployments.get(p.activeDeploymentId);
+      const meta = dep?.meta as { deployTarget?: string; serverId?: string } | null;
+      deployTarget = meta?.deployTarget ?? null;
+      if (meta?.serverId) {
+        const server = servers.get(meta.serverId);
+        serverName = server?.name || server?.sshHost || null;
+      }
+    }
+
+    return {
+      ...p,
+      deployTarget,
+      serverName,
+      resources: encodeResources(production, build, p.sleepMode ?? "auto_sleep", p.port ?? 3000),
+    };
+  });
+}
+
 function projectGitUrl(owner?: string | null, repo?: string | null) {
   return owner && repo ? `https://github.com/${owner}/${repo}.git` : undefined;
 }
@@ -85,14 +140,18 @@ function environmentNameFromSlug(slug: string) {
   );
 }
 
-async function ensureProjectApp(userId: string, data: TCreateProjectBody, slug: string) {
-  let app = await repos.projectApp.findBySlug(userId, slug);
+async function ensureProjectApp(
+  data: TCreateProjectBody,
+  slug: string,
+  organizationId: string,
+) {
+  let app = await repos.projectApp.findBySlugInOrg(organizationId, slug);
   if (app) return { app, created: false };
 
   const source = resolveProjectSource(data);
 
   app = await repos.projectApp.create({
-    userId,
+    organizationId,
     name: data.name,
     slug,
     gitProvider: source.gitProvider,
@@ -106,16 +165,16 @@ async function ensureProjectApp(userId: string, data: TCreateProjectBody, slug: 
 }
 
 function buildProductionProjectInput(
-  userId: string,
   appId: string,
   data: TCreateProjectBody,
   slug: string,
   routing: ProjectRouteState,
+  organizationId: string,
 ): Omit<NewProject, "id"> {
   const source = resolveProjectSource(data);
 
   return {
-    userId,
+    organizationId,
     appId,
     name: data.name,
     slug,
@@ -182,8 +241,12 @@ async function persistMonorepoApps(
   );
 }
 
-async function createProductionProject(userId: string, data: TCreateProjectBody, slug: string) {
-  const { app, created: appCreated } = await ensureProjectApp(userId, data, slug);
+async function createProductionProject(
+  data: TCreateProjectBody,
+  slug: string,
+  organizationId: string,
+) {
+  const { app, created: appCreated } = await ensureProjectApp(data, slug, organizationId);
   const routing = deriveNextProjectRouteState({
     slug,
   }, {
@@ -193,7 +256,7 @@ async function createProductionProject(userId: string, data: TCreateProjectBody,
 
   try {
     const created = await repos.project.create(
-      buildProductionProjectInput(userId, app.id, data, slug, routing),
+      buildProductionProjectInput(app.id, data, slug, routing, organizationId),
     );
     await persistProjectRouteState(created.id, routing.publicEndpoints);
     await persistMonorepoApps(created.id, data);
@@ -206,11 +269,11 @@ async function createProductionProject(userId: string, data: TCreateProjectBody,
   }
 }
 
-async function uniqueProjectSlug(userId: string, baseSlug: string) {
+async function uniqueProjectSlug(organizationId: string, baseSlug: string) {
   let slug = baseSlug;
   let suffix = 2;
 
-  while (await repos.project.findBySlug(userId, slug)) {
+  while (await repos.project.findBySlugInOrg(organizationId, slug)) {
     slug = `${baseSlug}-${suffix}`;
     suffix += 1;
   }
@@ -254,42 +317,56 @@ function selectProjectForBranch(rows: Project[], branch?: string | null): Projec
 }
 
 async function findProjectByAppSlug(
-  userId: string,
+  organizationId: string,
   slug: string,
   branch?: string | null,
 ): Promise<Project | null> {
-  const app = await repos.projectApp.findBySlug(userId, slug);
+  const app = await repos.projectApp.findBySlugInOrg(organizationId, slug);
   if (app) {
     return selectProjectForBranch(await repos.project.listByApp(app.id), branch);
   }
 
-  return (await repos.project.findBySlug(userId, slug)) ?? null;
+  return (await repos.project.findBySlugInOrg(organizationId, slug)) ?? null;
 }
 
 // ─── Ensure project (create or return existing) ─────────────────────────────
 
-export async function ensureProject(userId: string, data: EnsureProjectBody) {
+export async function ensureProject(
+  data: EnsureProjectBody,
+  organizationId: string,
+) {
   const nameSlug = slugify(data.name);
   const desiredSlug = data.slug || nameSlug;
 
   let project: Project | null = null;
   if (data.projectId) {
     project = (await repos.project.findById(data.projectId)) ?? null;
-    if (!project || project.userId !== userId) throw new NotFoundError("Project", data.projectId);
+    assertResourceInOrg(project, "Project", organizationId, data.projectId);
   }
 
   if (!project) {
-    project = await findProjectByAppSlug(userId, nameSlug, data.gitBranch);
+    project = await findProjectByAppSlug(organizationId, nameSlug, data.gitBranch);
   }
   if (!project && desiredSlug !== nameSlug) {
-    project = await findProjectByAppSlug(userId, desiredSlug, data.gitBranch);
+    project = await findProjectByAppSlug(organizationId, desiredSlug, data.gitBranch);
   }
   let created = false;
 
   if (!project) {
-    project = await createProductionProject(userId, data, desiredSlug);
+    project = await createProductionProject(
+      data,
+      desiredSlug,
+      organizationId,
+    );
     created = true;
   } else {
+    // Defensive: if we matched an existing project but its org_id doesn't
+    // match the caller's active org, refuse. The auto-switch middleware
+    // should have made these match before we get here, but the bare
+    // ensure path can be called from edge code paths (CLI, deploy hooks).
+    if (project.organizationId !== organizationId) {
+      throw new NotFoundError("Project", data.projectId ?? desiredSlug);
+    }
     const update: Record<string, unknown> = {};
     if (data.framework !== undefined) update.framework = data.framework;
     if (data.packageManager !== undefined) update.packageManager = data.packageManager;
@@ -313,12 +390,12 @@ export async function ensureProject(userId: string, data: EnsureProjectBody) {
       update.workspaceInstallCommand = data.monorepoWorkspace.installCommand ?? null;
     }
     if (data.slug !== undefined && data.slug !== project.slug) {
-      const existingProject = await repos.project.findBySlug(userId, data.slug);
+      const existingProject = await repos.project.findBySlugInOrg(organizationId, data.slug);
       if (existingProject && existingProject.id !== project.id) {
         throw new ConflictError(`Project slug "${data.slug}" already exists`);
       }
 
-      const existingApp = await repos.projectApp.findBySlug(userId, data.slug);
+      const existingApp = await repos.projectApp.findBySlugInOrg(organizationId, data.slug);
       if (existingApp && existingApp.id !== project.appId) {
         throw new ConflictError(`Project slug "${data.slug}" already exists`);
       }
@@ -377,7 +454,7 @@ export async function ensureProject(userId: string, data: EnsureProjectBody) {
 // ─── List projects ───────────────────────────────────────────────────────────
 
 /**
- * List the user's projects, one display row per project app.
+ * List projects in scope, one display row per project app.
  *
  * Drives off `project` directly (not `project_app`) so the list and the detail
  * endpoint (`getProject`) agree on what's visible. The previous implementation
@@ -386,14 +463,19 @@ export async function ensureProject(userId: string, data: EnsureProjectBody) {
  * endpoint happily returned, leaving the project reachable by URL but absent
  * from every listing.
  */
-export async function listProjects(userId: string, opts?: { page?: number; perPage?: number }) {
+export async function listProjects(
+  organizationId: string,
+  opts?: { page?: number; perPage?: number },
+) {
   const page = opts?.page ?? 1;
   const perPage = opts?.perPage ?? 20;
 
-  // Fetch all alive projects for the user. The per-user cap is small enough
-  // (SYSTEM.PROJECTS.MAX_PER_USER) that loading them in one query is fine; we
-  // group/paginate in memory.
-  const { rows: projects } = await repos.project.listByUser(userId, { page: 1, perPage: 1000 });
+  // organizationId is required across the codebase — the route-level
+  // requirePermission middleware ensures it's set before the controller runs.
+  const { rows: projects } = await repos.project.listByOrganization(
+    organizationId,
+    { page: 1, perPage: 1000 },
+  );
 
   const byApp = new Map<string, Project[]>();
   for (const p of projects) {
@@ -415,40 +497,50 @@ export async function listProjects(userId: string, opts?: { page?: number; perPa
 
 // ─── Get single project ──────────────────────────────────────────────────────
 
-export async function getProject(projectId: string, userId: string) {
+export async function getProject(projectId: string, organizationId: string) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
   return enrichProject(p);
 }
 
 // ─── Create project ──────────────────────────────────────────────────────────
 
-export async function createProject(userId: string, data: TCreateProjectBody) {
+export async function createProject(
+  data: TCreateProjectBody,
+  ctx: { organizationId: string },
+) {
   const slug = slugify(data.name);
 
-  const { total } = await repos.projectApp.listByUser(userId, { page: 1, perPage: 1 });
+  const { total } = await repos.projectApp.listByOrganization(ctx.organizationId, {
+    page: 1,
+    perPage: 1,
+  });
   if (total >= SYSTEM.PROJECTS.MAX_PER_USER) {
     throw new ValidationError(`Project limit reached (${SYSTEM.PROJECTS.MAX_PER_USER})`);
   }
 
-  const existing = await findProjectByAppSlug(userId, slug);
+  const existing = await findProjectByAppSlug(ctx.organizationId, slug);
   if (existing) throw new ConflictError(`Project "${data.name}" already exists`);
 
-  const p = await createProductionProject(userId, data, slug);
+  const p = await createProductionProject(data, slug, ctx.organizationId);
 
   return enrichProject(p);
 }
 
 // ─── Update project ──────────────────────────────────────────────────────────
 
-export async function updateProject(projectId: string, userId: string, data: TUpdateProjectBody) {
+export async function updateProject(
+  projectId: string,
+  data: TUpdateProjectBody,
+  organizationId: string,
+) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   const update: Record<string, unknown> = { ...data };
   if (data.name && data.name !== p.name) {
     const newSlug = slugify(data.name);
-    const existing = await repos.project.findBySlug(userId, newSlug);
+    const existing = await repos.project.findBySlugInOrg(organizationId, newSlug);
     if (existing && existing.id !== projectId) {
       throw new ConflictError(`Project "${data.name}" already exists`);
     }
@@ -504,9 +596,12 @@ export async function updateProject(projectId: string, userId: string, data: TUp
 
 // ─── Project environments ───────────────────────────────────────────────────
 
-export async function listProjectEnvironments(projectId: string, userId: string) {
+export async function listProjectEnvironments(
+  projectId: string,
+  organizationId: string,
+) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   const rows = await repos.project.listByApp(p.appId);
   const enriched = await Promise.all(
@@ -530,9 +625,10 @@ export async function createProjectEnvironment(
   projectId: string,
   userId: string,
   data: TCreateProjectEnvironmentBody,
+  organizationId: string,
 ) {
   const base = await repos.project.findById(projectId);
-  if (!base || base.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(base, "Project", organizationId, projectId);
 
   const environmentSlug = normalizeEnvironmentSlug(
     data.environmentSlug ?? data.environmentName,
@@ -551,12 +647,14 @@ export async function createProjectEnvironment(
 
   const app = await repos.projectApp.findById(base.appId);
   const projectSlug = await uniqueProjectSlug(
-    userId,
+    organizationId,
     environmentSlug === "production" ? base.slug : `${app?.slug ?? base.slug}-${environmentSlug}`,
   );
 
   let productionBranch = base.gitBranch ?? undefined;
   if (!productionBranch && environmentType === "production" && base.gitOwner && base.gitRepo) {
+    // userId here is the actor who triggered the action — used to authorize
+    // the GitHub call against their installation token.
     const repository = await getRepository(userId, base.gitOwner, base.gitRepo);
     productionBranch = repository.default_branch;
   }
@@ -574,7 +672,7 @@ export async function createProjectEnvironment(
   }
 
   const created = await repos.project.create({
-    userId,
+    organizationId,
     appId: base.appId,
     name: app?.name ?? base.name,
     slug: projectSlug,
@@ -622,9 +720,9 @@ export async function createProjectEnvironment(
 
 // ─── Git info ────────────────────────────────────────────────────────────────
 
-export async function getGitInfo(projectId: string, userId: string) {
+export async function getGitInfo(projectId: string, organizationId: string) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   // Resolve deploy target from active deployment meta
   let deployTarget: string | null = null;
@@ -648,9 +746,13 @@ export async function getGitInfo(projectId: string, userId: string) {
   };
 }
 
-export async function setBranch(projectId: string, userId: string, branch: string) {
+export async function setBranch(
+  projectId: string,
+  branch: string,
+  organizationId: string,
+) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   await repos.project.update(projectId, { gitBranch: branch });
   return { success: true, branch };
@@ -660,11 +762,11 @@ export async function setBranch(projectId: string, userId: string, branch: strin
 
 export async function updateOptions(
   projectId: string,
-  userId: string,
   options: Record<string, unknown>,
+  organizationId: string,
 ) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   const update: Record<string, unknown> = {};
   if (options.buildCommand !== undefined) update.buildCommand = options.buildCommand;
@@ -703,20 +805,23 @@ export async function updateOptions(
 
 export async function listProjectDeployments(
   projectId: string,
-  userId: string,
+  organizationId: string,
   opts?: { page?: number; perPage?: number; environment?: string },
 ) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   return repos.deployment.listByProject(projectId, opts);
 }
 
 // ─── Deployment session ──────────────────────────────────────────────────────
 
-export async function getLatestDeploymentSession(projectId: string, userId: string) {
+export async function getLatestDeploymentSession(
+  projectId: string,
+  organizationId: string,
+) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   if (!p.activeDeploymentId) {
     return { session: null };
@@ -734,3 +839,5 @@ export async function getLatestDeploymentSession(projectId: string, userId: stri
       : null,
   };
 }
+
+

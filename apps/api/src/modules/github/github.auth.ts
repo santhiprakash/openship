@@ -20,7 +20,7 @@ import { repos } from "@repo/db";
 import { APIError } from "better-auth/api";
 import { env } from "../../config/env";
 import { auth } from "../../lib/auth";
-import { TtlCache } from "../../lib/cache";
+import { createCacheStore, type CacheStore } from "../../lib/cache-store";
 import { getLocalGhStatus, getLocalGhToken } from "./github.local-auth";
 import type {
   GitHubConnectionState,
@@ -30,10 +30,65 @@ import type {
 
 // ─── Token cache ─────────────────────────────────────────────────────────────
 
-const tokenCache = new TtlCache<string>({ maxSize: 5_000, sweepIntervalMs: 60_000 });
+/**
+ * Cache TTL for installation IDs and installation access tokens.
+ *
+ * GitHub installation access tokens expire 60 minutes after they're
+ * minted. We cache for 45 minutes — a 15-minute safety margin that
+ * absorbs NTP clock skew between replicas, queue delays, and the
+ * round-trip cost of refreshing. The token endpoint is rate-limited
+ * per installation, so refreshing too aggressively is real cost.
+ */
+const GITHUB_TOKEN_CACHE_TTL_SECONDS = 45 * 60;
 
-export function invalidateUserGitHubCache(userId: string): void {
-  tokenCache.invalidateBySubstring(userId);
+/**
+ * Cache key shapes — all owned by this module. The shape matters for
+ * invalidation: anything prefixed with `inst:user:${userId}:` or
+ * `instToken:${userId}:` belongs to a single user; anything with
+ * `inst:org:${organizationId}:` or `instToken:cloud:${organizationId}:`
+ * belongs to a whole org and is shared between every member.
+ *
+ * Prefix-based invalidation (below) is the ONLY safe way to clear keys
+ * containing a userId — substring matching would clobber unrelated
+ * org keys whose IDs happen to share characters with the userId.
+ */
+let _tokenStore: Promise<CacheStore<string>> | null = null;
+
+function getTokenStore(): Promise<CacheStore<string>> {
+  if (!_tokenStore) {
+    _tokenStore = createCacheStore<string>("gh-tokens", { maxSize: 5_000 });
+  }
+  return _tokenStore;
+}
+
+/**
+ * Clear every cached entry that belongs to this user — both the
+ * user-scoped installation-ID lookup AND the user-scoped installation
+ * token mints. Called on OAuth disconnect, webhook installation
+ * changes initiated by the user, and the sync of the user's local
+ * installations table.
+ *
+ * Does NOT touch org-scoped entries; for that, see
+ * `invalidateOrgGitHubCache`. The two are kept separate so a
+ * teammate's OAuth disconnect doesn't blow away the whole org's
+ * cached installations.
+ */
+export async function invalidateUserGitHubCache(userId: string): Promise<void> {
+  const store = await getTokenStore();
+  await store.invalidateByPrefix(`inst:user:${userId}:`);
+  await store.invalidateByPrefix(`instToken:${userId}:`);
+}
+
+/**
+ * Clear every cached entry scoped to an organization — used when an
+ * installation belonging to a team changes (install/uninstall/suspend
+ * webhook). All members of the org share these entries, so the whole
+ * prefix is swept atomically.
+ */
+export async function invalidateOrgGitHubCache(organizationId: string): Promise<void> {
+  const store = await getTokenStore();
+  await store.invalidateByPrefix(`inst:org:${organizationId}:`);
+  await store.invalidateByPrefix(`instToken:cloud:${organizationId}:`);
 }
 
 // ─── App-level JWT ───────────────────────────────────────────────────────────
@@ -125,6 +180,10 @@ export async function appFetch<T = unknown>(
 /**
  * Resolve the GitHub App installation ID for a given user + owner.
  * Checks cache first, then the database.
+ *
+ * User-scoped variant. Used by code paths that have no active org
+ * context (background jobs, OAuth callbacks pre-membership-resolution).
+ * When org context IS available, prefer `getInstallationIdByOrg`.
  */
 export async function getInstallationId(
   userId: string,
@@ -132,14 +191,99 @@ export async function getInstallationId(
 ): Promise<number | null> {
   if (!owner) return null;
 
-  const cacheKey = `inst:${userId}:${owner.toLowerCase()}`;
-  const cached = tokenCache.get(cacheKey);
+  // Cloud-app mode: ALWAYS ask SaaS. api.openship.io is the canonical
+  // store — the GitHub App webhook fires to SaaS, not to us, so its
+  // record is authoritative. Skip the local DB entirely; a stale row
+  // would lie for up to 50min after a user uninstalls / re-installs.
+  // tokenCache provides short-term memoization (50min TTL) so we don't
+  // hammer SaaS on every preflight.
+  const mode = await resolveGitHubAuthMode(userId).catch(() => "none" as const);
+  if (mode === "cloud-app") {
+    // Resolve the user's primary org (first membership or personal
+    // org) — cloudGithubInstallations is org-keyed and the resolved
+    // owner's installations is the canonical SaaS-side state. Cache
+    // by org so all members of the same org share the entry.
+    const memberships = await repos.member.listByUser(userId).catch(() => []);
+    const organizationId = memberships[0]?.organizationId ?? `org_${userId}`;
+    const cacheKey = `inst:org:${organizationId}:${owner.toLowerCase()}`;
+    const store = await getTokenStore();
+    const cached = await store.get(cacheKey);
+    if (cached) return Number(cached);
+    const { cloudGithubInstallations } = await import("../../lib/cloud-client");
+    const list = await cloudGithubInstallations(organizationId).catch(() => null);
+    if (!list) return null;
+    const match = list.find(
+      (entry) => entry.login.toLowerCase() === owner.toLowerCase(),
+    );
+    if (!match) return null;
+    await store.set(cacheKey, String(match.id), GITHUB_TOKEN_CACHE_TTL_SECONDS);
+    return match.id;
+  }
+
+  // Self-hosted "app" mode below — cache by user since the local DB
+  // installations are per-user rows.
+  const cacheKey = `inst:user:${userId}:${owner.toLowerCase()}`;
+  const store = await getTokenStore();
+  const cached = await store.get(cacheKey);
   if (cached) return Number(cached);
 
+  // Self-hosted "app" mode — local DB is the only store, since the
+  // webhook fired here.
   const row = await repos.gitInstallation.findByOwner(userId, owner);
   if (!row) return null;
 
-  tokenCache.set(cacheKey, String(row.installationId), 50 * 60);
+  await store.set(cacheKey, String(row.installationId), GITHUB_TOKEN_CACHE_TTL_SECONDS);
+  return row.installationId;
+}
+
+/**
+ * Resolve the GitHub App installation ID for a given organization + owner.
+ *
+ * The preferred multi-user lookup path. Multiple members of the same org
+ * share access to the org's installations — scoping by `organizationId`
+ * survives membership churn (members leaving) and lets any teammate use
+ * an installation that another teammate originally connected.
+ */
+export async function getInstallationIdByOrg(
+  organizationId: string,
+  owner: string,
+): Promise<number | null> {
+  if (!organizationId || !owner) return null;
+
+  const cacheKey = `inst:org:${organizationId}:${owner.toLowerCase()}`;
+  const store = await getTokenStore();
+  const cached = await store.get(cacheKey);
+  if (cached) return Number(cached);
+
+  // Cloud-app mode: SaaS is the source of truth. cloudGithubInstallations
+  // resolves the org owner internally and returns the team's
+  // installations in one round-trip — no member iteration needed.
+  const ownerMember = (await repos.member
+    .listByOrganization(organizationId)
+    .catch(() => [] as Array<{ userId: string; role: string }>))
+    .find((m) => m.role === "owner");
+  const mode = ownerMember
+    ? await resolveGitHubAuthMode(ownerMember.userId).catch(() => "none" as const)
+    : ("none" as const);
+
+  if (mode === "cloud-app") {
+    const { cloudGithubInstallations } = await import("../../lib/cloud-client");
+    const list = await cloudGithubInstallations(organizationId).catch(() => null);
+    if (!list) return null;
+    const match = list.find(
+      (entry) => entry.login.toLowerCase() === owner.toLowerCase(),
+    );
+    if (!match) return null;
+    await store.set(cacheKey, String(match.id), GITHUB_TOKEN_CACHE_TTL_SECONDS);
+    return match.id;
+  }
+
+  // Self-hosted "app" mode. The webhook fires to us, so local DB is
+  // the source of truth.
+  const row = await repos.gitInstallation.findByOrgAndOwner(organizationId, owner);
+  if (!row) return null;
+
+  await store.set(cacheKey, String(row.installationId), GITHUB_TOKEN_CACHE_TTL_SECONDS);
   return row.installationId;
 }
 
@@ -155,42 +299,61 @@ export async function getInstallationId(
  *   - "cloud-app" → cloud-client proxy to api.openship.io
  *
  * Other modes (cli/oauth/token) don't use installation tokens.
+ *
+ * Resolution order for the installation row when `installationId` is not
+ * provided:
+ *   1. `organizationId` + owner → preferred multi-user path.
+ *   2. `userId` + owner         → single-user fallback for callers that
+ *                                 don't have org context.
  */
 export async function getInstallationToken(
   userId: string,
   owner: string,
   installationId?: number,
+  organizationId?: string,
 ): Promise<string | null> {
   const mode = await resolveGitHubAuthMode(userId);
 
   if (mode === "cloud-app") {
-    // Proxy through cloud. The cloud-client doesn't take installationId
-    // strictly — cloud can look it up by owner. We still pass it when
-    // known to skip a lookup hop.
-    const cacheKey = `instToken:cloud:${userId}:${owner}`;
-    const cached = tokenCache.get(cacheKey);
+    // Proxy through cloud. Resolve the user's primary org when no
+    // organizationId is in scope so the SaaS-side owner-resolution
+    // still works for background/OAuth-callback callers. Cache by org
+    // so all members of the same org share the cache entry.
+    const orgId = organizationId
+      ?? (await repos.member.listByUser(userId).catch(() => []))[0]?.organizationId
+      ?? `org_${userId}`;
+    const cacheKey = `instToken:cloud:${orgId}:${owner}`;
+    const store = await getTokenStore();
+    const cached = await store.get(cacheKey);
     if (cached) return cached;
 
     const { cloudGithubInstallationToken } = await import("../../lib/cloud-client");
-    const minted = await cloudGithubInstallationToken(userId, {
+    const minted = await cloudGithubInstallationToken(orgId, {
       installationId,
       owner,
     });
     if (!minted?.token) return null;
-    // Cache for 50min; cloud caches similarly so this is mostly belt-
-    // and-suspenders against repeated requests in tight loops.
-    tokenCache.set(cacheKey, minted.token, 50 * 60);
+    await store.set(cacheKey, minted.token, GITHUB_TOKEN_CACHE_TTL_SECONDS);
     return minted.token;
   }
 
   // Local-mint path (cloud-mode SaaS, or explicit GITHUB_AUTH_MODE=app).
+  // Prefer the org-scoped row when an organizationId is in play, then
+  // fall back to the per-user row.
   if (!installationId) {
-    installationId = (await getInstallationId(userId, owner)) ?? undefined;
+    if (organizationId) {
+      installationId =
+        (await getInstallationIdByOrg(organizationId, owner)) ?? undefined;
+    }
+    if (!installationId) {
+      installationId = (await getInstallationId(userId, owner)) ?? undefined;
+    }
   }
   if (!installationId) return null;
 
   const cacheKey = `instToken:${userId}:${owner}:${installationId}`;
-  const cached = tokenCache.get(cacheKey);
+  const store = await getTokenStore();
+  const cached = await store.get(cacheKey);
   if (cached) return cached;
 
   const data = await appFetch<{ token: string }>(
@@ -198,7 +361,7 @@ export async function getInstallationToken(
     { method: "POST" },
   );
 
-  tokenCache.set(cacheKey, data.token, 50 * 60);
+  await store.set(cacheKey, data.token, GITHUB_TOKEN_CACHE_TTL_SECONDS);
   return data.token;
 }
 
@@ -233,25 +396,25 @@ export interface TokenOptions {
   userId: string;
   owner?: string;
   installationId?: number;
-  /** Legacy flag — preserved for callers that haven't migrated yet.
-   *  In the new dispatcher (`tokenFor`) the purpose is what matters,
-   *  not the token "kind" — so this is effectively ignored. */
-  useUserToken?: boolean;
+  /** Active organization id. Required for the operator-only gh-cli gate
+   *  in self-hosted mode — without it, non-owners would silently fall
+   *  back to the operator's broad-scope CLI token. Optional because
+   *  background jobs / internal callers without an org context
+   *  legitimately want the user-scoped resolution path. */
+  organizationId?: string;
 }
 
 /**
- * Resolve a GitHub token for a generic API call.
- *
- * **Thin shim over `tokenFor(userId, "local", ctx)`** — the single
- * source of truth for token resolution. See `github.token.ts` for the
- * full priority chain. Kept as a function so existing call sites
- * (`githubFetch`, etc.) stay stable.
+ * Resolve a GitHub token for a generic API call. Delegates to the
+ * `tokenFor` dispatcher in github.token.ts (purpose=local) which owns
+ * the full priority chain (PAT → installation → OAuth).
  */
 export async function resolveToken(opts: TokenOptions): Promise<string | null> {
   const { tokenFor } = await import("./github.token");
   const r = await tokenFor(opts.userId, "local", {
     owner: opts.owner,
     installationId: opts.installationId,
+    organizationId: opts.organizationId,
   });
   return r?.token ?? null;
 }
@@ -265,8 +428,11 @@ export interface GitHubFetchOptions {
   owner?: string;
   installationId?: number;
   params?: Record<string, unknown>;
-  useUserToken?: boolean;
   headers?: Record<string, string>;
+  /** Active organization id — threaded into `resolveToken` so the
+   *  operator-only gh-cli gate fires for self-hosted multi-user installs.
+   *  See TokenOptions.organizationId. */
+  organizationId?: string;
 }
 
 /**
@@ -282,7 +448,7 @@ export async function githubFetch<T = unknown>(opts: GitHubFetchOptions): Promis
     userId: opts.userId,
     owner: opts.owner,
     installationId: opts.installationId,
-    useUserToken: opts.useUserToken,
+    organizationId: opts.organizationId,
   });
 
   if (!token) {
@@ -441,6 +607,12 @@ export async function getGitHubConnectionState(
   let appAvatar: string | undefined;
   let hasInstallations: boolean | undefined;
   try {
+    // App is connected ONLY when SaaS reports a real GitHub OAuth
+    // identity for this user. The Connect flow runs OAuth on SaaS first
+    // (creating a Better Auth `account` row for providerId='github'),
+    // so this signal is load-bearing. Without it the install webhook
+    // can't attribute installs to a SaaS user and the dashboard would
+    // be lying if it showed "connected".
     const status = await getUserStatus(userId);
     appConnected = status.connected && status.tokenSource !== "cli";
     if (appConnected && status.connected) {
@@ -520,8 +692,20 @@ export async function getUserInstallations(
   const mode = await resolveGitHubAuthMode(userId);
 
   if (mode === "cloud-app") {
+    // SaaS is the canonical source of truth — the GitHub App's webhook
+    // fires to api.openship.io, not to us, so api.openship.io is the
+    // only place that reliably knows about installations. We do NOT
+    // cache to local DB here: a stale local row would lie for up to
+    // 50 minutes after the user uninstalls or moves the App, and the
+    // local row offers no benefit since every consumer ultimately
+    // mints the token via the cloud proxy anyway.
+    //
+    // Short-term memoization is handled by `tokenCache` in the
+    // per-resource lookups (getInstallationId / getInstallationIdByOrg).
     const { cloudGithubInstallations } = await import("../../lib/cloud-client");
-    const list = await cloudGithubInstallations(userId);
+    const memberships = await repos.member.listByUser(userId).catch(() => []);
+    const organizationId = memberships[0]?.organizationId ?? `org_${userId}`;
+    const list = await cloudGithubInstallations(organizationId);
     if (!list) return [];
     return list.map((entry) => ({
       id: entry.id,
@@ -548,15 +732,22 @@ export async function getUserInstallations(
     const data = await githubFetch<{ installations: GitHubInstallation[] }>({
       userId,
       url: "https://api.github.com/user/installations",
-      useUserToken: true,
     });
 
     const installations = data.installations ?? [];
 
     try {
+      // No Hono context here (this also runs from background sync paths),
+      // so resolve the org via the user's first membership — same fallback
+      // the active-org middleware uses. Null is acceptable; the column is
+      // nullable and a future audit pass can re-stamp NULL rows.
+      const memberships = await repos.member.listByUser(userId).catch(() => []);
+      const organizationId = memberships[0]?.organizationId ?? null;
+
       await repos.gitInstallation.replaceForUser(
         userId,
         installations.map((installation) => ({
+          organizationId,
           installationId: installation.id,
           owner: installation.account.login,
           ownerType: installation.account.type,
@@ -565,7 +756,7 @@ export async function getUserInstallations(
           isOrg: installation.account.type === "Organization",
         })),
       );
-      invalidateUserGitHubCache(userId);
+      await invalidateUserGitHubCache(userId);
     } catch (err) {
       console.warn("[GitHub] Failed to sync installations:", (err as Error).message);
     }
@@ -687,8 +878,10 @@ export function isCloudMode(): boolean {
  * which proxies through openship.io and returns a state-bound URL.
  */
 export function getInstallUrl(): string {
-  const appSlug = env.GITHUB_APP_SLUG ?? "openship-io";
-  return `https://github.com/apps/${appSlug}/installations/new`;
+  // Single source of truth: env.GITHUB_APP_SLUG defaults to "openship-io"
+  // via the zod schema in apps/api/src/config/env.ts. No fallback needed
+  // here — the schema guarantees a value.
+  return `https://github.com/apps/${env.GITHUB_APP_SLUG}/installations/new`;
 }
 
 /**
@@ -702,14 +895,44 @@ export async function resolveInstallUrl(
 ): Promise<{ url: string; state: string }> {
   const mode = await resolveGitHubAuthMode(userId);
   if (mode === "cloud-app") {
+    // Bind the install to the user's org owner so the resulting
+    // installation belongs to the team, not the clicking member.
+    const memberships = await repos.member.listByUser(userId).catch(() => []);
+    const organizationId = memberships[0]?.organizationId ?? `org_${userId}`;
     const { cloudGithubInstallUrl } = await import("../../lib/cloud-client");
-    const res = await cloudGithubInstallUrl(userId);
+    const res = await cloudGithubInstallUrl(organizationId);
     if (res) return res;
     // Cloud unreachable — fall back to the canonical install URL with no
     // state. The exchange will fail later if the user actually installs,
     // but at least they can SEE the install screen.
   }
   return { url: getInstallUrl(), state: "" };
+}
+
+/**
+ * Resolve the GitHub OAuth start URL for this user.
+ *
+ * Cloud-app mode (self-hosted + Openship Cloud connected): proxies to the
+ * SaaS's /oauth-handoff endpoint, which mints a single-use bridge URL.
+ * The browser opens that URL and the SaaS handles the entire OAuth
+ * round-trip — local never has GitHub OAuth credentials. After OAuth
+ * completes, the SaaS has a Better Auth `account` row for this user.
+ *
+ * App mode (this IS the SaaS): linkSocialAccount is called directly via
+ * the controller's connectRedirect handler — the OAuth flow runs in the
+ * same process. resolveOauthHandoffUrl is not used.
+ *
+ * cli mode (self-hosted + NO cloud): there's no GitHub OAuth flow
+ * available — the user can only use gh CLI. Returns null.
+ */
+export async function resolveOauthHandoffUrl(
+  userId: string,
+): Promise<{ url: string } | null> {
+  const mode = await resolveGitHubAuthMode(userId);
+  if (mode !== "cloud-app") return null;
+
+  const { cloudGithubOauthHandoff } = await import("../../lib/cloud-client");
+  return cloudGithubOauthHandoff(userId);
 }
 
 /**
@@ -735,5 +958,5 @@ export async function disconnectUser(
     const { setGithubCliDisabled } = await import("../settings/settings.service");
     await setGithubCliDisabled(userId, true);
   }
-  invalidateUserGitHubCache(userId);
+  await invalidateUserGitHubCache(userId);
 }

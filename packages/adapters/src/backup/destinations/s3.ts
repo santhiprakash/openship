@@ -28,6 +28,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "node:stream";
 import { decryptCredential } from "../common/credentials";
 import { registerDestination } from "../registry";
+import { safeErrorMessage } from "@repo/core";
 import type {
   BackupDestination,
   BackupDestinationRow,
@@ -107,7 +108,7 @@ class S3DestinationImpl implements BackupDestination {
       await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: probeKey }));
       return { ok: true };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       return { ok: false, reason: message };
     }
   }
@@ -246,7 +247,7 @@ class S3DestinationImpl implements BackupDestination {
           }
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = safeErrorMessage(err);
         for (const k of chunk) failed.push({ key: k, error: message });
       }
     }

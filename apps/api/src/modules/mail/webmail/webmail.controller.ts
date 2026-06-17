@@ -9,7 +9,7 @@
 
 import type { Context } from "hono";
 import { env } from "../../../config";
-import { getUserId } from "../../../lib/controller-helpers";
+import { getUserId, getActiveOrganizationId } from "../../../lib/controller-helpers";
 import { listWebmailTargets } from "./webmail.service";
 import { startWebmailDeploy } from "./webmail-project.service";
 
@@ -54,6 +54,7 @@ export async function startDeployAsProjectHandler(c: Context) {
   if (env.CLOUD_MODE) return c.json({ error: "Not available" }, 404);
 
   const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
   const mailServerId = body.mailServerId as string | undefined;
   const hostname = (body.hostname as string | undefined)?.trim().toLowerCase();
@@ -85,6 +86,7 @@ export async function startDeployAsProjectHandler(c: Context) {
   try {
     const { deploymentId, projectId } = await startWebmailDeploy({
       userId,
+      organizationId,
       mailServerId,
       hostname,
       internalPort,

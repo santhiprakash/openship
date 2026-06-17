@@ -25,6 +25,7 @@ import { repos, type BackupDestination } from "@repo/db";
 import type { BackupDestinationRow } from "@repo/adapters";
 import { encryptSecretField } from "../../lib/credential-encryption";
 import { resolveSafeSshKeyPath } from "../../lib/ssh-key-path";
+import { safeErrorMessage } from "@repo/core";
 
 /**
  * Take a raw backup_destination DB row and produce a BackupDestinationRow
@@ -39,7 +40,7 @@ export async function toAdapterRow(row: BackupDestination): Promise<BackupDestin
   // adapter expects.
   return {
     id: row.id,
-    userId: row.userId,
+    organizationId: row.organizationId,
     name: row.name,
     kind: row.kind as BackupDestinationRow["kind"],
     endpoint: row.endpoint,
@@ -89,7 +90,7 @@ async function hydrateFromServer(row: BackupDestination): Promise<BackupDestinat
     } catch (err) {
       throw new Error(
         `Server ${server.id} sshKeyPath rejected: ${
-          err instanceof Error ? err.message : String(err)
+          safeErrorMessage(err)
         }`,
       );
     }
@@ -99,7 +100,7 @@ async function hydrateFromServer(row: BackupDestination): Promise<BackupDestinat
     } catch (err) {
       throw new Error(
         `Failed to read SSH key at ${keyPath} for server ${server.id}: ${
-          err instanceof Error ? err.message : String(err)
+          safeErrorMessage(err)
         }`,
       );
     }
@@ -115,7 +116,7 @@ async function hydrateFromServer(row: BackupDestination): Promise<BackupDestinat
 
   return {
     id: row.id,
-    userId: row.userId,
+    organizationId: row.organizationId,
     name: row.name,
     kind: "openship_server",
     endpoint: null,

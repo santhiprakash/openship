@@ -81,6 +81,32 @@ export {
   type BackupRunStatus,
   type BackupRestoreStatus,
 } from "./backup.repo";
+export { createMemberRepo, type Member, type MemberRole } from "./member.repo";
+export { createInvitationRepo, type Invitation } from "./invitation.repo";
+export { createAuditEventRepo, type AuditEvent, type NewAuditEvent } from "./audit-event.repo";
+export {
+  createResourceGrantRepo,
+  type ResourceGrant,
+  type Permission,
+  type ResourceType,
+} from "./resource-grant.repo";
+export { createOrganizationRepo, type Organization } from "./organization.repo";
+export {
+  createInvitationPendingGrantRepo,
+  type InvitationPendingGrant,
+} from "./invitation-pending-grant.repo";
+export {
+  createNotificationChannelRepo,
+  createNotificationSubscriptionRepo,
+  createNotificationDefaultRepo,
+  createNotificationDeliveryRepo,
+  type NotificationChannel,
+  type NotificationSubscription,
+  type NotificationDefault,
+  type NotificationDelivery,
+  type ChannelKind,
+  type DeliveryStatus,
+} from "./notification.repo";
 
 // ─── Convenience: pre-bound repos using the singleton db ─────────────────────
 
@@ -108,6 +134,18 @@ import {
   createBackupRunRepo,
   createBackupRestoreRepo,
 } from "./backup.repo";
+import { createMemberRepo } from "./member.repo";
+import { createInvitationRepo } from "./invitation.repo";
+import { createAuditEventRepo } from "./audit-event.repo";
+import { createResourceGrantRepo } from "./resource-grant.repo";
+import { createInvitationPendingGrantRepo } from "./invitation-pending-grant.repo";
+import { createOrganizationRepo } from "./organization.repo";
+import {
+  createNotificationChannelRepo,
+  createNotificationSubscriptionRepo,
+  createNotificationDefaultRepo,
+  createNotificationDeliveryRepo,
+} from "./notification.repo";
 
 /**
  * Pre-bound repository instances using the singleton `db`.
@@ -140,4 +178,14 @@ export const repos = {
   backupPolicy: createBackupPolicyRepo(db),
   backupRun: createBackupRunRepo(db),
   backupRestore: createBackupRestoreRepo(db),
+  member: createMemberRepo(db),
+  invitation: createInvitationRepo(db),
+  auditEvent: createAuditEventRepo(db),
+  resourceGrant: createResourceGrantRepo(db),
+  invitationPendingGrant: createInvitationPendingGrantRepo(db),
+  organization: createOrganizationRepo(db),
+  notificationChannel: createNotificationChannelRepo(db),
+  notificationSubscription: createNotificationSubscriptionRepo(db),
+  notificationDefault: createNotificationDefaultRepo(db),
+  notificationDelivery: createNotificationDeliveryRepo(db),
 } as const;

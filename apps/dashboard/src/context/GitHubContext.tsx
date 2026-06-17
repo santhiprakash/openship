@@ -20,6 +20,15 @@ export interface GitHubAccount {
   avatar_url: string;
   type: "User" | "Organization";
   name?: string;
+  /**
+   * Where this account came from. Mirrors MappedAccount.source on the
+   * backend. The settings GitHub card filters on this to refuse
+   * rendering CLI org memberships as App installations.
+   *
+   *  - "app" → real GitHub App installation
+   *  - "cli" → gh CLI org membership (local-only)
+   */
+  source?: "app" | "cli";
 }
 
 export interface GitHubRepo {

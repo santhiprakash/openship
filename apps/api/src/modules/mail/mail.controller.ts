@@ -30,6 +30,30 @@ import { streamSSE } from "../../lib/sse";
 import { env } from "../../config";
 import { sshManager } from "../../lib/ssh-manager";
 import { repos } from "@repo/db";
+import { getActiveOrganizationId } from "../../lib/controller-helpers";
+import { permission } from "../../lib/permission";
+
+/**
+ * Ensure the server the caller named lives in their active org. Returns
+ * the org id when allowed (so handlers can reuse it for joins), or a
+ * Response (404) when not. Both unknown and out-of-org server ids 404
+ * indistinguishably to avoid cross-tenant existence leaks.
+ *
+ * Used by every mail handler that takes a serverId — the mail stack
+ * gives the operator SSH-level reach into the box, so a cross-org
+ * serverId here is the same severity as the terminal hole.
+ */
+async function requireServerInOrg(
+  c: Context,
+  serverId: string,
+): Promise<{ ok: true; organizationId: string } | { ok: false; res: Response }> {
+  const organizationId = getActiveOrganizationId(c);
+  const server = await repos.server.getInOrganization(serverId, organizationId);
+  if (!server) {
+    return { ok: false, res: c.json({ error: "Server not found" }, 404) };
+  }
+  return { ok: true, organizationId };
+}
 import {
   MAIL_SETUP_STEPS,
   TOTAL_STEPS,
@@ -228,6 +252,16 @@ export async function getStatus(c: Context) {
     return c.json({ active: false, steps: MAIL_SETUP_STEPS });
   }
 
+  // Primary gate: permission resolver (404 on deny).
+  await permission.assert(c, {
+    resourceType: "mail_server",
+    resourceId: serverId,
+    action: "read",
+  });
+  // Org-scoped: refuse to leak setup state for servers outside the caller's org.
+  const orgGuard = await requireServerInOrg(c, serverId);
+  if (!orgGuard.ok) return orgGuard.res;
+
   try {
     let state = await sshManager.withExecutor(serverId, (executor) =>
       readState(executor),
@@ -271,13 +305,16 @@ export async function getStatus(c: Context) {
 export async function listMailServers(c: Context) {
   if (env.CLOUD_MODE) return c.json({ servers: [] });
 
+  const organizationId = getActiveOrganizationId(c);
+
   let mailRows = await repos.mailServer.list();
 
-  // One-time backfill for installs that predate the mail_servers table.
-  // Only runs when the table is empty - otherwise the table is canonical
-  // and we never SSH-scan again.
+  // Backfill from on-disk mail-state.json. Only runs when the table is
+  // empty - otherwise the table is canonical and we never SSH-scan again.
+  // Backfill is scoped to the caller's org (plus NULL-org rows) so we
+  // don't import other tenants' rows.
   if (mailRows.length === 0) {
-    const all = await repos.server.list();
+    const all = await repos.server.listByOrganization(organizationId);
     const scanned = await Promise.all(
       all.map(async (s) => {
         try {
@@ -312,8 +349,10 @@ export async function listMailServers(c: Context) {
     mailRows = await repos.mailServer.list();
   }
 
-  // Join with the servers table to surface host/user/port for the UI.
-  const allServers = await repos.server.list();
+  // Join with the org-scoped servers table to surface host/user/port for
+  // the UI. The Map filter implicitly drops any mail_server row whose
+  // underlying server is outside this org — that's the cross-tenant gate.
+  const allServers = await repos.server.listByOrganization(organizationId);
   const serverById = new Map(allServers.map((s) => [s.id, s]));
   const out = mailRows
     .map((row) => {
@@ -481,17 +520,40 @@ export async function startSetup(c: Context) {
     return c.json({ error: "Invalid domain" }, 400);
   }
 
+  // Primary gate: starting/resuming setup is a write (mutates server state).
+  await permission.assert(c, {
+    resourceType: "mail_server",
+    resourceId: serverId,
+    action: "write",
+  });
+  // Org-scoped: refuse to drive an iRedMail install on a server outside
+  // the caller's org — this is full root-level reach into the box.
+  const orgGuard = await requireServerInOrg(c, serverId);
+  if (!orgGuard.ok) return orgGuard.res;
+
   if (active) {
     return c.json({ error: "Setup already running" }, 409);
   }
 
+  // Cross-replica lock: the mail_servers row IS the lock. INSERT with
+  // installedAt=null + atomic conflict detection — if another replica
+  // already started an install for this server within the last hour
+  // (row exists with installedAt=null AND createdAt is recent), we
+  // refuse. After 1h we assume the install crashed and let the next
+  // attempt take over.
+  const existing = await repos.mailServer.get(serverId).catch(() => null);
+  if (existing && !existing.installedAt) {
+    const ageMs = Date.now() - new Date(existing.createdAt).getTime();
+    if (ageMs < 60 * 60 * 1000) {
+      return c.json(
+        { error: "Setup already running on another replica or recently crashed" },
+        409,
+      );
+    }
+  }
+
   active = { serverId, domain, cancelled: false };
 
-  // Mark this server as a mail server in the openship DB the moment install
-  // begins. /emails reads from this table for its "which server is the mail
-  // server?" answer - recording it here means the user can navigate to
-  // /emails mid-install and land on the right server's progress UI without
-  // round-tripping SSH. The `installedAt` stamp is left null until completion.
   try {
     await repos.mailServer.upsert({ serverId, domain, installedAt: null });
   } catch (err) {
@@ -499,8 +561,6 @@ export async function startSetup(c: Context) {
       "[mail] failed to record mail-server install start:",
       err instanceof Error ? err.message : err,
     );
-    // Non-fatal - install proceeds; /emails would just have to fall back to
-    // the SSH scan for this single edge case.
   }
 
   return streamSSE(c, async (stream) => {
@@ -792,6 +852,18 @@ export async function cancelSetup(c: Context) {
     return c.json({ error: "No active setup" }, 400);
   }
 
+  // Primary gate: cancelling a running install is a state mutation (write).
+  await permission.assert(c, {
+    resourceType: "mail_server",
+    resourceId: active.serverId,
+    action: "write",
+  });
+  // Org-scoped: only the org that owns the target server can cancel its
+  // setup. 404-shape on cross-org so existence of the install doesn't
+  // leak.
+  const orgGuard = await requireServerInOrg(c, active.serverId);
+  if (!orgGuard.ok) return orgGuard.res;
+
   active.cancelled = true;
   return c.json({ ok: true, message: "Cancellation requested" });
 }
@@ -811,6 +883,15 @@ export async function acknowledgeDns(c: Context) {
   const body = await c.req.json().catch(() => ({}));
   const serverId = body.serverId as string | undefined;
   if (!serverId) return c.json({ error: "serverId is required" }, 400);
+
+  // Primary gate: ack flips a bit in the on-server state file (write).
+  await permission.assert(c, {
+    resourceType: "mail_server",
+    resourceId: serverId,
+    action: "write",
+  });
+  const orgGuard = await requireServerInOrg(c, serverId);
+  if (!orgGuard.ok) return orgGuard.res;
 
   try {
     await sshManager.withExecutor(serverId, async (executor) => {
@@ -850,6 +931,15 @@ export async function acknowledgePtr(c: Context) {
   const serverId = body.serverId as string | undefined;
   if (!serverId) return c.json({ error: "serverId is required" }, 400);
 
+  // Primary gate: ack flips a bit in the on-server state file (write).
+  await permission.assert(c, {
+    resourceType: "mail_server",
+    resourceId: serverId,
+    action: "write",
+  });
+  const orgGuard = await requireServerInOrg(c, serverId);
+  if (!orgGuard.ok) return orgGuard.res;
+
   try {
     await sshManager.withExecutor(serverId, async (executor) => {
       const state = await readState(executor);
@@ -882,6 +972,15 @@ export async function resetSetup(c: Context) {
   const body = await c.req.json().catch(() => ({}));
   const serverId = body.serverId as string | undefined;
   if (!serverId) return c.json({ error: "serverId is required" }, 400);
+
+  // Primary gate: wiping the mail-state file is destructive (admin).
+  await permission.assert(c, {
+    resourceType: "mail_server",
+    resourceId: serverId,
+    action: "admin",
+  });
+  const orgGuard = await requireServerInOrg(c, serverId);
+  if (!orgGuard.ok) return orgGuard.res;
 
   if (active?.serverId === serverId) {
     return c.json({ error: "Cancel the running setup first" }, 409);
@@ -934,6 +1033,16 @@ export async function setPostmasterPassword(c: Context) {
       400,
     );
   }
+
+  // Primary gate: rotating the postmaster password is destructive (admin).
+  await permission.assert(c, {
+    resourceType: "mail_server",
+    resourceId: serverId,
+    action: "admin",
+  });
+  const orgGuard = await requireServerInOrg(c, serverId);
+  if (!orgGuard.ok) return orgGuard.res;
+
   if (active?.serverId === serverId) {
     return c.json(
       { error: "Setup is currently running - wait for it to finish" },
@@ -967,6 +1076,15 @@ export async function getHealth(c: Context) {
 
   const serverId = c.req.param("serverId");
   if (!serverId) return c.json({ error: "serverId is required" }, 400);
+
+  // Primary gate: live daemon status is a read.
+  await permission.assert(c, {
+    resourceType: "mail_server",
+    resourceId: serverId,
+    action: "read",
+  });
+  const orgGuard = await requireServerInOrg(c, serverId);
+  if (!orgGuard.ok) return orgGuard.res;
 
   try {
     const components = await sshManager.withExecutor(serverId, (executor) =>

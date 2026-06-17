@@ -1,4 +1,4 @@
-import { eq, and, asc } from "drizzle-orm";
+import { eq, and, asc, inArray } from "drizzle-orm";
 import { generateId } from "@repo/core";
 import type { Database } from "../client";
 import { service, serviceDeployment } from "../schema";
@@ -78,6 +78,25 @@ export function createServiceRepo(db: Database) {
         where: eq(service.projectId, projectId),
         orderBy: [asc(service.sortOrder), asc(service.name)],
       });
+    },
+
+    /**
+     * Batch variant of listByProject — one SQL round trip for N
+     * projects. Used by getHome to eliminate the N+1.
+     */
+    async listByProjects(projectIds: string[]): Promise<Map<string, Service[]>> {
+      if (projectIds.length === 0) return new Map();
+      const rows = await db.query.service.findMany({
+        where: inArray(service.projectId, projectIds),
+        orderBy: [asc(service.sortOrder), asc(service.name)],
+      });
+      const out = new Map<string, Service[]>();
+      for (const id of projectIds) out.set(id, []);
+      for (const row of rows) {
+        const list = out.get(row.projectId);
+        if (list) list.push(row);
+      }
+      return out;
     },
 
     async create(data: Omit<NewService, "id">) {
@@ -217,11 +236,10 @@ export function createServiceRepo(db: Database) {
      *
      * SCOPED TO kind="compose" ONLY. Monorepo sub-app rows have their own
      * sync path (the monorepoApps ensure() flow) and must NOT be touched
-     * here - historically this helper called `listByProject(projectId)`
-     * + `remove(ex.id)` for every row not in the incoming compose list,
-     * which silently DELETED every monorepo sub-app on every compose-mode
-     * build of a mixed project. It also stomped per-row fields if a
-     * monorepo row happened to share a name with a compose service.
+     * here - removing rows not in the incoming compose list would otherwise
+     * delete every monorepo sub-app on a compose-mode build of a mixed
+     * project, and per-row fields would be stomped if a monorepo row shared
+     * a name with a compose service.
      *
      * Also preserves the user's explicit `enabled` choice on updates -
      * compose's YAML doesn't carry an enabled flag, so re-syncing a row

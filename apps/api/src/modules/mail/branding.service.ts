@@ -25,6 +25,7 @@
  */
 
 import { env } from "../../config";
+import { safeErrorMessage } from "@repo/core";
 
 export interface Branding {
   siteTitle: string;
@@ -80,7 +81,7 @@ export async function getBranding(_serverId: string): Promise<Branding> {
   } catch (err) {
     throw new BrandingUnreachableError(
       `Could not reach Zero webmail server at ${env.MAIL_WEBMAIL_URL}: ${
-        err instanceof Error ? err.message : String(err)
+        safeErrorMessage(err)
       }`,
     );
   }
@@ -110,7 +111,7 @@ export async function updateBranding(
   } catch (err) {
     throw new BrandingUnreachableError(
       `Could not reach Zero webmail server at ${env.MAIL_WEBMAIL_URL}: ${
-        err instanceof Error ? err.message : String(err)
+        safeErrorMessage(err)
       }`,
     );
   }

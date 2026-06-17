@@ -26,6 +26,7 @@ export {
   listProjectDeployments,
   getLatestDeploymentSession,
   enrichProject,
+  enrichProjectsBatch,
 } from "./project-crud.service";
 
 export { deleteProject, previewProjectDeletion } from "./project-cleanup.service";

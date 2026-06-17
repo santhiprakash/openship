@@ -1,4 +1,4 @@
-import type { Deployment } from "@/components/import-project/types";
+import type { Deployment } from "@/app/(dashboard)/deployments/types";
 
 /**
  * Formats a date to a human-readable "time ago" string

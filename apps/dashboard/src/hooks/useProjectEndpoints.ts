@@ -295,16 +295,12 @@ export function useAnalyticsPeriods(id: string | null | undefined) {
 }
 
 /**
- * Composite hook — returns the legacy combined AnalyticsData shape, derived
- * from summary + periods on the fly. Use this when a consumer wants the
- * old `analyticsData` object (stat values + traffic series in one struct)
- * without losing the atomic per-endpoint skeleton control:
- *   - `isLoading` is true while EITHER underlying fetch is in flight
- *   - `data` is null until summary lands; periods are optional and
- *     default to [] in the mapping
- *
- * For finer-grained skeletons (stats vs chart), prefer calling
- * `useAnalyticsSummary` / `useAnalyticsPeriods` directly.
+ * Composite hook — returns summary + periods combined into one
+ * AnalyticsData object plus the underlying per-endpoint loading states.
+ * Use this when a consumer needs both shapes together (Overview /
+ * Monitoring tabs). When a consumer only needs one of stats or chart,
+ * call `useAnalyticsSummary` / `useAnalyticsPeriods` directly to keep
+ * skeletons tight.
  */
 export function useAnalyticsData(id: string | null | undefined) {
   const summary = useAnalyticsSummary(id);

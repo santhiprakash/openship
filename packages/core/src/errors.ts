@@ -64,3 +64,26 @@ export class DeployError extends AppError {
     this.name = "DeployError";
   }
 }
+
+/**
+ * Extract a safe string description from an unknown caught value.
+ *
+ * Why: ssh2, the AWS SDK, and other libraries attach credentials and
+ * full request/response objects to their Error subclasses. Passing
+ * those Error objects to `console.error` logs the entire object graph
+ * — including private keys, signed headers, and bucket configs — into
+ * log aggregators (Datadog, Loki, sometimes shared with vendors).
+ *
+ * `err.message` strips the structured fields and keeps only the
+ * human-readable string. Non-Error values fall through to `String()`
+ * so we never throw inside a catch block.
+ *
+ * Bound to 2000 chars so a deeply nested message can't bloat log
+ * entries.
+ */
+export function safeErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message.slice(0, 2000);
+  }
+  return String(err).slice(0, 2000);
+}

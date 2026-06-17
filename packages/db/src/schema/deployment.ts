@@ -5,9 +5,11 @@ import {
   integer,
   jsonb,
   boolean,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { project } from "./project";
-import { user } from "./auth";
+import { organization } from "./organization";
 
 // ─── Deployments ─────────────────────────────────────────────────────────────
 
@@ -20,9 +22,11 @@ export const deployment = pgTable("deployment", {
   projectId: text("project_id")
     .notNull()
     .references(() => project.id, { onDelete: "cascade" }),
-  userId: text("user_id")
+  /** Org that owns this deployment — THE access primitive. Actor info
+   *  (who triggered the deploy) flows through audit_event. */
+  organizationId: text("organization_id")
     .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
+    .references(() => organization.id, { onDelete: "cascade" }),
 
   /* ── Git snapshot ───────────────────────────────────────────────────── */
   branch: text("branch").notNull(),
@@ -75,7 +79,17 @@ export const deployment = pgTable("deployment", {
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (t) => [
+  // At most ONE in-flight deployment per project. The race-prone
+  // pattern (SELECT-then-INSERT inside checkNoActiveBuild +
+  // createQueuedDeployment) is replaced by relying on this constraint:
+  // concurrent webhook deliveries both try the INSERT, only one wins,
+  // the other's unique-violation is caught by the caller and reported
+  // as "another build already in progress."
+  uniqueIndex("uq_deployment_one_active_per_project")
+    .on(t.projectId)
+    .where(sql`status IN ('queued', 'building', 'deploying')`),
+]);
 
 // ─── Build sessions ──────────────────────────────────────────────────────────
 

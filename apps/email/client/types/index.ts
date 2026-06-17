@@ -112,7 +112,7 @@ export type MailSelectMode = 'mass' | 'range' | 'single' | 'selectAllBelow';
 // The row carries the full listThreads payload now - no per-row mail.get
 // to hydrate it. Keeping the shape loose (Partial) so callers that only
 // have an id+historyId for legacy code paths still typecheck.
-import type { IGetThreadResponse } from '../../server/src/lib/driver/types';
+import type { ThreadResponse as IGetThreadResponse } from '../../server/src/lib/imap-driver';
 
 export type ThreadProps = {
   message: IGetThreadResponse;

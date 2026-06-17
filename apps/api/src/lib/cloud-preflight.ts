@@ -1,6 +1,7 @@
 import { createPlatform, type CloudRuntime } from "@repo/adapters";
 import { getOblienClient, issueNamespaceToken } from "./openship-cloud";
 import { getRoutingBaseDomain } from "./routing-domains";
+import { safeErrorMessage } from "@repo/core";
 
 export interface CloudPreflightData {
   runtime: { ok: boolean; message?: string };
@@ -49,7 +50,7 @@ export async function runCloudPreflight(
     cloud = cloudPlatform.runtime as CloudRuntime;
     await cloud.getQuota();
   } catch (err) {
-    runtimeError = err instanceof Error ? err.message : String(err);
+    runtimeError = safeErrorMessage(err);
   }
 
   const result: CloudPreflightData = {
@@ -70,7 +71,7 @@ export async function runCloudPreflight(
             message: `"${opts.slug}.${baseDomain}" is already taken. Choose a different subdomain.`,
           };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       console.error("[CLOUD] Preflight slug check failed", { slug: opts.slug, error: message });
       // Fail closed — the user should pick a different slug rather than
       // discover the conflict mid-build.
@@ -94,7 +95,7 @@ export async function runCloudPreflight(
               : `DNS not configured for ${opts.customDomain}. Add a CNAME record pointing to ${verified.requiredRecords.cname.target}`,
           };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       console.error("[CLOUD] Preflight custom domain check failed", { domain: opts.customDomain, error: message });
       result.customDomain = {
         verified: false,

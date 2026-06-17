@@ -39,6 +39,7 @@ import {
   STORAGE_NODE,
 } from "./maildir";
 import { recountDomain, validateDomain } from "./domains.service";
+import { safeErrorMessage } from "@repo/core";
 
 const EMAIL_RE = /^[a-z0-9._+-]+@[a-z0-9.-]+\.[a-z]{2,}$/;
 const LOCAL_PART_RE = /^[a-z0-9._+-]+$/;
@@ -192,7 +193,7 @@ export async function createMailbox(
       );
       throw new Error(
         `Failed to create Maildir; mailbox was rolled back: ${
-          err instanceof Error ? err.message : String(err)
+          safeErrorMessage(err)
         }`,
       );
     }

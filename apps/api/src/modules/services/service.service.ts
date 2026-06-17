@@ -5,7 +5,7 @@
 import { normalizeRoutingFields, repos } from "@repo/db";
 import type { LogEntry } from "@repo/adapters";
 import { encrypt, decrypt } from "../../lib/encryption";
-import { assertProjectAccess, platform } from "../../lib/controller-helpers";
+import { assertResourceInOrg, platform } from "../../lib/controller-helpers";
 import { resolveDeploymentRuntime } from "../../lib/deployment-runtime";
 import { buildServiceRouteDomain, getRoutingBaseDomain } from "../../lib/routing-domains";
 import type {
@@ -16,9 +16,14 @@ import type {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Verify a service exists and belongs to the given project */
-async function assertServiceAccess(projectId: string, serviceId: string, userId: string) {
-  const project = await assertProjectAccess(projectId, userId);
+/** Verify a service exists and belongs to a project in the given org */
+async function assertServiceAccess(
+  projectId: string,
+  serviceId: string,
+  organizationId: string,
+) {
+  const project = await repos.project.findById(projectId);
+  assertResourceInOrg(project, "Project", organizationId, projectId);
   const svc = await repos.service.findById(serviceId);
   if (!svc || svc.projectId !== projectId) {
     throw new Error("service-not-found");
@@ -53,20 +58,30 @@ function normalizeRoutingPatch(input: Parameters<typeof normalizeRoutingFields>[
 
 // ─── Read ────────────────────────────────────────────────────────────────────
 
-export async function listServices(projectId: string, userId: string) {
-  await assertProjectAccess(projectId, userId);
+export async function listServices(projectId: string, organizationId: string) {
+  const project = await repos.project.findById(projectId);
+  assertResourceInOrg(project, "Project", organizationId, projectId);
   return repos.service.listByProject(projectId);
 }
 
-export async function getService(projectId: string, serviceId: string, userId: string) {
-  const { svc } = await assertServiceAccess(projectId, serviceId, userId);
+export async function getService(
+  projectId: string,
+  serviceId: string,
+  organizationId: string,
+) {
+  const { svc } = await assertServiceAccess(projectId, serviceId, organizationId);
   return svc;
 }
 
 // ─── Create / Update ─────────────────────────────────────────────────────────
 
-export async function createService(projectId: string, userId: string, data: TCreateServiceBody) {
-  await assertProjectAccess(projectId, userId);
+export async function createService(
+  projectId: string,
+  organizationId: string,
+  data: TCreateServiceBody,
+) {
+  const project = await repos.project.findById(projectId);
+  assertResourceInOrg(project, "Project", organizationId, projectId);
 
   const name = data.name.trim();
   if (!name) {
@@ -78,8 +93,7 @@ export async function createService(projectId: string, userId: string, data: TCr
     throw new Error("service-name-already-exists");
   }
 
-  // Discriminator default: compose. Matches the DB column default and the
-  // historical create payload (which had no `kind` field at all).
+  // Discriminator default: compose. Matches the DB column default.
   const kind: "compose" | "monorepo" = data.kind === "monorepo" ? "monorepo" : "compose";
 
   // Monorepo sub-apps MUST carry a rootDirectory - the validator keeps it
@@ -140,10 +154,10 @@ export async function createService(projectId: string, userId: string, data: TCr
 export async function updateService(
   projectId: string,
   serviceId: string,
-  userId: string,
+  organizationId: string,
   data: TUpdateServiceBody,
 ) {
-  const { project, svc } = await assertServiceAccess(projectId, serviceId, userId);
+  const { project, svc } = await assertServiceAccess(projectId, serviceId, organizationId);
 
   // Normalize routing: when exposed is turned off, clear routing fields.
   // When domainType changes, clear the irrelevant domain field.
@@ -265,8 +279,12 @@ export async function updateService(
   return updated;
 }
 
-export async function deleteService(projectId: string, serviceId: string, userId: string) {
-  const { project, svc } = await assertServiceAccess(projectId, serviceId, userId);
+export async function deleteService(
+  projectId: string,
+  serviceId: string,
+  organizationId: string,
+) {
+  const { project, svc } = await assertServiceAccess(projectId, serviceId, organizationId);
 
   if (project.activeDeploymentId) {
     const dep = await repos.deployment.findById(project.activeDeploymentId);
@@ -309,10 +327,10 @@ export async function deleteService(projectId: string, serviceId: string, userId
 export async function listServiceEnvVars(
   projectId: string,
   serviceId: string,
-  userId: string,
+  organizationId: string,
   environment?: string,
 ) {
-  await assertServiceAccess(projectId, serviceId, userId);
+  await assertServiceAccess(projectId, serviceId, organizationId);
 
   const vars = await repos.project.listEnvVars(projectId, environment, serviceId);
   // Decrypt and mask secrets
@@ -325,10 +343,10 @@ export async function listServiceEnvVars(
 export async function setServiceEnvVars(
   projectId: string,
   serviceId: string,
-  userId: string,
+  organizationId: string,
   data: TSetServiceEnvVarsBody,
 ) {
-  await assertServiceAccess(projectId, serviceId, userId);
+  await assertServiceAccess(projectId, serviceId, organizationId);
 
   // Encrypt values before storage
   const encrypted = data.vars.map((v) => ({
@@ -345,7 +363,7 @@ export async function setServiceEnvVars(
 
 export async function syncComposeServices(
   projectId: string,
-  userId: string,
+  organizationId: string,
   parsed: {
     name: string;
     image?: string;
@@ -364,7 +382,8 @@ export async function syncComposeServices(
     domainType?: "free" | "custom";
   }[],
 ) {
-  await assertProjectAccess(projectId, userId);
+  const project = await repos.project.findById(projectId);
+  assertResourceInOrg(project, "Project", organizationId, projectId);
   return repos.service.syncFromCompose(projectId, parsed);
 }
 
@@ -374,16 +393,22 @@ export async function listServiceDeployments(deploymentId: string) {
   return repos.service.listByDeployment(deploymentId);
 }
 
-export async function getActiveServiceContainers(projectId: string, userId: string) {
-  const project = await assertProjectAccess(projectId, userId);
+export async function getActiveServiceContainers(projectId: string, organizationId: string) {
+  const project = await repos.project.findById(projectId);
+  assertResourceInOrg(project, "Project", organizationId, projectId);
   if (!project.activeDeploymentId) return [];
   return repos.service.listByDeployment(project.activeDeploymentId);
 }
 
 // ─── Per-service container actions ───────────────────────────────────────────
 
-async function resolveServiceContainer(projectId: string, serviceId: string, userId: string) {
-  const project = await assertProjectAccess(projectId, userId);
+async function resolveServiceContainer(
+  projectId: string,
+  serviceId: string,
+  organizationId: string,
+) {
+  const project = await repos.project.findById(projectId);
+  assertResourceInOrg(project, "Project", organizationId, projectId);
   if (!project.activeDeploymentId) throw new Error("No active deployment");
 
   const dep = await repos.deployment.findById(project.activeDeploymentId);
@@ -397,14 +422,30 @@ async function resolveServiceContainer(projectId: string, serviceId: string, use
   return { runtime, containerId: row.containerId, serverId };
 }
 
-export async function startServiceContainer(projectId: string, serviceId: string, userId: string) {
-  const { runtime, containerId } = await resolveServiceContainer(projectId, serviceId, userId);
+export async function startServiceContainer(
+  projectId: string,
+  serviceId: string,
+  organizationId: string,
+) {
+  const { runtime, containerId } = await resolveServiceContainer(
+    projectId,
+    serviceId,
+    organizationId,
+  );
   await runtime.start(containerId);
   return { containerId };
 }
 
-export async function stopServiceContainer(projectId: string, serviceId: string, userId: string) {
-  const { runtime, containerId } = await resolveServiceContainer(projectId, serviceId, userId);
+export async function stopServiceContainer(
+  projectId: string,
+  serviceId: string,
+  organizationId: string,
+) {
+  const { runtime, containerId } = await resolveServiceContainer(
+    projectId,
+    serviceId,
+    organizationId,
+  );
   await runtime.stop(containerId);
   return { containerId };
 }
@@ -412,9 +453,13 @@ export async function stopServiceContainer(projectId: string, serviceId: string,
 export async function restartServiceContainer(
   projectId: string,
   serviceId: string,
-  userId: string,
+  organizationId: string,
 ) {
-  const { runtime, containerId } = await resolveServiceContainer(projectId, serviceId, userId);
+  const { runtime, containerId } = await resolveServiceContainer(
+    projectId,
+    serviceId,
+    organizationId,
+  );
   await runtime.restart(containerId);
   return { containerId };
 }
@@ -422,25 +467,30 @@ export async function restartServiceContainer(
 export async function getServiceRuntimeLogs(
   projectId: string,
   serviceId: string,
-  userId: string,
+  organizationId: string,
   tail?: number,
 ) {
-  const { runtime, containerId } = await resolveServiceContainer(projectId, serviceId, userId);
+  const { runtime, containerId } = await resolveServiceContainer(
+    projectId,
+    serviceId,
+    organizationId,
+  );
   return runtime.getRuntimeLogs(containerId, tail);
 }
 
 export async function streamServiceRuntimeLogs(
   projectId: string,
   serviceId: string,
-  userId: string,
+  organizationId: string,
   onLog: (entry: LogEntry) => void,
   opts?: { tail?: number },
 ) {
   const { runtime, containerId, serverId } = await resolveServiceContainer(
     projectId,
     serviceId,
-    userId,
+    organizationId,
   );
   const cleanup = await runtime.streamRuntimeLogs(containerId, onLog, opts);
   return { cleanup, serverId };
 }
+

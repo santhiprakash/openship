@@ -18,6 +18,7 @@ import {
   type DeployTarget,
   type BuildStrategy,
   type StackDefinition,
+  safeErrorMessage,
 } from "@repo/core";
 import type {
   BuildConfig,
@@ -66,7 +67,7 @@ import { runPreflightChecks, type PreflightResult } from "./preflight";
 import { createBuildConfig } from "./build-config";
 import {
   executeComposePipeline,
-  isLegacyComposeProject,
+  isMultiServiceProject,
   listProjectComposeServices,
   projectServicesToDeployableServices,
   resolveProjectServicePreflightServices,
@@ -247,7 +248,7 @@ async function kickoffBuild(project: Project, dep: Deployment): Promise<string |
  * dashboard stops spinning, and ends the session.
  */
 async function markDeploymentFailedFromOutside(deploymentId: string, error: unknown): Promise<void> {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = safeErrorMessage(error);
   try {
     const dep = await repos.deployment.findById(deploymentId).catch(() => null);
     if (!dep) return;
@@ -314,6 +315,9 @@ export async function runDeploymentPreflight(
     /** Project id — passed to the remote-clone-token preflight check so
      *  project-scoped clone tokens are considered. */
     projectId?: string;
+    /** Active organization id — preflight uses this for the org-scoped
+     *  App installation lookup. */
+    organizationId?: string;
   },
 ): Promise<void> {
   const preflight = await runPreflightChecks(snapshot, {
@@ -328,6 +332,7 @@ export async function runDeploymentPreflight(
     ...(opts.multiService !== undefined ? { multiService: opts.multiService } : {}),
     ...(opts.gitOwner !== undefined ? { gitOwner: opts.gitOwner } : {}),
     ...(opts.projectId !== undefined ? { projectId: opts.projectId } : {}),
+    ...(opts.organizationId !== undefined ? { organizationId: opts.organizationId } : {}),
     buildStrategy: snapshot.buildStrategy as "local" | "server" | undefined,
   });
   if (!preflight.ok) {
@@ -364,6 +369,8 @@ function buildScopedEnvVars(
 
 /** Config snapshot stored in deployment.meta - self-contained build+deploy config. */
 export interface DeploymentConfigSnapshot {
+  /** Owning organization — required so server lookups can be org-scoped. */
+  organizationId?: string;
   repoUrl: string;
   branch: string;
   framework: string;
@@ -538,21 +545,22 @@ export function encryptEnvVars(envVars?: Record<string, string>): Record<string,
   return encrypted;
 }
 
-// `decryptEnvVars` used to live here with a worse error behavior - on a
-// decryption failure it returned the raw ciphertext as the value, which
-// could leak sealed bytes into the build environment. The canonical
-// implementation in lib/encryption.ts (decryptEnvMap) drops failed keys
-// instead. Callers below use that directly via the import in this file.
-
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
-/** Load a deployment + its project, verifying the user owns it. */
-async function loadDeploymentForUser(deploymentId: string, userId: string) {
+/**
+ * Load a deployment + its project, refusing if their organizations don't
+ * agree. The calling route's permission middleware already verified the
+ * caller is a member of the deployment's org; this is a defense-in-depth
+ * check against a deployment ever outliving a project moving orgs.
+ */
+async function loadDeployment(deploymentId: string) {
   const dep = await repos.deployment.findById(deploymentId);
   if (!dep) throw new NotFoundError("Deployment", deploymentId);
 
   const project = await repos.project.findById(dep.projectId);
-  if (!project || project.userId !== userId) {
+  if (!project) throw new NotFoundError("Deployment", deploymentId);
+
+  if (dep.organizationId !== project.organizationId) {
     throw new NotFoundError("Deployment", deploymentId);
   }
 
@@ -577,9 +585,24 @@ async function checkNoActiveBuild(projectId: string) {
  * Create a queued deployment + build session atomically.
  * If the build session insert fails, the deployment is cleaned up.
  */
+/**
+ * Detection: the partial unique index uq_deployment_one_active_per_project
+ * surfaces this Postgres / pglite error code when two webhook
+ * deliveries race to create a deployment for the same project.
+ */
+function isActiveDeploymentRace(err: unknown): boolean {
+  const e = err as { code?: string; message?: string } | undefined;
+  if (!e) return false;
+  if (e.code === "23505") return true; // unique_violation
+  return Boolean(e.message?.includes("uq_deployment_one_active_per_project"));
+}
+
 export async function createQueuedDeployment(opts: {
   projectId: string;
   userId: string;
+  /** Org that owns this deployment. Pass project.organizationId. userId
+   *  stays as the forensic actor stamp; org is the scoping key. */
+  organizationId: string;
   branch: string;
   environment: string;
   framework: string;
@@ -589,19 +612,31 @@ export async function createQueuedDeployment(opts: {
   commitMessage?: string;
   trigger?: string;
 }) {
-  const dep = await repos.deployment.create({
-    projectId: opts.projectId,
-    userId: opts.userId,
-    branch: opts.branch,
-    commitSha: opts.commitSha,
-    commitMessage: opts.commitMessage,
-    trigger: opts.trigger ?? "manual",
-    environment: opts.environment,
-    framework: opts.framework,
-    status: "queued",
-    meta: opts.meta,
-    envVars: opts.envVars,
-  });
+  let dep;
+  try {
+    dep = await repos.deployment.create({
+      projectId: opts.projectId,
+      organizationId: opts.organizationId,
+      branch: opts.branch,
+      commitSha: opts.commitSha,
+      commitMessage: opts.commitMessage,
+      trigger: opts.trigger ?? "manual",
+      environment: opts.environment,
+      framework: opts.framework,
+      status: "queued",
+      meta: opts.meta,
+      envVars: opts.envVars,
+    });
+  } catch (err) {
+    // Race: another caller raced past checkNoActiveBuild and won the
+    // INSERT. Surface as a 403 to match the early-rejection path.
+    if (isActiveDeploymentRace(err)) {
+      throw new ForbiddenError(
+        "Another deployment is already in progress for this project. Wait for it to finish or cancel it.",
+      );
+    }
+    throw err;
+  }
 
   try {
     await repos.deployment.createBuildSession({
@@ -639,7 +674,7 @@ export async function respondToPrompt(
   userId: string,
   action: string,
 ): Promise<boolean> {
-  await loadDeploymentForUser(deploymentId, userId);
+  await loadDeployment(deploymentId);
   return sessionManager.respondToPrompt(deploymentId, action);
 }
 
@@ -659,9 +694,11 @@ export async function requestBuildAccess(userId: string, input: BuildAccessInput
   } = input;
 
   const project = await repos.project.findById(projectId);
-  if (!project || project.userId !== userId) {
+  if (!project) {
     throw new NotFoundError("Project", projectId);
   }
+  // Org-membership is verified by the route-level requirePermission
+  // middleware before this is reached.
 
   await checkNoActiveBuild(project.id);
 
@@ -722,6 +759,7 @@ export async function requestBuildAccess(userId: string, input: BuildAccessInput
     multiService: useServicePipeline,
     gitOwner: project.gitOwner,
     projectId: project.id,
+    organizationId: project.organizationId ?? undefined,
   });
   const env = environment || "production";
 
@@ -735,6 +773,7 @@ export async function requestBuildAccess(userId: string, input: BuildAccessInput
   const dep = await createQueuedDeployment({
     projectId: project.id,
     userId,
+    organizationId: project.organizationId ?? null,
     branch: snapshot.branch,
     commitSha,
     commitMessage,
@@ -764,7 +803,7 @@ export async function requestBuildAccess(userId: string, input: BuildAccessInput
 // ─── Build session status ────────────────────────────────────────────────────
 
 export async function getBuildSessionStatus(deploymentId: string, userId: string) {
-  const { dep, project } = await loadDeploymentForUser(deploymentId, userId);
+  const { dep, project } = await loadDeployment(deploymentId);
 
   const buildSessionRow = await repos.deployment.findBuildSessionByDeploymentId(deploymentId);
 
@@ -852,7 +891,7 @@ export async function getBuildSessionStatus(deploymentId: string, userId: string
         !!snapshot?.composeDeployment ||
         deploymentServices.length > 0 ||
         projectServices.length > 0 ||
-        isLegacyComposeProject(project)
+        isMultiServiceProject(project)
       )
     );
   const projectType = isServiceDeployment
@@ -936,7 +975,7 @@ export async function getBuildSessionStatus(deploymentId: string, userId: string
 // ─── Cancel build session ────────────────────────────────────────────────────
 
 export async function cancelBuildSession(deploymentId: string, userId: string) {
-  const { dep, project } = await loadDeploymentForUser(deploymentId, userId);
+  const { dep, project } = await loadDeployment(deploymentId);
 
   if (!["queued", "building", "deploying"].includes(dep.status)) {
     throw new ForbiddenError("Cannot cancel a deployment that is not in progress");
@@ -954,10 +993,8 @@ export async function cancelBuildSession(deploymentId: string, userId: string) {
   // 2. Tear down whatever the deploy had already provisioned. The shared
   //    deployment manifest enumerates ALL containers (deployment + each
   //    service) and ALL images (deployment + each service's built image),
-  //    deduplicated. Before this refactor cancel only touched dep.imageRef
-  //    and dep.containerId, leaking per-service images/containers from
-  //    compose deploys that died mid-pipeline. Volumes are deliberately
-  //    NOT cleaned - cancel != delete, and the user may retry.
+  //    deduplicated. Volumes are deliberately NOT cleaned - cancel !=
+  //    delete, and the user may retry.
   const manifest = await collectDeploymentManifest(dep, project).catch(
     (): CleanupManifest => ({ projectId: dep.projectId, resources: [] }),
   );
@@ -1003,7 +1040,7 @@ export async function redeployBuildSession(
   userId: string,
   opts?: { useExistingCommit?: boolean },
 ) {
-  const { dep: oldDep, project } = await loadDeploymentForUser(deploymentId, userId);
+  const { dep: oldDep, project } = await loadDeployment(deploymentId);
   const resolvedBranch = await resolveProjectBranch(userId, project, oldDep.branch ?? undefined);
 
   // Prefer the old deployment's snapshot; fall back to a fresh one from the project
@@ -1035,10 +1072,10 @@ export async function redeployBuildSession(
   // the redeploy must see the current shape - otherwise newly-added Postgres
   // / Redis / etc. rows would sit in the DB but never actually deploy.
   //
-  // Since the monorepo fan-out unification, listProjectComposeServices
-  // returns BOTH kind="compose" AND kind="monorepo" rows. So this refresh
-  // picks up newly-added sub-apps too (e.g. a user adding `apps/admin` to
-  // a project that previously had only `apps/web`).
+  // listProjectComposeServices returns BOTH kind="compose" AND
+  // kind="monorepo" rows, so this refresh picks up newly-added sub-apps too
+  // (e.g. a user adding `apps/admin` to a project that previously had only
+  // `apps/web`).
   //
   // We deliberately don't touch `serviceDeploymentMode` - the downstream
   // pipeline gate (shouldUseProjectServicePipeline) re-queries the DB and
@@ -1056,6 +1093,7 @@ export async function redeployBuildSession(
   const dep = await createQueuedDeployment({
     projectId: project.id,
     userId,
+    organizationId: project.organizationId ?? null,
     branch,
     commitSha,
     commitMessage,
@@ -1084,7 +1122,7 @@ export async function redeployBuildSession(
 // ─── Start build from session ID (direct - no token) ─────────────────────────
 
 export async function startBuild(deploymentId: string, userId: string) {
-  const { dep, project } = await loadDeploymentForUser(deploymentId, userId);
+  const { dep, project } = await loadDeployment(deploymentId);
 
   // Idempotent for already-running / completed deployments. redeploy now
   // auto-triggers the build, but the existing main-deploy UI still POSTs
@@ -1128,9 +1166,11 @@ export async function triggerDeployment(
   },
 ) {
   const project = await repos.project.findById(data.projectId);
-  if (!project || project.userId !== userId) {
+  if (!project) {
     throw new NotFoundError("Project", data.projectId);
   }
+  // Org-membership verified at the route boundary. No userId equality
+  // check here — that would block team members.
 
   if (!project.gitUrl && !project.localPath) {
     throw new ForbiddenError("Project has no git repository or local path configured");
@@ -1149,6 +1189,7 @@ export async function triggerDeployment(
     userId,
     gitOwner: project.gitOwner,
     projectId: project.id,
+    organizationId: project.organizationId ?? undefined,
   });
 
   // Copy env vars from project (already encrypted in env_var table)
@@ -1167,6 +1208,7 @@ export async function triggerDeployment(
   const dep = await createQueuedDeployment({
     projectId: project.id,
     userId,
+    organizationId: project.organizationId ?? null,
     branch,
     commitSha,
     commitMessage,
@@ -1226,7 +1268,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
   try {
     // ── Resolve the full execution platform from deployment snapshot ──
     const resolved = await resolveDeploymentPlatform(snapshot, {
-      userId: dep.userId,
+      organizationId: dep.organizationId,
       basePlatform: plat,
     });
 
@@ -1277,11 +1319,25 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
     // resolver chain (token never leaves the API); remote builds in App
     // mode are installation-only; remote builds in non-App modes still
     // ship the user's token but the preflight check warns first.
+    //
+    // Org scoping: pass the project's organizationId so the App installation
+    // lookup uses (organizationId, owner). The resolver falls back to the
+    // per-user installation row when the org has none, but the org path is
+    // the canonical one for multi-user deploys.
+    // Pick any org member to attribute the GitHub token lookup to.
+    // The org-scoped App installation lookup in tokenFor doesn't require a
+    // specific user, but the per-user PAT fallback does — so we forward the
+    // first member as the "actor" for that path.
+    const orgMembers = await repos.member
+      .listByOrganization(dep.organizationId)
+      .catch(() => [] as Array<{ userId: string }>);
+    const actorUserId = orgMembers[0]?.userId ?? "";
     const gitToken = await resolveBuildGitToken({
-      userId: dep.userId,
+      userId: actorUserId,
       projectId: project.id,
       owner: project.gitOwner ?? undefined,
       buildStrategy: snapshot.buildStrategy ?? "server",
+      organizationId: dep.organizationId,
     });
 
     // Monorepo sub-app rows (kind="monorepo") fan out through the standard
@@ -1640,7 +1696,7 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
     );
     const preBackup = await firePreDeployBackups({
       projectId: project.id,
-      userId: dep.userId,
+      organizationId: dep.organizationId,
     });
     if (preBackup.enqueued > 0 || preBackup.failed > 0) {
       logger.log(
@@ -1650,7 +1706,7 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
   } catch (err) {
     logger.log(
       `[pre-deploy-backup] trigger crashed (ignoring, best-effort): ${
-        err instanceof Error ? err.message : String(err)
+        safeErrorMessage(err)
       }`,
     );
   }
@@ -1687,7 +1743,7 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
     obsoleteProjectDomains,
     routing,
     usesManagedRouting,
-    userId: dep.userId,
+    organizationId: dep.organizationId,
     serverId: snapshot.serverId,
     // prevDep is intentionally NOT passed to runPostDeploySync anymore —
     // the RollbackOrchestrator below owns prev-artifact lifecycle now.
@@ -1704,9 +1760,7 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
 
   // Hand the previous-active deployment over to the rollback orchestrator.
   // It archives the artifact (preserves rollback eligibility), sets
-  // artifact_retained_at on both prev + new, and runs retention prune
-  // — superseding the legacy pruneRetainedBareReleases / one-step-behind
-  // image deletion that used to live in runPostDeploySync.
+  // artifact_retained_at on both prev + new, and runs retention prune.
   const { onDeploymentReady } = await import("./rollback");
   const finalDep = await repos.deployment.findById(dep.id);
   if (finalDep) {
@@ -1725,32 +1779,32 @@ async function runPostDeploySync(opts: {
   obsoleteProjectDomains: Domain[];
   routing: Awaited<ReturnType<typeof platform>>["routing"];
   usesManagedRouting: boolean;
-  userId: string;
+  organizationId: string;
   serverId?: string;
   logger: BuildLogger;
 }): Promise<void> {
   const {
     plannedDomains, obsoleteProjectDomains, routing, usesManagedRouting,
-    userId, serverId, logger,
+    organizationId, serverId, logger,
   } = opts;
 
   if (usesManagedRouting) {
     for (const domain of plannedDomains.filter((d) => d.isCloud && d.managedSubdomain)) {
       logger.log(`Syncing managed edge proxy for ${domain.hostname}...\n`);
-      await ensureManagedEdgeProxy(userId, domain.managedSubdomain!, { serverId });
+      await ensureManagedEdgeProxy(organizationId, domain.managedSubdomain!, { serverId });
     }
   }
 
   for (const domain of obsoleteProjectDomains) {
     if (routing) {
       await routing.removeRoute(domain.hostname).catch((err) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = safeErrorMessage(err);
         logger.log(`Warning: failed to remove stale route ${domain.hostname}: ${message}\n`, "warn");
       });
     }
 
     await repos.domain.remove(domain.id).catch((err) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       logger.log(`Warning: failed to remove stale domain record ${domain.hostname}: ${message}\n`, "warn");
     });
   }

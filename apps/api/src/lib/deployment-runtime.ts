@@ -10,7 +10,7 @@ import type { Deployment } from "@repo/db";
 import { repos } from "@repo/db";
 import type { DeployTarget, RuntimeMode } from "@repo/core";
 import { env } from "../config";
-import { cloudPagesProxy, getCloudToken } from "./cloud-client";
+import { cloudPagesProxy, getOrgCloudToken } from "./cloud-client";
 import { platform } from "./controller-helpers";
 import { buildSshConfig, sshManager } from "./ssh-manager";
 
@@ -66,35 +66,37 @@ function usesManagedRouting(base: Platform["target"], effectiveTarget: DeployTar
   return base === "selfhosted" || (base === "desktop" && (effectiveTarget === "server" || effectiveTarget === "local"));
 }
 
-async function resolveCloudPlatformForUser(userId?: string): Promise<Platform> {
-  if (!userId) {
-    throw new Error("Cannot resolve cloud deployment platform without a user ID");
+/**
+ * Resolve a cloud-target Platform using ANY cloud-linked org member's
+ * token. The deployment doesn't carry a user_id anymore — its
+ * `organization_id` is the source of truth. We pick whichever member
+ * has linked their Openship Cloud account and use their token to mint
+ * cloud requests on behalf of the org.
+ */
+async function resolveCloudPlatformForOrg(organizationId?: string): Promise<Platform> {
+  if (!organizationId) {
+    throw new Error("Cannot resolve cloud deployment platform without an organization ID");
   }
 
-  const result = await getCloudToken(userId);
+  const result = await getOrgCloudToken(organizationId);
   if (!result) {
     throw new Error(
-      "Cannot access cloud deployment: no cloud account linked. Connect your Openship Cloud account in Settings.",
+      "Cannot access cloud deployment: no member of this organization has linked Openship Cloud. Connect via Settings.",
     );
   }
 
-  // Inject the admin-scoped pages proxy so CloudRuntime can create
-  // static pages on shared `.opsh.io` even though our `cloudToken` is
-  // namespace-scoped. The proxy hits the SaaS, which performs the call
-  // with master credentials. SaaS itself (no token here, master creds)
-  // skips `resolveCloudPlatformForUser` entirely.
   return createPlatform({
     target: "cloud",
     cloudToken: result.token,
     cloudAdminProxy: {
-      createPage: (input) => cloudPagesProxy(userId, input),
+      createPage: (input) => cloudPagesProxy(organizationId, input),
     },
   });
 }
 
 export async function resolveDeploymentPlatform(
   snapshot: DeploymentMeta,
-  opts?: { userId?: string; basePlatform?: Platform },
+  opts?: { organizationId?: string; basePlatform?: Platform },
 ): Promise<ResolvedDeploymentPlatform> {
   const basePlatform = opts?.basePlatform ?? platform();
   const effectiveTarget = resolveEffectiveTarget(basePlatform.target, snapshot);
@@ -112,12 +114,12 @@ export async function resolveDeploymentPlatform(
     };
   }
 
-  const needsUserScopedCloudPlatform =
+  const needsOrgScopedCloudPlatform =
     (effectiveTarget === "cloud" && !env.CLOUD_MODE && basePlatform.target !== "cloud") ||
     (!env.CLOUD_MODE && basePlatform.target === "cloud");
 
-  const resolvedPlatform = needsUserScopedCloudPlatform
-    ? await resolveCloudPlatformForUser(opts?.userId)
+  const resolvedPlatform = needsOrgScopedCloudPlatform
+    ? await resolveCloudPlatformForOrg(opts?.organizationId)
     : basePlatform;
 
   return {
@@ -214,9 +216,11 @@ function toDockerSshTransport(ssh: SshConfig, executor: CommandExecutor): Docker
  * for long-lived operations (streaming).
  */
 export async function resolveDeploymentRuntime(
-  dep: Pick<Deployment, "meta" | "userId">,
+  dep: Pick<Deployment, "meta" | "organizationId">,
 ): Promise<{ runtime: RuntimeAdapter; serverId: string | null }> {
   const snapshot = (dep.meta ?? {}) as DeploymentMeta;
-  const resolved = await resolveDeploymentPlatform(snapshot, { userId: dep.userId });
+  const resolved = await resolveDeploymentPlatform(snapshot, {
+    organizationId: dep.organizationId,
+  });
   return { runtime: resolved.platform.runtime, serverId: resolved.serverId };
 }

@@ -7,8 +7,7 @@
  * layer uses), so a value encrypted by the API decrypts here.
  *
  * Encrypted form: "enc1:" + base64(iv16 || authTag16 || ciphertext)
- * Legacy plaintext (no prefix): returned verbatim — preserves backwards
- * compatibility for any row that predates encryption.
+ * Values without the prefix are returned verbatim.
  */
 
 import { createDecipheriv, createHash } from "node:crypto";
@@ -30,7 +29,7 @@ function deriveKey(): Buffer {
 
 export function decryptCredential(stored: string | null | undefined): string | undefined {
   if (stored == null || stored === "") return undefined;
-  if (!stored.startsWith(PREFIX)) return stored; // legacy plaintext
+  if (!stored.startsWith(PREFIX)) return stored;
 
   const packed = Buffer.from(stored.slice(PREFIX.length), "base64");
   if (packed.length < IV_LENGTH + AUTH_TAG_LENGTH) {

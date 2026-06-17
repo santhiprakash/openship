@@ -1,11 +1,13 @@
 import { Command } from "commander";
 
 export const deployCommand = new Command("deploy")
-  .description("Deploy the current project")
+  .description("Deploy the current project (coming soon)")
   .option("--prod", "Deploy to production")
   .option("--preview", "Create a preview deployment")
-  .action(async (opts) => {
-    // TODO: Read openship.json, upload or push, trigger deployment via API
-    const env = opts.prod ? "production" : "preview";
-    console.log(`Deploying to ${env}...`);
+  .action(() => {
+    console.error(
+      "openship deploy is not yet implemented. " +
+        "Trigger deployments from the dashboard for now.",
+    );
+    process.exit(1);
   });

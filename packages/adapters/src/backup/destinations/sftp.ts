@@ -27,6 +27,7 @@ import { PassThrough, Readable } from "node:stream";
 import { randomBytes } from "node:crypto";
 import { decryptCredential } from "../common/credentials";
 import { registerDestination } from "../registry";
+import { safeErrorMessage } from "@repo/core";
 import type {
   BackupDestination,
   BackupDestinationRow,
@@ -196,7 +197,7 @@ class SftpDestinationImpl implements BackupDestination {
     } catch (err) {
       return {
         ok: false,
-        reason: err instanceof Error ? err.message : String(err),
+        reason: safeErrorMessage(err),
       };
     }
   }

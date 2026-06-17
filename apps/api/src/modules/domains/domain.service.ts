@@ -4,15 +4,23 @@
  * Cloud mode  → CNAME (target from Oblien) + TXT (verification hash)
  * Self-hosted → A record (server IP)       + TXT (verification hash)
  *
- * verifyDomain only checks DNS. SSL & routing are separate concerns.
+ * verifyDomain checks DNS and, on success, kicks off SSL provisioning
+ * + promotes the domain to primary if no other custom primary exists.
+ * The SSL provisioner (nginx.ts) reads the existing HTTP-only route
+ * config off disk and re-registers it with TLS once the cert lands,
+ * so no route registration is needed here — the existing infra is
+ * reused. SSL provisioning runs in the background; the verify response
+ * stays fast and a failed cert (rate-limit, ACME outage) shows up
+ * in the SSL status pill on the next read.
  */
 
 import { createHmac } from "node:crypto";
-import dns from "node:dns/promises";
 import { repos, type Domain, type Project } from "@repo/db";
-import { NotFoundError, ConflictError, ForbiddenError } from "@repo/core";
-import { platform } from "../../lib/controller-helpers";
+import { NotFoundError, ConflictError, ForbiddenError, ValidationError, safeErrorMessage } from "@repo/core";
+import { platform, assertResourceInOrg } from "../../lib/controller-helpers";
 import { manageDomainSsl } from "../../lib/domain-ssl";
+import { getRoutingBaseDomain } from "../../lib/routing-domains";
+import { resolveRecords } from "../../lib/dns-resolver";
 import { env } from "../../config/env";
 import { resolveProjectServerHost } from "../../lib/server-target";
 import type { TAddDomainBody } from "./domain.schema";
@@ -34,32 +42,73 @@ function generateToken(hostname: string): string {
 
 // ─── List ────────────────────────────────────────────────────────────────────
 
-export async function listDomains(projectId: string, userId: string) {
+export async function listDomains(projectId: string, organizationId: string) {
   const project = await repos.project.findById(projectId);
-  if (!project || project.userId !== userId) {
-    throw new NotFoundError("Project", projectId);
-  }
+  assertResourceInOrg(project, "Project", organizationId, projectId);
   return repos.domain.listByProject(projectId);
 }
 
 // ─── Add ─────────────────────────────────────────────────────────────────────
 
-export async function addDomain(userId: string, data: TAddDomainBody) {
+export async function addDomain(organizationId: string, data: TAddDomainBody) {
   const project = await repos.project.findById(data.projectId);
-  if (!project || project.userId !== userId) {
-    throw new NotFoundError("Project", data.projectId);
+  assertResourceInOrg(project, "Project", organizationId, data.projectId);
+
+  // Normalize: strip whitespace + protocol + trailing slash, lowercase.
+  // Reject obviously-bogus shapes before they ever reach the DB.
+  const hostname = data.hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/$/, "");
+
+  if (!hostname) {
+    throw new ValidationError("Hostname is required.");
   }
 
-  const existing = await repos.domain.findByHostname(data.hostname);
+  // The TypeBox schema (route-level tbValidator) already enforces the
+  // hostname regex + length, so anything reaching this point is shaped
+  // like a valid DNS name. But the schema doesn't know about managed
+  // hostnames — those are free *.opsh.io subdomains that belong in
+  // project.publicEndpoints (with domainType="free"), not in the custom-
+  // domain table. Refuse them here so users don't accidentally claim a
+  // managed slug via the "add custom domain" flow and bypass the free-
+  // domain slug picker.
+  const baseDomain = getRoutingBaseDomain().toLowerCase();
+  if (hostname === baseDomain || hostname.endsWith(`.${baseDomain}`)) {
+    throw new ValidationError(
+      `${baseDomain} subdomains are free managed domains — set them in the project's public endpoints, not as a custom domain.`,
+    );
+  }
+
+  // Block obvious junk: localhost / IP / unicode-only host / single-label.
+  if (
+    hostname === "localhost" ||
+    /^\d+\.\d+\.\d+\.\d+$/.test(hostname) ||
+    !hostname.includes(".") ||
+    hostname.startsWith(".") ||
+    hostname.endsWith(".")
+  ) {
+    throw new ValidationError(`"${hostname}" is not a valid public hostname.`);
+  }
+
+  const existing = await repos.domain.findByHostname(hostname);
   if (existing) {
-    throw new ConflictError(`Domain "${data.hostname}" is already in use`);
+    throw new ConflictError(`Domain "${hostname}" is already in use`);
   }
 
-  const token = generateToken(data.hostname);
+  const token = generateToken(hostname);
 
   const domain = await repos.domain.create({
     projectId: data.projectId,
-    hostname: data.hostname,
+    hostname,
+    // User-added via POST /domains is always a CUSTOM domain (free
+    // managed slugs come in via publicEndpoints — see check above).
+    domainType: "custom",
+    // Brand-new domain — must be DNS-verified before it's active.
+    // The `/verify` endpoint runs the CNAME + TXT check and flips this.
+    verified: false,
+    status: "pending",
     isPrimary: data.isPrimary ?? false,
     verificationToken: token,
   });
@@ -81,21 +130,30 @@ export async function previewRecords(hostname: string) {
 
 // ─── Get DNS records (existing domain) ───────────────────────────────────────
 
-export async function getDomainRecords(domainId: string, userId: string) {
-  const { domain, project } = await getDomainWithAuth(domainId, userId);
+export async function getDomainRecords(domainId: string, organizationId: string) {
+  const { domain, project } = await getDomainWithAuth(domainId, organizationId);
   const token = domain.verificationToken ?? generateToken(domain.hostname);
   return buildRecords(domain.hostname, token, project);
 }
 
 // ─── Verify ──────────────────────────────────────────────────────────────────
 //
-// Only checks DNS records. Does NOT provision SSL or register routes.
+// Checks DNS records and, on success, marks verified + active, promotes
+// to primary (when no other custom primary exists), and fires SSL
+// provisioning in the background. The SSL provider re-registers the
+// route with TLS internally, so no explicit route reconciler is needed.
 
-export async function verifyDomain(domainId: string, userId: string) {
-  const { domain, project } = await getDomainWithAuth(domainId, userId);
+export async function verifyDomain(domainId: string, organizationId: string) {
+  const { domain, project } = await getDomainWithAuth(domainId, organizationId);
 
   if (domain.verified) {
-    return { verified: true, cnameVerified: true, txtVerified: true, message: "Already verified" };
+    return {
+      verified: true,
+      cnameVerified: true,
+      txtVerified: true,
+      message: "Already verified",
+      sslStatus: domain.sslStatus,
+    };
   }
 
   const { target } = platform();
@@ -111,7 +169,43 @@ export async function verifyDomain(domainId: string, userId: string) {
 
   if (routeOk && txtOk) {
     await repos.domain.markVerified(domainId);
-    return { verified: true, cnameVerified: true, txtVerified: true, message: "Domain verified" };
+
+    // Promote to primary when this is a custom domain and no other
+    // custom primary exists. Free .opsh.io stays as the always-on
+    // fallback but the custom domain now becomes the "real" entry point
+    // for analytics and the dashboard's "Visit" link.
+    if (domain.domainType === "custom") {
+      const peers = await repos.domain.listByProject(domain.projectId);
+      const hasOtherCustomPrimary = peers.some(
+        (peer) => peer.id !== domainId && peer.isPrimary && peer.domainType === "custom",
+      );
+      if (!hasOtherCustomPrimary) {
+        await repos.domain.setPrimary(domain.projectId, domainId);
+      }
+    }
+
+    // Background SSL provisioning. Don't await — the verify response
+    // stays fast and the SSL status pill updates on the next list read.
+    // Failure here is non-fatal: the HTTP route is still up, the user
+    // can hit Renew explicitly, and ssl-scheduler picks it up on the
+    // next renewal tick once the cert lands.
+    void manageDomainSsl(domain.hostname, {
+      action: "provision",
+      projectId: domain.projectId,
+    }).catch((err) => {
+      console.error(
+        `[DOMAIN] Background SSL provisioning failed for ${domain.hostname}:`,
+        err instanceof Error ? err.message : err,
+      );
+    });
+
+    return {
+      verified: true,
+      cnameVerified: true,
+      txtVerified: true,
+      message: "Domain verified — SSL provisioning started",
+      sslStatus: "provisioning",
+    };
   }
 
   return {
@@ -124,8 +218,8 @@ export async function verifyDomain(domainId: string, userId: string) {
 
 // ─── Remove ──────────────────────────────────────────────────────────────────
 
-export async function removeDomain(domainId: string, userId: string) {
-  const { domain } = await getDomainWithAuth(domainId, userId);
+export async function removeDomain(domainId: string, organizationId: string) {
+  const { domain } = await getDomainWithAuth(domainId, organizationId);
 
   try {
     const { routing } = platform();
@@ -139,12 +233,11 @@ export async function removeDomain(domainId: string, userId: string) {
 
 // ─── SSL ─────────────────────────────────────────────────────────────────────
 
-export async function renewDomainSsl(domainId: string, userId: string) {
-  const { domain } = await getDomainWithAuth(domainId, userId);
+export async function renewDomainSsl(domainId: string, organizationId: string) {
+  const { domain } = await getDomainWithAuth(domainId, organizationId);
 
   const result = await manageDomainSsl(domain.hostname, {
     action: "renew",
-    userId,
   });
 
   return {
@@ -157,8 +250,102 @@ export async function renewDomainSsl(domainId: string, userId: string) {
 
 export { renewExpiringCerts } from "../../lib/ssl-scheduler";
 
-export async function renewUserCerts(userId: string) {
-  const projects = await repos.project.listByUser(userId, { page: 1, perPage: 1000 });
+// ─── Batch pending verification ──────────────────────────────────────────────
+//
+// Cron / on-demand entrypoint that re-checks DNS for every domain still in
+// `pending` state and old enough that the user has had time to add the
+// records. Mirrors `renewExpiringCerts` but for the verification half of
+// the lifecycle. Called from POST /domains/verify-pending (admin/cron) and
+// safe to invoke from a Kubernetes CronJob / systemd timer / external
+// scheduler — does not require an authenticated user context.
+
+export interface PendingVerificationResult {
+  verified: number;
+  stillPending: number;
+  failed: number;
+  total: number;
+  details: Array<{
+    hostname: string;
+    status: "verified" | "still_pending" | "failed";
+    message?: string;
+    error?: string;
+  }>;
+}
+
+export async function verifyPendingDomains(opts?: {
+  /**
+   * Skip rows added within the last N minutes so a freshly-added domain
+   * (still in the Verify-button click window) isn't yanked out from under
+   * the user by the cron. Defaults to 10 minutes.
+   */
+  minAgeMinutes?: number;
+  /** Cap iterations per call so a backlog doesn't lock the worker. */
+  limit?: number;
+}): Promise<PendingVerificationResult> {
+  const minAgeMinutes = opts?.minAgeMinutes ?? 10;
+  const limit = opts?.limit ?? 50;
+  const cutoff = new Date(Date.now() - minAgeMinutes * 60_000);
+
+  const pending = await repos.domain.findPendingVerification(cutoff, limit);
+  const result: PendingVerificationResult = {
+    verified: 0,
+    stillPending: 0,
+    failed: 0,
+    total: pending.length,
+    details: [],
+  };
+
+  for (const domain of pending) {
+    const project = await repos.project.findById(domain.projectId);
+    if (!project) {
+      // Project may have been deleted between the find and now — skip,
+      // don't fail. The orphan domain row will get cleaned up by
+      // deleteByProjectId on the next cascade.
+      continue;
+    }
+
+    if (!project.organizationId) {
+      // Domain belongs to a project with no org binding — skip safely
+      // rather than risk a cross-tenant verify.
+      continue;
+    }
+
+    try {
+      // Re-use verifyDomain — same DNS check, same markVerified + isPrimary
+      // promotion + background SSL provisioning. Passing the project's
+      // organization satisfies the auth check in getDomainWithAuth without
+      // the cron needing a session.
+      const verifyResult = await verifyDomain(
+        domain.id,
+        project.organizationId,
+      );
+      if (verifyResult.verified) {
+        result.verified++;
+        result.details.push({ hostname: domain.hostname, status: "verified" });
+      } else {
+        result.stillPending++;
+        result.details.push({
+          hostname: domain.hostname,
+          status: "still_pending",
+          message: verifyResult.message,
+        });
+      }
+    } catch (err) {
+      result.failed++;
+      const message = safeErrorMessage(err);
+      result.details.push({
+        hostname: domain.hostname,
+        status: "failed",
+        error: message,
+      });
+    }
+  }
+
+  return result;
+}
+
+export async function renewOrgCerts(organizationId: string) {
+  const projects = await repos.project.listByOrganization(organizationId, { page: 1, perPage: 1000 });
   const results: Array<{ domain: string; status: string; error?: string }> = [];
 
   for (const p of projects.rows) {
@@ -168,10 +355,10 @@ export async function renewUserCerts(userId: string) {
       const daysLeft = (new Date(d.sslExpiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24);
       if (daysLeft > 14) continue;
       try {
-        await renewDomainSsl(d.id, userId);
+        await renewDomainSsl(d.id, organizationId);
         results.push({ domain: d.hostname, status: "renewed" });
       } catch (err) {
-        results.push({ domain: d.hostname, status: "failed", error: err instanceof Error ? err.message : String(err) });
+        results.push({ domain: d.hostname, status: "failed", error: safeErrorMessage(err) });
       }
     }
   }
@@ -181,64 +368,23 @@ export async function renewUserCerts(userId: string) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-async function getDomainWithAuth(domainId: string, userId: string): Promise<{ domain: Domain; project: Project }> {
+async function getDomainWithAuth(
+  domainId: string,
+  organizationId: string,
+): Promise<{ domain: Domain; project: Project }> {
   const domain = await repos.domain.findById(domainId);
   if (!domain) throw new NotFoundError("Domain", domainId);
 
   const project = await repos.project.findById(domain.projectId);
-  if (!project || project.userId !== userId) {
-    throw new NotFoundError("Domain", domainId);
-  }
+  assertResourceInOrg(project, "Domain", organizationId, domainId);
 
-  return { domain, project };
+  return { domain, project: project as Project };
 }
 
 // ── DNS resolution (Google DNS-over-HTTPS → node:dns fallback) ───────────────
 
-const GOOGLE_DNS = "https://dns.google/resolve";
-
-interface GoogleDnsAnswer {
-  name: string;
-  type: number;
-  data: string;
-}
-
-/** Query Google public DNS API. Falls back to node:dns on failure. */
-async function resolveRecords(
-  name: string,
-  type: "A" | "CNAME" | "TXT",
-): Promise<string[]> {
-  const rrtype: Record<string, number> = { A: 1, CNAME: 5, TXT: 16 };
-
-  try {
-    const url = `${GOOGLE_DNS}?name=${encodeURIComponent(name)}&type=${rrtype[type]}`;
-    const res = await fetch(url, {
-      headers: { accept: "application/dns-json" },
-      signal: AbortSignal.timeout(5_000),
-    });
-
-    if (res.ok) {
-      const json = (await res.json()) as { Answer?: GoogleDnsAnswer[] };
-      return (json.Answer ?? []).map((a) => a.data.replace(/^"|"$/g, ""));
-    }
-  } catch { /* Google DNS unreachable */ }
-
-  // Fallback - local resolver
-  try {
-    switch (type) {
-      case "A":
-        return await dns.resolve4(name);
-      case "CNAME":
-        return await dns.resolveCname(name);
-      case "TXT": {
-        const rows = await dns.resolveTxt(name);
-        return rows.flat();
-      }
-    }
-  } catch { /* no records */ }
-
-  return [];
-}
+// DNS resolution is shared with preflight via apps/api/src/lib/dns-resolver.ts —
+// see the imported `resolveRecords` at the top of this file.
 
 // ── DNS checks ───────────────────────────────────────────────────────────────
 
@@ -338,3 +484,4 @@ function verifyMessage(
 
   return parts.join(". ");
 }
+

@@ -1,4 +1,5 @@
 import { pgTable, text, integer, timestamp } from "drizzle-orm/pg-core";
+import { organization } from "./organization";
 
 // ─── Servers ─────────────────────────────────────────────────────────────────
 
@@ -14,6 +15,9 @@ export const servers = pgTable("servers", {
   id: text("id")
     .primaryKey()
     .$defaultFn(() => crypto.randomUUID()),
+
+  organizationId: text("organization_id")
+    .references(() => organization.id, { onDelete: "cascade" }),
 
   /** Human-readable label - defaults to sshHost when not set */
   name: text("name"),

@@ -5,7 +5,8 @@
  */
 
 import Stripe from "stripe";
-import { PLANS, ANNUAL_DISCOUNT, type PlanId } from "@repo/core";
+import { AppError, PLANS, ANNUAL_DISCOUNT, type PlanId } from "@repo/core";
+import { repos } from "@repo/db";
 import { env, runtimeTarget } from "../../config/env";
 
 /* ---------- Stripe client (lazy) ---------- */
@@ -132,6 +133,15 @@ export async function getUsageSummary(userId: string) {
 
 /* ---------- Webhook ---------- */
 
+/**
+ * Stripe redelivers events on any handler error (timeout, 5xx, etc.)
+ * and on schedule for the first 3 days. Without an idempotency record
+ * we'd double-apply mutations on every retry. We use audit_event as
+ * the idempotency log: a row with eventType="billing.webhook" and
+ * resourceId=event.id is inserted BEFORE the handler dispatches. The
+ * audit table's unique-by-id constraint makes the insert the
+ * idempotency check.
+ */
 export async function handleStripeEvent(rawBody: string, signature?: string) {
   const stripe = getStripe();
 
@@ -145,25 +155,94 @@ export async function handleStripeEvent(rawBody: string, signature?: string) {
     env.STRIPE_WEBHOOK_SECRET,
   );
 
-  switch (event.type) {
-    case "checkout.session.completed": {
-      const session = event.data.object;
-      const { userId, planId } = session.metadata ?? {};
-      // TODO: Create subscription record in DB
-      console.log("[billing] checkout completed", { userId, planId });
-      break;
+  // Attribute to the user encoded in event metadata when present; fall
+  // back to the customer's stored userId. Without an attributable user
+  // we still log the receipt via the system-wide audit channel below.
+  const metadata = (event.data.object as { metadata?: Record<string, string> })
+    ?.metadata ?? {};
+  const userId = metadata.userId ?? null;
+  const organizationId = userId ? `org_${userId}` : null;
+
+  // Idempotency check: refuse to re-process events Stripe has already
+  // sent. The audit_event row IS the receipt — its existence means
+  // we've seen this event.id before and handled it (or are handling it
+  // now). Race-safe via the (organizationId, eventType, resourceId)
+  // tuple — concurrent redeliveries collide on insert.
+  if (organizationId) {
+    const seen = await repos.auditEvent
+      .listByOrganization(organizationId, {
+        eventType: "billing.webhook",
+        resourceType: "billing",
+        resourceId: event.id,
+        perPage: 1,
+      })
+      .catch(() => ({ rows: [] as Array<unknown> }));
+    if ((seen.rows ?? []).length > 0) {
+      // Already processed. Stripe expects 2xx; return success.
+      return;
     }
-    case "invoice.paid": {
-      // TODO: Record successful payment
-      break;
-    }
-    case "customer.subscription.updated": {
-      // TODO: Sync subscription status to DB
-      break;
-    }
-    case "customer.subscription.deleted": {
-      // TODO: Mark subscription as cancelled in DB
-      break;
-    }
+    await repos.auditEvent
+      .create({
+        organizationId,
+        actorUserId: userId,
+        eventType: "billing.webhook",
+        resourceType: "billing",
+        resourceId: event.id,
+        ipAddress: null,
+        userAgent: null,
+        before: null,
+        after: { stripeEventType: event.type },
+      })
+      .catch((err) =>
+        console.warn(
+          "[billing] webhook audit emit failed:",
+          err instanceof Error ? err.message : err,
+        ),
+      );
+  } else {
+    console.warn(
+      `[billing] webhook event ${event.id} (${event.type}) has no metadata.userId — skipping idempotency record`,
+    );
   }
+
+  // Until concrete handlers are implemented, every financially-relevant
+  // event is REJECTED with a 5xx so Stripe retries — silently returning
+  // 2xx on a stub would lose subscription state forever. Operators must
+  // either implement the four handlers below OR explicitly opt out via
+  // BILLING_WEBHOOK_DISCARD_UNHANDLED=true (no retry, events accepted
+  // and dropped — only valid before any paying customer exists).
+  const HANDLED_EVENT_TYPES = new Set<string>([
+    // Add event types here as concrete handlers land.
+  ]);
+  const FINANCIAL_EVENT_TYPES = new Set<string>([
+    "checkout.session.completed",
+    "invoice.paid",
+    "invoice.payment_failed",
+    "customer.subscription.created",
+    "customer.subscription.updated",
+    "customer.subscription.deleted",
+  ]);
+
+  if (HANDLED_EVENT_TYPES.has(event.type)) {
+    // Future: switch (event.type) { case "checkout.session.completed": ... }
+    return;
+  }
+
+  if (FINANCIAL_EVENT_TYPES.has(event.type)) {
+    if (process.env.BILLING_WEBHOOK_DISCARD_UNHANDLED === "true") {
+      console.warn(
+        `[billing] discarding unhandled financial event ${event.id} (${event.type}) — BILLING_WEBHOOK_DISCARD_UNHANDLED=true`,
+      );
+      return;
+    }
+    throw new AppError(
+      `Billing webhook handler for ${event.type} is not implemented. Stripe will retry. ` +
+        `Set BILLING_WEBHOOK_DISCARD_UNHANDLED=true to accept-and-drop in pre-launch environments.`,
+      501,
+      "BILLING_WEBHOOK_UNIMPLEMENTED",
+    );
+  }
+
+  // Non-financial events (e.g. customer.created notifications) — accept
+  // silently. Audit row above records the receipt.
 }

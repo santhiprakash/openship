@@ -1,13 +1,17 @@
 /**
- * @module clone-auth (compat shim)
+ * @module clone-auth
  *
- * This file used to be the place for clone-token resolution. That logic
- * now lives in ONE place: `github.token.ts` → `tokenFor(userId, purpose, ctx)`.
+ * Thin adapter over the unified token dispatcher in `github.token.ts` for
+ * the deploy pipeline. The dispatcher (`tokenFor(userId, purpose, ctx)`)
+ * already encodes the full priority chain; this file only translates the
+ * deploy-specific `buildStrategy` discriminator into a `purpose`:
  *
- * The exports below are thin wrappers preserved so existing callers
- * (`build.service.ts:resolveBuildGitToken`) don't break in this refactor.
- * Once those callers migrate to `tokenFor` directly, this file can be
- * deleted.
+ *   - buildStrategy="local"  → tokenFor(..., "local")
+ *   - buildStrategy="server" → requireTokenFor(..., "remote")
+ *
+ * gh CLI tokens are never returned for "remote" — that policy lives in
+ * `tokenFor("remote", ...)` and the rejection happens before this
+ * function ever sees a token.
  *
  * Token priority (single source of truth — see github.token.ts):
  *   - purpose: "local"  → project > user-pat > gh CLI > App > OAuth
@@ -15,67 +19,21 @@
  */
 
 import { type BuildStrategy } from "@repo/core";
-import {
-  tokenFor,
-  requireTokenFor,
-  type GitHubTokenSource,
-  type TokenContext,
-} from "./github.token";
+import { tokenFor, requireTokenFor, type TokenContext } from "./github.token";
 
-// ─── Back-compat types ─────────────────────────────────────────────────────
-
-/** Sources the old `resolveCloneToken` could return. The new dispatcher
- *  uses a slightly different union (see GitHubTokenSource in github.token.ts);
- *  this re-export keeps the existing imports stable. */
-export type CloneTokenSource = GitHubTokenSource | "mode-default" | "none";
-
-export interface CloneTokenResult {
-  token: string | null;
-  source: CloneTokenSource;
-}
-
-export interface ResolveCloneTokenOpts {
-  projectId: string;
-  userId: string;
-  owner?: string | null;
-}
-
-// ─── Wrappers around tokenFor ──────────────────────────────────────────────
-
-/**
- * Resolve a clone token for a LOCAL build.
- * → `tokenFor(userId, "local", ctx)`.
- */
-export async function resolveCloneToken(
-  opts: ResolveCloneTokenOpts,
-): Promise<CloneTokenResult> {
-  const ctx: TokenContext = {
-    projectId: opts.projectId,
-    owner: opts.owner ?? undefined,
-  };
-  const r = await tokenFor(opts.userId, "local", ctx);
-  if (!r) return { token: null, source: "none" };
-  return { token: r.token, source: r.source };
-}
-
-/**
- * Resolve a clone token for a deploy.
- *   - `buildStrategy="local"`  → `tokenFor(..., "local")`
- *   - `buildStrategy="server"` → `requireTokenFor(..., "remote")` (throws on miss)
- *
- * gh CLI tokens are NEVER returned for `server` builds — that policy is
- * encoded inside `tokenFor("remote", ...)` and refused before this
- * function ever sees a token.
- */
 export async function resolveBuildGitToken(opts: {
   userId: string;
   projectId: string;
   owner?: string | null;
   buildStrategy: BuildStrategy;
+  /** Active organization id — prefers org-scoped App installation lookup.
+   *  See TokenContext for details. */
+  organizationId?: string;
 }): Promise<string | null> {
   const ctx: TokenContext = {
     projectId: opts.projectId,
     owner: opts.owner ?? undefined,
+    organizationId: opts.organizationId,
   };
 
   if (opts.buildStrategy === "local") {

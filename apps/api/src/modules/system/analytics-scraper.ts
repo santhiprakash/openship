@@ -18,6 +18,7 @@
 import { repos } from "@repo/db";
 import { systemDebug, formatDuration } from "../../lib/system-debug";
 import { fetchMgmt, postMgmt, probeMgmt } from "../../lib/project-analytics";
+import { safeErrorMessage } from "@repo/core";
 
 function debug(msg: string): void {
   systemDebug("analytics-scraper", msg);
@@ -129,12 +130,12 @@ async function scrapeAll(): Promise<void> {
       try {
         await scrapeServer(server.id);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = safeErrorMessage(err);
         debug(`scrape-all:server-error server=${server.id} ${msg}`);
       }
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     debug(`scrape-all:error ${msg}`);
   }
 }

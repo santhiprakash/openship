@@ -6,12 +6,17 @@ import { repos } from "@repo/db";
 import { NotFoundError, ValidationError } from "@repo/core";
 import type { LogEntry } from "@repo/adapters";
 import { resolveDeploymentRuntime } from "../../lib/deployment-runtime";
+import { assertResourceInOrg } from "../../lib/controller-helpers";
 
 // ─── Runtime logs ────────────────────────────────────────────────────────────
 
-export async function getRuntimeLogs(projectId: string, userId: string, tail?: number) {
+export async function getRuntimeLogs(
+  projectId: string,
+  organizationId: string,
+  tail?: number,
+) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   if (!p.activeDeploymentId) {
     throw new NotFoundError("No active deployment for project", projectId);
@@ -28,12 +33,12 @@ export async function getRuntimeLogs(projectId: string, userId: string, tail?: n
 
 export async function streamRuntimeLogs(
   projectId: string,
-  userId: string,
+  organizationId: string,
   onLog: (entry: LogEntry) => void,
   opts?: { tail?: number },
 ) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   if (!p.activeDeploymentId) {
     throw new NotFoundError("No active deployment for project", projectId);
@@ -51,9 +56,9 @@ export async function streamRuntimeLogs(
 
 // ─── Enable / Disable ────────────────────────────────────────────────────────
 
-export async function enableProject(projectId: string, userId: string) {
+export async function enableProject(projectId: string, organizationId: string) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   if (!p.activeDeploymentId) {
     throw new ValidationError("No deployment to enable - deploy first");
@@ -69,9 +74,9 @@ export async function enableProject(projectId: string, userId: string) {
   return { success: true, message: "Project enabled" };
 }
 
-export async function disableProject(projectId: string, userId: string) {
+export async function disableProject(projectId: string, organizationId: string) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   if (!p.activeDeploymentId) {
     return { success: true, message: "No active deployment" };
@@ -86,3 +91,5 @@ export async function disableProject(projectId: string, userId: string) {
   await runtime.stop(dep.containerId);
   return { success: true, message: "Project disabled" };
 }
+
+

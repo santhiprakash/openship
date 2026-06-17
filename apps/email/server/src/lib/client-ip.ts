@@ -1,28 +1,21 @@
 /**
  * Resolve the calling client's IP address for rate-limiting / audit logging.
  *
- * Precedence:
- *   1. `X-Forwarded-For` (first hop) - set by reverse proxies (Caddy, nginx).
- *   2. `X-Real-IP`                   - alternate proxy convention.
- *   3. Bun's socket-level remote address via `getConnInfo`.
- *   4. "unknown" if nothing is available (shouldn't happen in practice).
+ * Openship's deploy topology always fronts this Bun process with
+ * openresty/nginx inside the orchestrator stack. The reverse proxy
+ * populates `X-Real-IP` with the originating client address and
+ * strips/rewrites anything inbound. We trust that header at face
+ * value and ignore `X-Forwarded-For` entirely.
  *
- * NOTE: proxy headers are only meaningful when a trusted proxy sets them.
- * If you expose this server directly to the internet without a proxy, an
- * attacker can spoof XFF and dodge the rate limiter. Production deploys
- * should always sit behind a reverse proxy that strips/rewrites these
- * headers before they reach this process.
+ * If we ever lose the proxy (direct exposure) the function returns
+ * the socket-level remote (or "unknown"), so rate limiters still
+ * have a bucket — but that path should never happen in production.
  */
 
 import { getConnInfo } from 'hono/bun';
 import type { Context } from 'hono';
 
 export function clientIp(c: Context): string {
-  const xff = c.req.header('x-forwarded-for');
-  if (xff) {
-    const first = xff.split(',')[0]?.trim();
-    if (first) return first;
-  }
   const realIp = c.req.header('x-real-ip')?.trim();
   if (realIp) return realIp;
   try {

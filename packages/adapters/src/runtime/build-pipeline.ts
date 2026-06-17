@@ -12,6 +12,7 @@
  */
 
 import type { BuildConfig, BuildStep, LogEntry, LogCallback } from "../types";
+import { safeErrorMessage } from "@repo/core";
 
 // ─── BuildLogger - single source of truth for step + log events ─────────────
 
@@ -56,7 +57,7 @@ export class BuildLogger {
       await fn();
       this.step(step, "completed", `${label} - done`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = safeErrorMessage(err);
       this.step(step, "failed", `${label} - ${msg}`);
       throw err;
     }
@@ -222,7 +223,7 @@ export async function runBuildPipeline(
     return { status: "deploying", durationMs };
   } catch (err) {
     const durationMs = Date.now() - startTime;
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorMessage = safeErrorMessage(err);
 
     return { status: "failed", failedStep: currentStep, durationMs, errorMessage };
   }

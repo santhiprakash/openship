@@ -17,6 +17,7 @@ import { systemCatalog } from "./catalog";
 import { getSystemComponentDefinition, SYSTEM_COMPONENTS } from "./components";
 import { formatDuration, systemDebug } from "./debug";
 import { isRemoteConnectionError } from "./errors";
+import { safeErrorMessage } from "@repo/core";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -38,11 +39,11 @@ async function tryExec(
     if (isRemoteConnectionError(err)) {
       systemDebug(
         "checks",
-        `exec:abort ${command} (${formatDuration(startedAt)}) ${err instanceof Error ? err.message : String(err)}`,
+        `exec:abort ${command} (${formatDuration(startedAt)}) ${safeErrorMessage(err)}`,
       );
       throw err;
     }
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     systemDebug(
       "checks",
       `exec:fail ${command} (${formatDuration(startedAt)}) ${msg}`,

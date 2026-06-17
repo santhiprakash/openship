@@ -12,14 +12,13 @@ import {
   Pencil,
   Power,
   Plus,
-  Shield,
+  RefreshCw,
   ShieldAlert,
-  ShieldCheck,
   X,
 } from "lucide-react";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { invalidateProjectCaches } from "@/hooks/useProjectEndpoints";
-import { getApiErrorMessage, projectsApi, deployApi, serviceKind, servicesApi, type Service, type ServiceInput } from "@/lib/api";
+import { getApiErrorMessage, projectsApi, deployApi, domainsApi, serviceKind, servicesApi, type Service, type ServiceInput } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
 import { usePlatform } from "@/context/PlatformContext";
 import { resolveServiceHostnameLabel } from "@repo/core";
@@ -40,13 +39,22 @@ interface DnsRecord {
 type DomainTone = "success" | "warning" | "danger" | "neutral";
 
 interface DomainSummaryItem {
+  /** Unique key for React iteration — endpoint id OR hostname when no endpoint. */
   id: string;
+  /**
+   * Backing domain row id (`dom_...`). Required for POST /domains/:id/verify.
+   * Undefined when the endpoint exists in publicEndpoints draft but the
+   * corresponding domain row hasn't been persisted yet (pre-save state).
+   */
+  domainId?: string;
   title: string;
   hostname: string;
   typeLabel: string;
   mappedLabel: string;
   liveUrl: string;
   isPrimary: boolean;
+  /** True when the row exists in DB but verified=false / status=pending. */
+  needsVerify: boolean;
   status: { label: string; tone: DomainTone };
   ssl: { label: string; tone: DomainTone };
 }
@@ -196,21 +204,42 @@ export const DomainSettings = () => {
     refreshServices,
   } = useProjectSettings();
   const { showToast } = useToast();
-  const { baseDomain } = usePlatform();
+  const { baseDomain, selfHosted } = usePlatform();
 
   const [newDomain, setNewDomain] = useState("");
   const [showCustomDomainSection, setShowCustomDomainSection] = useState(false);
   const [includeWww, setIncludeWww] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [sslData, setSSLData] = useState<any>(null);
-  const [isLoadingSSL, setIsLoadingSSL] = useState(false);
-  const [isRenewingSSL, setIsRenewingSSL] = useState(false);
+  // Hostname of the row currently running its Renew action. Null when no
+  // renew is in flight. Per-row so multi-domain projects can renew one
+  // cert without blanking the button on every other row.
+  const [renewingHostname, setRenewingHostname] = useState<string | null>(null);
   const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
-  const [dnsMode, setDnsMode] = useState<"cloud" | "selfhosted">("cloud");
+  // Live preview of the DNS records the user will need to apply, derived
+  // from the hostname they're typing. For self-hosted projects the
+  // records are fully deterministic (server's A record + HMAC-derived
+  // TXT challenge) so we can render them BEFORE Connect — the user can
+  // copy them into their DNS provider while we wait for them to commit
+  // the row. For cloud projects, preview is skipped: the CNAME target
+  // comes from Oblien, which requires a network round trip per keystroke,
+  // so we keep the "Connect first" flow there.
+  const [previewedRecords, setPreviewedRecords] = useState<DnsRecord[]>([]);
+  // The domain row that the DNS Records panel below is currently showing
+  // records for. Populated on successful connectDomain so the panel's
+  // bottom CTA can re-run verify against the exact row the user just
+  // created (instead of guessing by hostname).
+  const [pendingVerifyDomain, setPendingVerifyDomain] = useState<{
+    id: string;
+    hostname: string;
+  } | null>(null);
   const [editingRouteServiceId, setEditingRouteServiceId] = useState<string | null>(null);
   const [routeSavingServiceId, setRouteSavingServiceId] = useState<string | null>(null);
   const [isSavingPublicEndpoints, setIsSavingPublicEndpoints] = useState(false);
   const [isEditingDomains, setIsEditingDomains] = useState(false);
+  // Tracks the per-domain Verify button state. Holds the domainId of the
+  // row currently running its verify check so the button can spin and
+  // disable. Null when no verify is in flight.
+  const [verifyingDomainId, setVerifyingDomainId] = useState<string | null>(null);
   const services = servicesData.services;
   const servicesLoading = servicesData.isLoading;
   const hasProjectServer = projectData.options?.hasServer ?? buildData.hasServer ?? true;
@@ -246,7 +275,7 @@ export const DomainSettings = () => {
     );
 
     return endpointSource
-      .map((endpoint: any, index: number) => {
+      .map((endpoint: any, index: number): DomainSummaryItem | null => {
         const hostname = resolveProjectEndpointHostname(endpoint, baseDomain);
         if (!hostname) return null;
 
@@ -258,8 +287,17 @@ export const DomainSettings = () => {
           ? String(endpoint.port)
           : projectRuntimePort;
 
+        // domainId comes from the persisted domain row, NOT the endpoint
+        // — the verify endpoint at POST /domains/:id/verify keys on the
+        // dom_... row id. Without this, the Verify button has nothing to
+        // call. needsVerify is true ONLY when the row exists in DB
+        // (domain is non-null) AND verified is explicitly false.
+        const domainId = typeof domain?.id === "string" ? domain.id : undefined;
+        const needsVerify = !!domain && domain.verified === false;
+
         return {
           id: endpoint?.id || hostname,
+          domainId,
           title: index === 0 ? "Primary domain" : `Domain ${index + 1}`,
           hostname,
           typeLabel: endpoint?.domainType === "custom" ? "Custom domain" : "Free subdomain",
@@ -268,9 +306,10 @@ export const DomainSettings = () => {
             : (endpoint?.targetPath || "/"),
           liveUrl: `https://${hostname}`,
           isPrimary: index === 0,
+          needsVerify,
           status: resolveDomainStatus(domain),
           ssl: resolveDomainSsl(hostname, domain, baseDomain),
-        } satisfies DomainSummaryItem;
+        };
       })
       .filter((domain): domain is DomainSummaryItem => domain !== null);
   }, [projectData.publicEndpoints, publicEndpoints, domainsData.domains, baseDomain, hasProjectServer, projectRuntimePort]);
@@ -284,8 +323,6 @@ export const DomainSettings = () => {
   const currentUrl = hasDomain ? primaryDomainName : localUrl;
   const currentHref = hasDomain ? `https://${primaryDomainName}` : `http://${localUrl}`;
   const isManagedHostDomain = hasDomain && primaryDomainName.endsWith(`.${baseDomain}`);
-  const dnsRouteValue = dnsRecords.find((record) => record.type !== "TXT")?.value || "";
-
   useEffect(() => {
     setPublicEndpoints(draftPublicEndpoints);
   }, [draftPublicEndpoints]);
@@ -326,25 +363,12 @@ export const DomainSettings = () => {
     };
   }, [hasDomain, isManagedHostDomain, domainSummaries.length, primaryProjectDomain]);
 
-  useEffect(() => {
-    const fetchSSLStatus = async () => {
-      if (!primaryDomainName || isManagedHostDomain) return;
-
-      setIsLoadingSSL(true);
-      try {
-        const result = await deployApi.sslStatus(primaryDomainName);
-        if (result.success) {
-          setSSLData(result);
-        }
-      } catch (error) {
-        console.error("Failed to fetch SSL status:", error);
-      } finally {
-        setIsLoadingSSL(false);
-      }
-    };
-
-    void fetchSSLStatus();
-  }, [primaryDomainName, isManagedHostDomain]);
+  // The previous live SSL fetch (deployApi.sslStatus) only ran for the
+  // primary domain — useless for multi-domain projects, redundant for
+  // single-domain projects since `domain.sslStatus` on the row carries
+  // the same info. Each DomainOverviewCard now reads ssl directly from
+  // its own DB row via resolveDomainSsl(), so no per-page fetch is
+  // needed and adding domains stays free of N extra HTTP calls.
 
   useEffect(() => {
     if (!editingRouteServiceId) return;
@@ -353,48 +377,150 @@ export const DomainSettings = () => {
     }
   }, [editingRouteServiceId, services]);
 
+  // Live-preview DNS records as the user types — self-hosted only.
+  //
+  // For a self-hosted API the verification text is fully deterministic:
+  //   - A record points to env.SERVER_IP (no API call needed)
+  //   - TXT challenge is HMAC(hostname, BETTER_AUTH_SECRET) — also no
+  //     external call
+  //
+  // So we can show the records BEFORE the user clicks Connect — they
+  // can copy them into their DNS provider, propagation starts ticking,
+  // and Connect just commits the row to the DB. For cloud projects the
+  // CNAME target comes from Oblien (one network call per keystroke),
+  // so we keep the "Connect first" flow there to avoid hammering Oblien.
+  //
+  // Local validity guard mirrors the backend (addDomain): must have a
+  // dot, not end with the managed suffix, not be an IP literal. We
+  // skip preview for invalid input rather than firing a doomed request.
+  useEffect(() => {
+    if (!showCustomDomainSection || !selfHosted) {
+      setPreviewedRecords([]);
+      return;
+    }
+    const trimmed = newDomain.trim().toLowerCase();
+    const baseLower = baseDomain.toLowerCase();
+    const looksValid =
+      trimmed.length > 0 &&
+      trimmed.includes(".") &&
+      !trimmed.startsWith(".") &&
+      !trimmed.endsWith(".") &&
+      !/^\d+\.\d+\.\d+\.\d+$/.test(trimmed) &&
+      trimmed !== baseLower &&
+      !trimmed.endsWith(`.${baseLower}`);
+
+    if (!looksValid) {
+      setPreviewedRecords([]);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const result = await domainsApi.previewRecords(trimmed);
+        if (cancelled) return;
+        if (result?.data?.records) {
+          setPreviewedRecords(result.data.records);
+        } else {
+          setPreviewedRecords([]);
+        }
+      } catch {
+        // Preview is best-effort — a failed lookup just hides the panel.
+        // The user can still click Connect and see records via the
+        // canonical /connect path's response.
+        if (!cancelled) setPreviewedRecords([]);
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [newDomain, selfHosted, showCustomDomainSection, baseDomain]);
+
   const handleSubmitDomains = async () => {
     const trimmedDomain = newDomain.trim();
     if (!trimmedDomain) return;
 
     setIsSubmitting(true);
 
-    const result = await projectsApi.connectDomain(id, {
-      domain: trimmedDomain,
-      includeWww,
-    });
+    // api.post THROWS on non-2xx (ApiError carrying body + status). Without
+    // a try/catch the spinner stuck on forever when the backend rejected
+    // the hostname (ValidationError on .opsh.io / IP / conflict, etc.) and
+    // the user never saw a toast — they just saw the loader spin. Wrap
+    // the whole flow so every exit path either toasts and clears the
+    // spinner, or surfaces a generic message + clears the spinner.
+    try {
+      const result = await projectsApi.connectDomain(id, {
+        domain: trimmedDomain,
+        includeWww,
+      });
 
-    if (!result.success) {
+      // Legacy "success: false" envelope path — some old endpoints return
+      // 200 with { success: false }. Keep handling it for parity with the
+      // rest of the codebase.
+      if (!result.success) {
+        showToast(
+          result.error || "Failed to connect domain",
+          "error",
+          result.message || "Failed to connect domain",
+        );
+        return;
+      }
+
+      if (result.records?.records) {
+        setDnsRecords(result.records.records);
+      }
+
+      // Remember the row the user just connected so the DNS Records panel
+      // can surface a Verify CTA after they paste the records into their
+      // DNS provider. We only set this when the backend returned a real
+      // dom_... id — without that the Verify endpoint has nothing to call.
+      if (typeof result.domain?.id === "string") {
+        setPendingVerifyDomain({ id: result.domain.id, hostname: trimmedDomain });
+      } else {
+        setPendingVerifyDomain(null);
+      }
+
+      // The backend creates the domain row with verified=false + status=pending.
+      // Reflect that locally rather than lying with `verified: true` — the
+      // user still has to add the DNS records (now visible below) and click
+      // Verify before the row actually goes live.
+      const newDomainObj = {
+        id: result.domain?.id ?? Date.now(),
+        domain: trimmedDomain,
+        hostname: trimmedDomain,
+        primary: domainsData.domains.length === 0,
+        verified: false,
+        status: "pending" as const,
+      };
+
+      const updatedDomains = [
+        ...domainsData.domains.map((d) => ({
+          ...d,
+          primary: newDomainObj.primary ? false : d.primary,
+        })),
+        newDomainObj,
+      ];
+
+      updateDomains(updatedDomains);
       showToast(
-        result.error || "Failed to connect domain",
-        "error",
-        result.message || "Failed to connect domain",
+        `${trimmedDomain} added — apply the DNS records below, then click Verify.`,
+        "success",
+        "Domain pending verification",
       );
+      setShowCustomDomainSection(true);
+    } catch (err) {
+      // 4xx/5xx path — getApiErrorMessage walks the ApiError body looking
+      // for the standard {error, message} shape the API throws via
+      // ValidationError/ConflictError/etc. Fall back to a generic line if
+      // it can't extract anything readable.
+      console.error("Failed to connect domain:", err);
+      const message = getApiErrorMessage(err) || "Failed to connect domain";
+      showToast(message, "error", "Connect domain failed");
+    } finally {
       setIsSubmitting(false);
-      return;
     }
-
-    if (result.records?.records) {
-      setDnsRecords(result.records.records);
-      setDnsMode(result.records.mode ?? "cloud");
-    }
-
-    const newDomainObj = {
-      id: Date.now(),
-      domain: trimmedDomain,
-      primary: true,
-      verified: true,
-    };
-
-    const updatedDomains = [
-      ...domainsData.domains.map((d) => ({ ...d, primary: false })),
-      newDomainObj,
-    ];
-
-    await updateDomains(updatedDomains);
-    showToast("Domain connected", "success", "DNS records are ready below");
-    setIsSubmitting(false);
-    setShowCustomDomainSection(true);
   };
 
   const handleCopy = async (text: string) => {
@@ -403,31 +529,77 @@ export const DomainSettings = () => {
     showToast("Copied to clipboard", "success");
   };
 
-  const handleRenewSSL = async () => {
-    if (!primaryDomainName) return;
+  const handleVerifyDomain = async (domainId: string, hostname: string) => {
+    // Guard: ignore re-clicks while a verify is in flight for this row.
+    if (verifyingDomainId) return;
+    setVerifyingDomainId(domainId);
 
-    setIsRenewingSSL(true);
     try {
-      const result = await deployApi.sslRenew(primaryDomainName, false);
+      const result = await domainsApi.verify(domainId);
+
+      if (result.verified) {
+        // Optimistically flip the local row so the Pending pill becomes
+        // Verified without waiting for the next /info refetch. The next
+        // invalidateProjectCaches below catches the canonical state
+        // (including sslStatus transitions from the background provision).
+        const updatedDomains = domainsData.domains.map((d) =>
+          d.id === domainId
+            ? { ...d, verified: true, status: "active", sslStatus: result.sslStatus ?? d.sslStatus }
+            : d,
+        );
+        updateDomains(updatedDomains);
+        invalidateProjectCaches(id);
+        showToast(
+          result.message || `${hostname} verified — SSL is provisioning in the background.`,
+          "success",
+          "Domain verified",
+        );
+      } else {
+        // 422 path. result.cnameVerified/txtVerified explain what's
+        // still missing so the user knows whether DNS hasn't propagated
+        // OR they forgot the TXT challenge. Surface verbatim.
+        showToast(
+          result.message || `${hostname} could not be verified yet.`,
+          "error",
+          "Verification failed",
+        );
+      }
+    } catch (err) {
+      console.error("Failed to verify domain:", err);
+      showToast(
+        getApiErrorMessage(err) || "Failed to verify domain.",
+        "error",
+        "Verification failed",
+      );
+    } finally {
+      setVerifyingDomainId(null);
+    }
+  };
+
+  const handleRenewDomainSsl = async (hostname: string) => {
+    // Guard: ignore re-clicks on the same row while a renew is in flight.
+    if (renewingHostname) return;
+    setRenewingHostname(hostname);
+    try {
+      const result = await deployApi.sslRenew(hostname, false);
 
       if (result.success) {
-        showToast("SSL certificate renewed successfully", "success");
-        const statusResult = await deployApi.sslStatus(primaryDomainName);
-        if (statusResult.success) {
-          setSSLData(statusResult);
-        }
+        showToast(`SSL renewed for ${hostname}.`, "success");
+        // Pull the canonical sslExpiresAt off the DB row by re-fetching
+        // project info. The status pill flips on the next render.
+        invalidateProjectCaches(id);
       } else {
         showToast(
-          result.message || result.error || "Failed to renew SSL certificate",
+          result.message || result.error || `Failed to renew SSL for ${hostname}.`,
           "error",
           result.message,
         );
       }
     } catch (error) {
       console.error("Failed to renew SSL:", error);
-      showToast("Failed to renew SSL certificate", "error");
+      showToast(`Failed to renew SSL for ${hostname}.`, "error");
     } finally {
-      setIsRenewingSSL(false);
+      setRenewingHostname(null);
     }
   };
 
@@ -573,26 +745,24 @@ export const DomainSettings = () => {
     services.find((service) => service.id === editingRouteServiceId) ?? null;
   const editingRoute = editingRouteService ? getServiceRouteSummary(editingRouteService) : null;
 
-  const sslStatusLabel = isLoadingSSL
-    ? "Loading"
-    : sslData?.status === "expired"
-      ? "Expired"
-      : sslData?.status === "expiring_soon"
-        ? `Expiring in ${sslData?.daysUntilExpiry} days`
-        : sslData?.enabled
-          ? "Active"
-          : "Inactive";
-
-  const sslStatusTone =
-    sslData?.status === "expired"
-      ? "danger"
-      : sslData?.status === "expiring_soon"
-        ? "warning"
-        : sslData?.enabled || isManagedHostDomain
-          ? "success"
-          : "neutral";
-
   const hasMultipleProjectDomains = domainSummaries.length > 1;
+  // Toggling "Hide setup" should also wipe in-flight connect/verify state
+  // so reopening the panel starts fresh instead of resurrecting the
+  // previous attempt's records and Verify button. Without this, a user
+  // who closes the panel after connecting `acme.com`, then clicks Add
+  // domain again, sees `acme.com`'s pending records — confusing.
+  const handleToggleCustomDomain = () => {
+    if (showCustomDomainSection) {
+      setShowCustomDomainSection(false);
+      setDnsRecords([]);
+      setPreviewedRecords([]);
+      setPendingVerifyDomain(null);
+      setNewDomain("");
+      setIncludeWww(false);
+    } else {
+      setShowCustomDomainSection(true);
+    }
+  };
   const singleDomainActions = (
     <div className="flex flex-wrap items-center gap-2 sm:justify-end">
       <ActionButton href={currentHref} label="Visit" icon={ExternalLink} />
@@ -602,7 +772,7 @@ export const DomainSettings = () => {
       <ActionButton
         label={showCustomDomainSection ? "Hide setup" : "Add domain"}
         icon={Plus}
-        onClick={() => setShowCustomDomainSection((value) => !value)}
+        onClick={handleToggleCustomDomain}
       />
     </div>
   );
@@ -612,152 +782,34 @@ export const DomainSettings = () => {
       <ActionButton
         label={showCustomDomainSection ? "Hide setup" : "Add domain"}
         icon={Plus}
-        onClick={() => setShowCustomDomainSection((value) => !value)}
+        onClick={handleToggleCustomDomain}
       />
     </div>
   );
 
+  // Whether the DNS Records panel is ready to render. Sources, in order:
+  //   1. dnsRecords — real records from a completed Connect call (both modes)
+  //   2. previewedRecords — live preview from /domains/preview (self-hosted only,
+  //      derived from the hostname the user is typing)
+  // Cloud users still see the panel only after Connect. Self-hosted users
+  // see it the moment they type a plausible-looking domain, so they can
+  // start applying records before committing the row.
+  const recordsToShow = dnsRecords.length > 0 ? dnsRecords : previewedRecords;
+  const hasDnsRecords = recordsToShow.length > 0;
+  // True when the panel is showing preview (pre-Connect) data only. Used
+  // to tweak the explainer text inside the panel.
+  const isPreviewOnly = dnsRecords.length === 0 && previewedRecords.length > 0;
+
   return (
     <div className="space-y-5">
-      {!isEditingDomains && !hasMultipleProjectDomains ? (
-        <div className={`grid grid-cols-1 ${hasDomain ? "lg:grid-cols-2" : ""} gap-5`}>
-          <SectionCard
-            title={domainMeta.title}
-            description={domainMeta.subtitle}
-            icon={Globe}
-            iconTone="primary"
-            headerBadge={hasDomain ? (
-              <StatusPill tone={domainMeta.statusTone}>{domainMeta.statusLabel}</StatusPill>
-            ) : undefined}
-            actions={singleDomainActions}
-          >
-            <ValueBlock label={hasDomain ? "Domain" : "Local URL"} value={currentUrl} />
-            <InfoRow label="Type" value={domainMeta.typeLabel} />
-            {primaryProjectDomain ? (
-              <InfoRow
-                label={hasProjectServer ? "Mapped to" : "Path"}
-                value={primaryProjectDomain.mappedLabel}
-              />
-            ) : null}
-            {!hasDomain ? (
-              <InfoRow
-                label="Status"
-                value={<StatusPill tone={domainMeta.statusTone}>{domainMeta.statusLabel}</StatusPill>}
-              />
-            ) : null}
-          </SectionCard>
-
-          {hasDomain && (
-            <SectionCard
-              title="SSL Certificate"
-              description="Certificate state for the production domain"
-              icon={isManagedHostDomain ? ShieldCheck : Shield}
-              iconTone="emerald"
-              actions={
-                !isManagedHostDomain ? (
-                  <ActionButton
-                    label={isRenewingSSL ? "Renewing..." : "Renew SSL"}
-                    icon={isRenewingSSL ? Loader2 : ShieldAlert}
-                    onClick={handleRenewSSL}
-                    disabled={isRenewingSSL || isLoadingSSL || !sslData?.enabled}
-                  />
-                ) : undefined
-              }
-            >
-              <InfoRow
-                label="Status"
-                value={<StatusPill tone={sslStatusTone as any}>{sslStatusLabel}</StatusPill>}
-              />
-              <InfoRow
-                label="Issuer"
-                value={isManagedHostDomain ? "Managed by host" : sslData?.issuer || "Let's Encrypt"}
-              />
-              <InfoRow
-                label="Expires"
-                value={
-                  isManagedHostDomain
-                    ? "Included"
-                    : sslData?.expiresAt
-                      ? new Date(sslData.expiresAt).toLocaleDateString()
-                      : "N/A"
-                }
-              />
-              <div className="rounded-xl bg-muted/35 px-4 py-3 text-[12px] text-muted-foreground">
-                {isManagedHostDomain
-                  ? "Free subdomains are covered by host-managed SSL. Custom domains can be renewed from here when needed."
-                  : sslData?.enabled
-                    ? "Use renew when you want to force a fresh certificate check for this custom domain."
-                    : "SSL becomes renewable after DNS verification and certificate provisioning complete."}
-              </div>
-            </SectionCard>
-          )}
-        </div>
-      ) : null}
-
-      {!isEditingDomains && hasMultipleProjectDomains ? (
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-end gap-2">{multiDomainActions}</div>
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            {domainSummaries.map((domain) => (
-              <DomainOverviewCard
-                key={domain.id}
-                domain={domain}
-                actions={domain.liveUrl ? <ActionButton href={domain.liveUrl} label="Visit" icon={ExternalLink} /> : null}
-              />
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {hasProjectLevelRouting && isEditingDomains ? (
-        <div className="space-y-3">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h3 className="text-[14px] font-semibold text-foreground">Edit domains</h3>
-              <p className="mt-0.5 text-[12px] text-muted-foreground">
-                {hasProjectServer
-                  ? "Edit which internal port each domain should route to."
-                  : "Edit which static path each domain should serve."}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={handleCancelEditingDomains}
-                disabled={isSavingPublicEndpoints}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-foreground/[0.06] px-4 py-2.5 text-[13px] font-medium text-foreground transition-colors hover:bg-foreground/[0.1] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <X className="size-4" />
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleSavePublicEndpoints()}
-                disabled={isSavingPublicEndpoints}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-foreground px-4 py-2.5 text-[13px] font-medium text-background transition-colors hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isSavingPublicEndpoints ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <CheckCircle2 className="size-4" />
-                )}
-                {isSavingPublicEndpoints ? "Saving..." : "Save changes"}
-              </button>
-            </div>
-          </div>
-
-          <PublicEndpointsCard
-            projectName={projectLabel}
-            endpoints={publicEndpoints}
-            hasServer={hasProjectServer}
-            runtimePort={publicEndpoints[0]?.port || projectRuntimePort}
-            onChange={(nextEndpoints) => setPublicEndpoints(nextEndpoints)}
-          />
-        </div>
-      ) : null}
-
-      {showCustomDomainSection && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      {showCustomDomainSection ? (
+        // Custom Domain setup sits ABOVE the existing list so the form
+        // is the first thing the user sees after clicking Add domain —
+        // they don't have to scroll past their existing domains to find
+        // the input. DNS Records only appears next to the form once the
+        // backend returns real records (post-Connect), so there's no
+        // placeholder noise before the user has done anything.
+        <div className={`grid grid-cols-1 gap-5 ${hasDnsRecords ? "lg:grid-cols-2" : ""}`}>
           <SectionCard
             title="Custom Domain"
             description="Attach your own domain and keep it as the production entrypoint"
@@ -809,54 +861,189 @@ export const DomainSettings = () => {
             </div>
           </SectionCard>
 
-          <SectionCard
-            title="DNS Records"
-            description="Apply these records at your DNS provider, then wait for propagation"
-            icon={Link2}
-            iconTone="orange"
-          >
-            <div className="space-y-3">
-              {dnsRecords.length > 0 ? (
-                dnsRecords.map((record, index) => (
+          {hasDnsRecords ? (
+            <SectionCard
+              title="DNS Records"
+              description={
+                isPreviewOnly
+                  ? "Add these records at your DNS provider, then click Connect domain to attach it"
+                  : "Apply these records at your DNS provider, then wait for propagation"
+              }
+              icon={Link2}
+              iconTone="orange"
+            >
+              <div className="space-y-3">
+                {recordsToShow.map((record, index) => (
                   <DnsRecordRow
                     key={`${record.type}-${record.host}-${index}`}
                     record={record}
                     onCopy={handleCopy}
                   />
-                ))
-              ) : (
-                <>
-                  <DnsRecordPlaceholder
-                    type={dnsMode === "selfhosted" ? "A" : "CNAME"}
-                    host="@"
-                    value={
-                      dnsMode === "selfhosted" ? "your server IP" : "target generated after connect"
+                ))}
+              </div>
+
+              <div className="rounded-xl bg-muted/35 px-4 py-3 text-[12px] text-muted-foreground">
+                {isPreviewOnly
+                  ? "Add these records first — they don't change after Connect, so propagation starts now. Then press Connect domain to attach it, and finally Verify once DNS resolves."
+                  : "DNS changes can take up to 48 hours to propagate globally. Once the records resolve, click Verify below — we'll check DNS, mark the domain active, and provision SSL in the background."}
+              </div>
+
+              {pendingVerifyDomain ? (
+                <div className="flex justify-end pt-1">
+                  <ActionButton
+                    label={
+                      verifyingDomainId === pendingVerifyDomain.id
+                        ? "Verifying..."
+                        : `Verify ${pendingVerifyDomain.hostname}`
                     }
+                    icon={verifyingDomainId === pendingVerifyDomain.id ? Loader2 : RefreshCw}
+                    onClick={() =>
+                      void handleVerifyDomain(pendingVerifyDomain.id, pendingVerifyDomain.hostname)
+                    }
+                    disabled={verifyingDomainId === pendingVerifyDomain.id}
                   />
-                  <DnsRecordPlaceholder
-                    type="TXT"
-                    host="_openship-challenge"
-                    value="verification token"
-                  />
-                </>
-              )}
-
-              {includeWww && (
-                <DnsRecordPlaceholder
-                  type={dnsMode === "selfhosted" ? "A" : "CNAME"}
-                  host="www"
-                  value={dnsRouteValue || "same as root record"}
-                />
-              )}
-            </div>
-
-            <div className="rounded-xl bg-muted/35 px-4 py-3 text-[12px] text-muted-foreground">
-              DNS changes can take up to 48 hours to propagate globally. Once the records resolve,
-              verification and SSL provisioning will follow automatically.
-            </div>
-          </SectionCard>
+                </div>
+              ) : null}
+            </SectionCard>
+          ) : null}
         </div>
-      )}
+      ) : null}
+
+      {!isEditingDomains && !hasDomain ? (
+        // No domain attached yet — show the local URL as the access point
+        // alongside the Add domain CTA. This is the cold-start state; once
+        // any domain (free or custom) is attached, we render the list below.
+        <SectionCard
+          title={domainMeta.title}
+          description={domainMeta.subtitle}
+          icon={Globe}
+          iconTone="primary"
+          actions={singleDomainActions}
+        >
+          <ValueBlock label="Local URL" value={currentUrl} />
+          <InfoRow label="Type" value={domainMeta.typeLabel} />
+          <InfoRow
+            label="Status"
+            value={<StatusPill tone={domainMeta.statusTone}>{domainMeta.statusLabel}</StatusPill>}
+          />
+        </SectionCard>
+      ) : null}
+
+      {!isEditingDomains && hasDomain ? (
+        // Always render the unified list — every domain attached to the
+        // project, free OR custom, gets a row, just like the Service
+        // Routing section below. The primary domain carries the "Primary"
+        // badge inside its card; SSL state for the primary lives in the
+        // dedicated card just below this list so renew / status info is
+        // discoverable without expanding rows.
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {hasMultipleProjectDomains ? multiDomainActions : singleDomainActions}
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            {domainSummaries.map((domain) => {
+              // Pending custom domains get a Verify button right next to
+              // their Pending status pill so the toast's "click Verify"
+              // instruction isn't a scavenger hunt. Verified rows just
+              // get the Visit action. We never render Verify without a
+              // domainId — without it the API call has no row to verify
+              // (e.g. pre-save endpoint drafts).
+              const isVerifying = !!verifyingDomainId && verifyingDomainId === domain.domainId;
+              const verifyAction =
+                domain.needsVerify && domain.domainId ? (
+                  <ActionButton
+                    label={isVerifying ? "Verifying..." : "Verify"}
+                    icon={isVerifying ? Loader2 : RefreshCw}
+                    onClick={() => void handleVerifyDomain(domain.domainId!, domain.hostname)}
+                    disabled={isVerifying}
+                  />
+                ) : null;
+              // Renew shows on verified custom rows only. Free .opsh.io
+              // is host-managed (no Let's Encrypt cert to renew), and
+              // pending rows don't have a cert yet — Verify kicks off
+              // the initial provisioning. We surface Renew across every
+              // multi-domain row so each cert can be poked independently;
+              // single-domain projects get the same affordance inline,
+              // replacing the old bottom-of-page SSL card.
+              const isManagedRow = domain.hostname.toLowerCase().endsWith(`.${baseDomain}`);
+              const isRenewing = renewingHostname === domain.hostname;
+              const renewAction =
+                !isManagedRow && !domain.needsVerify && domain.domainId ? (
+                  <ActionButton
+                    label={isRenewing ? "Renewing..." : "Renew SSL"}
+                    icon={isRenewing ? Loader2 : ShieldAlert}
+                    onClick={() => void handleRenewDomainSsl(domain.hostname)}
+                    disabled={isRenewing}
+                  />
+                ) : null;
+              const visitAction = domain.liveUrl ? (
+                <ActionButton href={domain.liveUrl} label="Visit" icon={ExternalLink} />
+              ) : null;
+              const actions = verifyAction || renewAction || visitAction ? (
+                <>
+                  {verifyAction}
+                  {renewAction}
+                  {visitAction}
+                </>
+              ) : null;
+              return (
+                <DomainOverviewCard
+                  key={domain.id}
+                  domain={domain}
+                  actions={actions}
+                />
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {hasProjectLevelRouting && isEditingDomains ? (
+        <div className="space-y-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-[14px] font-semibold text-foreground">Edit domains</h3>
+              <p className="mt-0.5 text-[12px] text-muted-foreground">
+                {hasProjectServer
+                  ? "Edit which internal port each domain should route to."
+                  : "Edit which static path each domain should serve."}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCancelEditingDomains}
+                disabled={isSavingPublicEndpoints}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-foreground/[0.06] px-4 py-2.5 text-[13px] font-medium text-foreground transition-colors hover:bg-foreground/[0.1] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <X className="size-4" />
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSavePublicEndpoints()}
+                disabled={isSavingPublicEndpoints}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-foreground px-4 py-2.5 text-[13px] font-medium text-background transition-colors hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSavingPublicEndpoints ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="size-4" />
+                )}
+                {isSavingPublicEndpoints ? "Saving..." : "Save changes"}
+              </button>
+            </div>
+          </div>
+
+          <PublicEndpointsCard
+            projectName={projectLabel}
+            endpoints={publicEndpoints}
+            hasServer={hasProjectServer}
+            runtimePort={publicEndpoints[0]?.port || projectRuntimePort}
+            onChange={(nextEndpoints) => setPublicEndpoints(nextEndpoints)}
+          />
+        </div>
+      ) : null}
 
       {!hasProjectLevelRouting && (servicesLoading || services.length > 0) && (() => {
         // Only show ENABLED services (and their associated domains). When
@@ -1248,22 +1435,3 @@ function DnsRecordRow({
   );
 }
 
-function DnsRecordPlaceholder({
-  type,
-  host,
-  value,
-}: {
-  type: string;
-  host: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-xl border border-dashed border-border/60 bg-muted/15 px-4 py-3">
-      <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">
-        {type}
-      </div>
-      <div className="mt-1 text-[13px] font-medium text-foreground">{host}</div>
-      <div className="mt-2 text-[12px] text-muted-foreground">{value}</div>
-    </div>
-  );
-}

@@ -5,90 +5,176 @@
  */
 
 import { Hono } from "hono";
-import { authMiddleware, localOnly } from "../../middleware";
+import { localOnly } from "../../middleware";
+import { secureRouter } from "../../lib/secure-router";
 import * as mail from "./mail.controller";
 import * as admin from "./admin/admin.controller";
 import * as branding from "./branding.controller";
 import * as webmail from "./webmail/webmail.controller";
 
-export const mailRoutes = new Hono();
+const r = secureRouter(new Hono(), {
+  module: "mail",
+  basePath: "/api/mail",
+  ids: { mail_server: "serverId" },
+});
 
-mailRoutes.use("*", localOnly);
-mailRoutes.use("*", authMiddleware);
+r.use("*", localOnly);
 
 /* ── Setup wizard ─────────────────────────────────────────────────── */
-mailRoutes.get("/steps", mail.getSteps);
-mailRoutes.get("/status", mail.getStatus);
+r.get("/steps", { tag: "mail_server:read" }, mail.getSteps);
+r.get("/status", { tag: "mail_server:read" }, mail.getStatus);
 // Cross-server mail-install summary - lets the /emails page auto-select
 // the only mail server when there's exactly one.
-mailRoutes.get("/servers", mail.listMailServers);
-mailRoutes.post("/setup", mail.startSetup);
-mailRoutes.post("/setup/cancel", mail.cancelSetup);
-mailRoutes.post("/setup/dns-ack", mail.acknowledgeDns);
-mailRoutes.post("/setup/ptr-ack", mail.acknowledgePtr);
-mailRoutes.post("/setup/reset", mail.resetSetup);
+r.get("/servers", { tag: "mail_server:list" }, mail.listMailServers);
+r.post("/setup", { tag: "mail_server:write" }, mail.startSetup);
+r.post("/setup/cancel", { tag: "mail_server:write" }, mail.cancelSetup);
+r.post("/setup/dns-ack", { tag: "mail_server:write" }, mail.acknowledgeDns);
+r.post("/setup/ptr-ack", { tag: "mail_server:write" }, mail.acknowledgePtr);
+r.post("/setup/reset", { tag: "mail_server:admin" }, mail.resetSetup);
 
 /* ── Post-install operations ──────────────────────────────────────── */
-mailRoutes.get("/health/:serverId", mail.getHealth);
-mailRoutes.post("/credentials/postmaster", mail.setPostmasterPassword);
+r.get("/health/:serverId", { tag: "mail_server:read" }, mail.getHealth);
+r.post(
+  "/credentials/postmaster",
+  { tag: "mail_server:write" },
+  mail.setPostmasterPassword,
+);
 
 /* ── Admin panel - domains ────────────────────────────────────────── */
-mailRoutes.get("/admin/:serverId/domains", admin.listDomainsHandler);
-mailRoutes.post("/admin/:serverId/domains", admin.createDomainHandler);
-mailRoutes.get("/admin/:serverId/domains/:domain", admin.getDomainHandler);
-mailRoutes.patch("/admin/:serverId/domains/:domain", admin.updateDomainHandler);
-mailRoutes.delete("/admin/:serverId/domains/:domain", admin.deleteDomainHandler);
-mailRoutes.get(
+r.get(
+  "/admin/:serverId/domains",
+  { tag: "mail_server:list" },
+  admin.listDomainsHandler,
+);
+r.post(
+  "/admin/:serverId/domains",
+  { tag: "mail_server:write" },
+  admin.createDomainHandler,
+);
+r.get(
+  "/admin/:serverId/domains/:domain",
+  { tag: "mail_server:read" },
+  admin.getDomainHandler,
+);
+r.patch(
+  "/admin/:serverId/domains/:domain",
+  { tag: "mail_server:write" },
+  admin.updateDomainHandler,
+);
+r.delete(
+  "/admin/:serverId/domains/:domain",
+  { tag: "mail_server:admin" },
+  admin.deleteDomainHandler,
+);
+r.get(
   "/admin/:serverId/domains/:domain/dependents",
+  { tag: "mail_server:read" },
   admin.domainDependentsHandler,
 );
-mailRoutes.get(
+r.get(
   "/admin/:serverId/domains/:domain/dns",
+  { tag: "mail_server:read" },
   admin.getDomainDnsHandler,
 );
-mailRoutes.post(
+r.post(
   "/admin/:serverId/domains/:domain/dns/acknowledge",
+  { tag: "mail_server:write" },
   admin.acknowledgeDomainDnsHandler,
 );
-mailRoutes.get(
+r.get(
   "/admin/:serverId/domains-dns/pending",
+  { tag: "mail_server:read" },
   admin.pendingDomainDnsHandler,
 );
 
 /* ── Admin panel - mailboxes ──────────────────────────────────────── */
-mailRoutes.get("/admin/:serverId/mailboxes", admin.listMailboxesHandler);
-mailRoutes.post("/admin/:serverId/mailboxes", admin.createMailboxHandler);
-mailRoutes.get("/admin/:serverId/mailboxes/:email", admin.getMailboxHandler);
-mailRoutes.patch("/admin/:serverId/mailboxes/:email", admin.updateMailboxHandler);
-mailRoutes.delete("/admin/:serverId/mailboxes/:email", admin.deleteMailboxHandler);
+r.get(
+  "/admin/:serverId/mailboxes",
+  { tag: "mail_server:list" },
+  admin.listMailboxesHandler,
+);
+r.post(
+  "/admin/:serverId/mailboxes",
+  { tag: "mail_server:write" },
+  admin.createMailboxHandler,
+);
+r.get(
+  "/admin/:serverId/mailboxes/:email",
+  { tag: "mail_server:read" },
+  admin.getMailboxHandler,
+);
+r.patch(
+  "/admin/:serverId/mailboxes/:email",
+  { tag: "mail_server:write" },
+  admin.updateMailboxHandler,
+);
+r.delete(
+  "/admin/:serverId/mailboxes/:email",
+  { tag: "mail_server:admin" },
+  admin.deleteMailboxHandler,
+);
 
 /* ── Admin panel - aggregates ─────────────────────────────────────── */
-mailRoutes.get("/admin/:serverId/stats", admin.getStatsHandler);
+r.get(
+  "/admin/:serverId/stats",
+  { tag: "mail_server:read" },
+  admin.getStatsHandler,
+);
 
 /* ── Admin panel - DNS scan ───────────────────────────────────────── */
-mailRoutes.get("/admin/:serverId/dns-scan", admin.getDnsScanHandler);
+r.get(
+  "/admin/:serverId/dns-scan",
+  { tag: "mail_server:read" },
+  admin.getDnsScanHandler,
+);
 
 /* ── Admin panel - welcome test email ─────────────────────────────── */
-mailRoutes.post("/admin/:serverId/test-email", admin.sendTestEmailHandler);
+r.post(
+  "/admin/:serverId/test-email",
+  { tag: "mail_server:write" },
+  admin.sendTestEmailHandler,
+);
 
 /* ── Admin panel - component actions (Health / Advanced) ──────────── */
-mailRoutes.post(
+r.post(
   "/admin/:serverId/components/restart-all",
+  { tag: "mail_server:admin" },
   admin.restartAllComponentsHandler,
 );
-mailRoutes.post(
+r.post(
   "/admin/:serverId/components/:key/:action",
+  { tag: "mail_server:admin" },
   admin.runComponentActionHandler,
 );
-mailRoutes.get(
+r.get(
   "/admin/:serverId/components/:key/logs",
+  { tag: "mail_server:read" },
   admin.getComponentLogsHandler,
 );
 
 /* ── Branding (white-label) - proxied to Zero webmail server ──────── */
-mailRoutes.get("/branding/:serverId", branding.getBrandingHandler);
-mailRoutes.patch("/branding/:serverId", branding.updateBrandingHandler);
+r.get(
+  "/branding/:serverId",
+  { tag: "mail_server:read" },
+  branding.getBrandingHandler,
+);
+r.patch(
+  "/branding/:serverId",
+  { tag: "mail_server:write" },
+  branding.updateBrandingHandler,
+);
 
 /* ── Webmail deploy (creates a standard project + deployment) ─────── */
-mailRoutes.get("/webmail/targets", webmail.getTargetsHandler);
-mailRoutes.post("/webmail/deploy-project", webmail.startDeployAsProjectHandler);
+r.get(
+  "/webmail/targets",
+  { tag: "mail_server:read" },
+  webmail.getTargetsHandler,
+);
+r.post(
+  "/webmail/deploy-project",
+  { tag: "mail_server:write" },
+  webmail.startDeployAsProjectHandler,
+);
+
+export const mailRoutes = r.hono;
+

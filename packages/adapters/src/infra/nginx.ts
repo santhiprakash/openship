@@ -30,6 +30,7 @@ import { dirname, join } from "node:path";
 import type { CommandExecutor, RouteConfig, SslResult } from "../types";
 import type { RoutingProvider, SslProvider } from "./types";
 import { LUA_LOGGER_PATH, buildReloadCommand, detectOpenRestyPaths, type OpenRestyPaths } from "./openresty-lua";
+import { safeErrorMessage } from "@repo/core";
 
 // ─── Rate Limit Config ──────────────────────────────────────────────────────
 
@@ -322,6 +323,15 @@ ${webhookLocation}
    * Runs `certbot certonly` in webroot mode using the ACME challenge
    * directory served by OpenResty, then rewrites the config to include
    * SSL and reloads.
+   *
+   * Only --webroot is attempted. The previous --standalone fallback was
+   * dead code on any normal install: certbot --standalone binds to port
+   * 80 itself, but OpenResty already owns 80 on the same box, so the
+   * fallback would always fail with EADDRINUSE — amplifying a transient
+   * --webroot failure into an immediate hard error. The caller
+   * (route-registration.ts) already wraps provisionCert in try/catch so
+   * a webroot failure becomes a "deploy continues on HTTP, retry from
+   * Domains tab" warning instead of a deploy abort.
    */
   async provisionCert(domain: string): Promise<SslResult> {
     assertValidDomain(domain);
@@ -331,24 +341,14 @@ ${webhookLocation}
       return this.readCertInfo(domain);
     }
 
-    // Run certbot - use webroot mode (OpenResty serves the challenge files),
-    // falling back to standalone if webroot fails
     const emailArgs = this.acmeEmail
       ? ["--email", this.acmeEmail]
       : ["--register-unsafely-without-email"];
 
-    try {
-      await this._exec("certbot", [
-        "certonly", "--webroot", "-w", "/var/www/acme", "-d", domain,
-        ...emailArgs, "--agree-tos", "--non-interactive",
-      ]);
-    } catch {
-      // Fallback to standalone mode
-      await this._exec("certbot", [
-        "certonly", "--standalone", "-d", domain,
-        ...emailArgs, "--agree-tos", "--non-interactive",
-      ]);
-    }
+    await this._exec("certbot", [
+      "certonly", "--webroot", "-w", "/var/www/acme", "-d", domain,
+      ...emailArgs, "--agree-tos", "--non-interactive",
+    ]);
 
     // Rewrite the config with SSL now that certs exist
     const slug = this.domainSlug(domain);
@@ -445,11 +445,6 @@ ${webhookLocation}
 
   // ── Rate Limiting ──────────────────────────────────────────────────
 
-  /** Legacy single-file include path used before the dedicated include dir. */
-  private get legacyRateLimitConfPath(): string {
-    return join(dirname(this.sitesDir), "ratelimit.conf");
-  }
-
   /** Dedicated include dir for Openship-managed OpenResty snippets. */
   private get rateLimitIncludeDir(): string {
     return join(dirname(this.sitesDir), "openship-includes");
@@ -471,12 +466,10 @@ ${webhookLocation}
    */
   async applyRateLimit(config: RateLimitConfig): Promise<void> {
     const confPath = this.rateLimitConfPath;
-    const legacyConfPath = this.legacyRateLimitConfPath;
     const nginxConfPath = join(dirname(this.sitesDir), "nginx.conf");
     const snapshots = {
       nginx: await this._captureFile(nginxConfPath),
       current: await this._captureFile(confPath),
-      legacy: await this._captureFile(legacyConfPath),
     };
 
     // Build geo block - whitelist loopback + user-specified CIDRs
@@ -514,11 +507,9 @@ ${geoEntries.join("\n")}
 
       if (config.rps <= 0) {
         await this._rm(confPath);
-        await this._rm(legacyConfPath);
       } else {
         await this._mkdir(this.rateLimitIncludeDir);
         await this._writeFile(confPath, snippet);
-        await this._rm(legacyConfPath);
       }
 
       await this.reload();
@@ -527,14 +518,13 @@ ${geoEntries.join("\n")}
 
       try {
         await this._restoreFile(confPath, snapshots.current);
-        await this._restoreFile(legacyConfPath, snapshots.legacy);
         await this._restoreFile(nginxConfPath, snapshots.nginx);
         await this.reload();
       } catch (restoreErr) {
-        rollbackError = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+        rollbackError = safeErrorMessage(restoreErr);
       }
 
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       if (rollbackError) {
         throw new Error(`${message}; rollback failed: ${rollbackError}`);
       }
@@ -549,18 +539,12 @@ ${geoEntries.join("\n")}
    */
   async getRateLimitConfig(): Promise<RateLimitConfig | null> {
     try {
-      const confPath = await this._exists(this.rateLimitConfPath)
-        ? this.rateLimitConfPath
-        : await this._exists(this.legacyRateLimitConfPath)
-          ? this.legacyRateLimitConfPath
-          : null;
-
-      if (!confPath) {
+      const confPath = this.rateLimitConfPath;
+      if (!(await this._exists(confPath))) {
         return { rps: 0, burst: 0, whitelist: [] };
       }
 
       const content = await this._readFile(confPath);
-      // Backward compatibility for older deployments that wrote a disabled marker.
       if (content.includes("disabled")) return { rps: 0, burst: 0, whitelist: [] };
 
       // Parse rps from: rate=50r/s
@@ -597,8 +581,6 @@ ${geoEntries.join("\n")}
     const confDir = dirname(this.sitesDir);
     const confPath = join(confDir, "nginx.conf");
     const desiredIncludeLine = `include ${this.rateLimitIncludeDir}/*.conf;`;
-    const legacyIncludeLine = `include ${this.legacyRateLimitConfPath};`;
-    const optionalLegacyIncludeLine = `include ${this.legacyRateLimitConfPath}*;`;
     const content = await this._readFile(confPath);
     const trailingNewline = content.endsWith("\n");
     const lines = content.split("\n");
@@ -613,25 +595,11 @@ ${geoEntries.join("\n")}
 
       if (trimmed === desiredIncludeLine) {
         if (foundDesiredInclude) {
+          // Duplicate include — keep only the first.
           changed = true;
           continue;
         }
-
         foundDesiredInclude = true;
-        nextLines.push(line);
-        continue;
-      }
-
-      if (trimmed === legacyIncludeLine || trimmed === optionalLegacyIncludeLine) {
-        const indent = line.match(/^\s*/)?.[0] ?? "    ";
-
-        if (!foundDesiredInclude) {
-          nextLines.push(`${indent}${desiredIncludeLine}`);
-          foundDesiredInclude = true;
-        }
-
-        changed = true;
-        continue;
       }
 
       nextLines.push(line);

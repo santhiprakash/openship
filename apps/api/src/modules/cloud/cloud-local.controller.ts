@@ -12,8 +12,10 @@
  */
 
 import type { Context } from "hono";
-import { getUserId } from "../../lib/controller-helpers";
-import { env } from "../../config/env";
+import { getUserId, getActiveOrganizationId } from "../../lib/controller-helpers";
+import { audit, auditContextFrom } from "../../lib/audit";
+import { disconnectCloud, getCloudConnectionStatus } from "../../lib/cloud-client";
+import { safeErrorMessage } from "@repo/core";
 
 // ─── Result page (shown in popup / browser tab after connect) ────────────────
 
@@ -37,14 +39,18 @@ if (window.opener) { window.close(); }
 
 export async function disconnect(c: Context) {
   const userId = getUserId(c);
-  const { disconnectCloud } = await import("../../lib/cloud-client");
+  const organizationId = getActiveOrganizationId(c);
   await disconnectCloud(userId);
+  audit.recordAsync(auditContextFrom(c, organizationId, userId), {
+    eventType: "cloud.disconnect",
+    resourceType: "cloud",
+    resourceId: "*",
+  });
   return c.json({ connected: false });
 }
 
 export async function status(c: Context) {
   const userId = getUserId(c);
-  const { getCloudConnectionStatus } = await import("../../lib/cloud-client");
   return c.json(await getCloudConnectionStatus(userId));
 }
 
@@ -96,15 +102,13 @@ export async function connectCallback(c: Context) {
     );
   } catch (err) {
     console.error(
-      `[cloud-connect-callback] unexpected error: ${
-        err instanceof Error ? err.message : String(err)
+      `[cloud-connect-callback] unexpected error: ${safeErrorMessage(err)
       }`,
     );
     return c.html(
       connectResultPage(
         "Connection Failed",
-        `Something went wrong: ${
-          err instanceof Error ? err.message : String(err)
+        `Something went wrong: ${safeErrorMessage(err)
         }`,
       ),
     );

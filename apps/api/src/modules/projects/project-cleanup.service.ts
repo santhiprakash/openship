@@ -14,7 +14,7 @@
 import { repos, type Project, type Deployment } from "@repo/db";
 import { DockerRuntime, type RuntimeAdapter } from "@repo/adapters";
 import { NotFoundError } from "@repo/core";
-import { platform } from "../../lib/controller-helpers";
+import { assertResourceInOrg, platform } from "../../lib/controller-helpers";
 import { resolveDeploymentRuntime } from "../../lib/deployment-runtime";
 import { buildServiceRouteDomain } from "../../lib/routing-domains";
 import {
@@ -484,16 +484,19 @@ export interface DeleteProjectOptions {
  */
 export async function deleteProject(
   projectId: string,
-  userId: string,
+  organizationId: string,
   options: DeleteProjectOptions = {},
 ): Promise<{ deletedApp: boolean; deletedProjects: number }> {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   const deleteApp = options.deleteApp ?? true;
   const wipeVolumes = options.wipeVolumes ?? false;
+  // Sibling environments are scoped by org membership.
   const projects = deleteApp
-    ? (await repos.project.listByApp(p.appId)).filter((row) => row.userId === userId)
+    ? (await repos.project.listByApp(p.appId)).filter(
+        (row) => row.organizationId === organizationId,
+      )
     : [p];
 
   // 1. Collect resource manifests BEFORE we tear down DB state - the manifest
@@ -572,3 +575,5 @@ async function cleanupProjectResources(
   await repos.deployment.deleteByProjectId(project.id);
   await repos.service.deleteByProjectId(project.id);
 }
+
+

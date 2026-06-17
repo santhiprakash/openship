@@ -34,20 +34,24 @@ import { backupOrchestrator } from "../backup.orchestrator";
 
 export async function firePreDeployBackups(opts: {
   projectId: string;
-  userId: string;
+  organizationId: string;
 }): Promise<{ enqueued: number; failed: number }> {
   let enqueued = 0;
   let failed = 0;
 
   try {
     const policies = await repos.backupPolicy.listEnabledPreDeployByProject(opts.projectId);
+    // The pre-deploy backup runs are attributed to the policy creator,
+    // not a specific user (the deploy may have been triggered by anyone
+    // with project:write). The orchestrator pulls policy.createdBy when
+    // trigger.userId is unset.
     for (const policy of policies) {
       try {
         await backupOrchestrator.enqueue({
           policyId: policy.id,
           trigger: {
             source: "pre_deploy",
-            userId: opts.userId,
+            userId: policy.createdBy ?? "system",
           },
         });
         enqueued += 1;

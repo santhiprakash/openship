@@ -17,7 +17,10 @@ import {
   Activity,
   TrendingUp,
   CheckCircle2,
+  Building2,
+  ArrowRightLeft,
 } from "lucide-react";
+import { authClient } from "@/lib/auth-client";
 import { projectsApi } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import HomeTipCard from "@/components/overview/HomeTipCard";
@@ -62,7 +65,7 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
   const { t } = useI18n();
   const router = useRouter();
   
-  const { projects, numbers, loading } = useDashboardHome(initialData);
+  const { projects, numbers, otherOrgs, loading } = useDashboardHome(initialData);
 
   /* ---------- greeting ---------- */
   const hour = new Date().getHours();
@@ -131,6 +134,65 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
                       </div>
                     </div>
                   ))}
+                </div>
+              ) : projects.length === 0 && otherOrgs.length > 0 ? (
+                /* Cross-org hint — when active org is empty but the user has
+                   projects in another org they're a member of. One-click
+                   switch lands them in the right org via Better Auth's
+                   setActive + a full reload to refresh every context. */
+                <div className="px-5 py-5">
+                  <div className="rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/5 to-transparent p-5">
+                    <div className="flex items-start gap-3 mb-4">
+                      <div className="size-10 rounded-xl bg-primary/15 flex items-center justify-center shrink-0">
+                        <ArrowRightLeft className="size-5 text-primary" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-sm font-semibold text-foreground">
+                          Your projects are in another organization
+                        </h3>
+                        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                          This org has no projects yet. You're a member of {otherOrgs.length === 1 ? "another organization that has" : `${otherOrgs.length} other organizations with`} projects — switch to view them.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      {otherOrgs.map((o) => (
+                        <button
+                          key={o.organizationId}
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const setActive = (
+                                authClient as unknown as {
+                                  organization: {
+                                    setActive: (opts: { organizationId: string }) => Promise<unknown>;
+                                  };
+                                }
+                              ).organization.setActive;
+                              await setActive({ organizationId: o.organizationId });
+                            } catch {
+                              /* fall through — reload still picks up server-side switch */
+                            }
+                            if (typeof window !== "undefined") window.location.reload();
+                          }}
+                          className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-card hover:bg-muted/40 border border-border/40 hover:border-primary/40 transition-colors text-left"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="size-8 rounded-lg bg-muted/40 flex items-center justify-center shrink-0">
+                              <Building2 className="size-4 text-muted-foreground" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-foreground truncate">{o.name}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {o.projectCount} project{o.projectCount === 1 ? "" : "s"}
+                              </p>
+                            </div>
+                          </div>
+                          <ArrowRight className="size-4 text-muted-foreground shrink-0" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               ) : projects.length === 0 ? (
                 <div className="px-6 pb-10 text-center">

@@ -15,6 +15,7 @@ import { dirname, join, normalize, posix, resolve } from "node:path";
 import { Readable, pipeline } from "node:stream";
 import { promisify } from "node:util";
 import { registerDestination } from "../registry";
+import { safeErrorMessage } from "@repo/core";
 import type {
   BackupDestination,
   BackupDestinationRow,
@@ -68,7 +69,7 @@ class LocalDestinationImpl implements BackupDestination {
       await fs.unlink(probePath);
       return { ok: true };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       return { ok: false, reason: message };
     }
   }
@@ -177,7 +178,7 @@ class LocalDestinationImpl implements BackupDestination {
       } catch (err) {
         failed.push({
           key,
-          error: err instanceof Error ? err.message : String(err),
+          error: safeErrorMessage(err),
         });
       }
     }

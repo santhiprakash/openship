@@ -24,9 +24,40 @@ export function createDomainRepo(db: Database) {
       });
     },
 
-    async listByProject(projectId: string) {
+    /**
+     * Return every domain row for a project.
+     *
+     * Most callers (routing-domain resolution, build pipeline, project
+     * teardown) genuinely need every domain — they iterate every row
+     * to install certs, register routes, or clean up state. Pagination
+     * would break those flows.
+     *
+     * For dashboard reads that only need a bounded preview, pass
+     * `limit`/`offset` and a deterministic order. The default (no
+     * args) keeps the every-row contract for the internal callers.
+     */
+    async listByProject(
+      projectId: string,
+      opts?: { limit?: number; offset?: number },
+    ) {
       return db.query.domain.findMany({
         where: eq(domain.projectId, projectId),
+        ...(opts?.limit !== undefined ? { limit: opts.limit } : {}),
+        ...(opts?.offset !== undefined ? { offset: opts.offset } : {}),
+      });
+    },
+
+    /**
+     * Single-row lookup for `(projectId, hostname)`. Use this instead
+     * of `listByProject(...).find(d => d.hostname === h)` — controllers
+     * that match a single hostname don't need to fan-out a full list.
+     */
+    async findByHostnameForProject(projectId: string, hostname: string) {
+      return db.query.domain.findFirst({
+        where: and(
+          eq(domain.projectId, projectId),
+          eq(domain.hostname, hostname.toLowerCase()),
+        ),
       });
     },
 
@@ -53,6 +84,26 @@ export function createDomainRepo(db: Database) {
         where: eq(domain.projectId, projectId),
       });
       return rows.find((d) => d.isPrimary) ?? rows[0] ?? null;
+    },
+
+    /**
+     * Batch variant of getPrimaryByProject — one SQL round trip for N
+     * projects. Used by getHome to eliminate the N+1.
+     */
+    async getPrimariesByProjects(projectIds: string[]): Promise<Map<string, Domain>> {
+      if (projectIds.length === 0) return new Map();
+      const rows = await db.query.domain.findMany({
+        where: inArray(domain.projectId, projectIds),
+      });
+      // Prefer isPrimary=true; fall back to first row encountered per project.
+      const out = new Map<string, Domain>();
+      for (const row of rows) {
+        const existing = out.get(row.projectId);
+        if (!existing || (row.isPrimary && !existing.isPrimary)) {
+          out.set(row.projectId, row);
+        }
+      }
+      return out;
     },
 
     async create(data: Omit<NewDomain, "id"> & { verificationToken?: string }) {
@@ -149,6 +200,29 @@ export function createDomainRepo(db: Database) {
           lt(domain.sslExpiresAt, beforeDate),
         ),
       });
+    },
+
+    /**
+     * Find custom domains stuck in pending state (verified=false +
+     * status=pending) created before `beforeDate`. Used by the pending-
+     * verifier cron to re-check DNS for rows whose user added the domain
+     * but never clicked Verify (or whose DNS hasn't propagated yet).
+     *
+     * `beforeDate` is the "added at least N minutes ago" cutoff — we
+     * skip just-added rows so the cron doesn't race with the UI's
+     * immediate Verify click. Free-managed rows are excluded; they
+     * don't go through DNS verification (we own the suffix).
+     */
+    async findPendingVerification(beforeDate: Date, limit = 100): Promise<Domain[]> {
+      const rows = await db.query.domain.findMany({
+        where: and(
+          eq(domain.verified, false),
+          eq(domain.status, "pending"),
+          eq(domain.domainType, "custom"),
+          lt(domain.createdAt, beforeDate),
+        ),
+      });
+      return rows.slice(0, limit);
     },
 
     /** Set primary domain for a project (unsets previous primary) */

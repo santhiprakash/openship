@@ -11,23 +11,22 @@
  *     repo's existing AES-256-GCM helpers, key derived from
  *     BETTER_AUTH_SECRET).
  *   - The functions here add a recognizable prefix to every ciphertext
- *     we produce ("enc1:" + base64). That prefix is the discriminator
- *     for backwards compatibility: a value WITHOUT the prefix is
- *     legacy plaintext from before encryption landed, and `decrypt…`
- *     just returns it as-is.
+ *     we produce ("enc1:" + base64). That prefix is the discriminator:
+ *     a value WITHOUT the prefix is plaintext and `decrypt…` returns it
+ *     as-is.
  *
  * Why the prefix instead of always trying to decrypt + falling back on
  * error: silently catching decrypt errors and treating the value as
  * plaintext masks real corruption / key mismatches. The prefix gives
- * an explicit "this is encrypted" / "this is legacy plaintext" signal.
+ * an explicit "this is encrypted" / "this is plaintext" signal.
  */
 
 import { encrypt, decrypt } from "./encryption";
 
 /**
  * Discriminator on every encrypted ciphertext. Anything starting with
- * this prefix is interpreted as encrypted; anything else is legacy
- * plaintext (interpreted verbatim).
+ * this prefix is interpreted as encrypted; anything else is plaintext
+ * (interpreted verbatim).
  *
  *   "enc1" - version 1 of our encryption envelope. Bump if the underlying
  *            algorithm or key derivation changes incompatibly.
@@ -54,13 +53,12 @@ export function encryptSecretField(plain: string | null | undefined): string | n
  * Three cases:
  *   - Empty / null  → return as-is (no credential set).
  *   - Encrypted (starts with "enc1:") → decrypt + return plaintext.
- *   - Legacy plaintext (no prefix)    → return as-is. This preserves access
- *     to servers added before encryption was introduced; the next save
- *     re-encrypts them.
+ *   - Plaintext (no prefix)           → return as-is. The next save
+ *     re-encrypts the value.
  */
 export function decryptSecretField(stored: string | null | undefined): string | undefined {
   if (stored == null || stored === "") return undefined;
-  if (!stored.startsWith(CIPHERTEXT_PREFIX)) return stored; // legacy plaintext
+  if (!stored.startsWith(CIPHERTEXT_PREFIX)) return stored; // plaintext, no prefix
   return decrypt(stored.slice(CIPHERTEXT_PREFIX.length));
 }
 

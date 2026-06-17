@@ -211,7 +211,7 @@ export const ServerTerminal = forwardRef<ServerTerminalHandle, ServerTerminalPro
   }, []);
 
   const pty = usePtyConnection({
-    serverId,
+    target: { kind: "server", id: serverId },
     enabled: enabled && terminalReady && reconnectKey >= 0,
     onBytes,
     onReady,

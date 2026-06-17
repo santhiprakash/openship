@@ -1,0 +1,318 @@
+/**
+ * Notification channel workers.
+ *
+ * Each channel kind owns its own worker function. The runner loop
+ * (runNotificationDeliveryLoop below) polls `notification_delivery`
+ * for queued rows and dispatches each one to the worker for its
+ * channel kind.
+ *
+ * Worker contract:
+ *   - Input: the delivery row + its resolved channel
+ *   - Output: throw on failure (the runner marks it failed/queued for retry)
+ *            return normally on success (runner marks sent)
+ *
+ * The runner handles retry policy uniformly so each worker stays simple.
+ */
+
+import { createHmac } from "node:crypto";
+import { repos, type NotificationChannel, type NotificationDelivery } from "@repo/db";
+import { sendMail } from "./mail";
+import { decrypt } from "./encryption";
+import { findCategory } from "./notification-categories";
+import { safeErrorMessage } from "@repo/core";
+
+/* ─── Render helpers ─────────────────────────────────────────────────────── */
+
+interface RenderedMessage {
+  /** Short headline shown in inbox previews + email subject. */
+  title: string;
+  /** Body text. Plain text — workers wrap it for their format. */
+  body: string;
+}
+
+/**
+ * Turn a delivery's payload into a human-readable message. We use the
+ * category for the title (stable across event types) and pull relevant
+ * payload fields into the body. Channel-specific formatting (HTML for
+ * email, Slack blocks) wraps this primitive output.
+ */
+function renderMessage(delivery: NotificationDelivery): RenderedMessage {
+  const cat = findCategory(delivery.category);
+  const payload = (delivery.payload ?? {}) as Record<string, unknown>;
+
+  const title = cat?.label ?? delivery.category;
+
+  // Build a body from the payload's most useful fields. Workers can
+  // override formatting if they want — Slack does because blocks beat
+  // plain text — but this default works for email + webhook + in-app.
+  const lines: string[] = [];
+
+  if (cat?.description) lines.push(cat.description);
+
+  if (payload.branch) lines.push(`Branch: ${payload.branch}`);
+  if (payload.commitSha) {
+    const sha = String(payload.commitSha).slice(0, 8);
+    lines.push(`Commit: ${sha}`);
+  }
+  if (payload.url) lines.push(`URL: ${payload.url}`);
+  if (payload.errorMessage) lines.push(`Error: ${payload.errorMessage}`);
+  if (payload.durationMs) {
+    lines.push(`Duration: ${Math.round(Number(payload.durationMs) / 1000)}s`);
+  }
+
+  const resourceId = payload.resourceId;
+  if (resourceId) {
+    const resourceType = payload.resourceType ?? "resource";
+    lines.push(`Resource: ${resourceType} (${resourceId})`);
+  }
+
+  return {
+    title,
+    body: lines.join("\n"),
+  };
+}
+
+/* ─── Channel workers ─────────────────────────────────────────────────────── */
+
+async function sendEmail(
+  delivery: NotificationDelivery,
+  channel: NotificationChannel,
+): Promise<void> {
+  const config = channel.config as { address?: string };
+  if (!config?.address) {
+    throw new Error("Email channel has no address configured");
+  }
+
+  const { title, body } = renderMessage(delivery);
+  await sendMail({
+    to: config.address,
+    subject: `[Openship] ${title}`,
+    text: body,
+    html: `<pre style="font-family:system-ui,sans-serif;font-size:14px">${escapeHtml(body)}</pre>`,
+  });
+}
+
+async function sendWebhook(
+  delivery: NotificationDelivery,
+  channel: NotificationChannel,
+): Promise<void> {
+  const config = channel.config as { url?: string; hmacSecret?: string };
+  if (!config?.url) {
+    throw new Error("Webhook channel has no URL configured");
+  }
+
+  const payload = (delivery.payload ?? {}) as Record<string, unknown>;
+  const body = JSON.stringify({
+    id: delivery.id,
+    category: delivery.category,
+    organizationId: delivery.organizationId,
+    resourceType: payload.resourceType ?? null,
+    resourceId: payload.resourceId ?? null,
+    payload,
+    createdAt: delivery.createdAt,
+  });
+
+  // HMAC signature so the receiver can verify the request came from
+  // Openship. The secret is set when the user creates the channel and
+  // stored encrypted in channel.config — we sign the raw body.
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "User-Agent": "Openship-Webhook/1.0",
+  };
+  if (config.hmacSecret) {
+    // The secret is encrypt()'d at storage time (see
+    // notifications.controller sanitizeChannelConfig). Decrypt before
+    // signing — otherwise we sign with ciphertext and the receiver's
+    // HMAC verify always fails.
+    const secret = decrypt(config.hmacSecret);
+    const sig = createHmac("sha256", secret).update(body).digest("hex");
+    headers["X-Openship-Signature-256"] = `sha256=${sig}`;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(config.url, {
+      method: "POST",
+      headers,
+      body,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Webhook returned ${res.status}: ${text.slice(0, 200)}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function sendInApp(_delivery: NotificationDelivery): Promise<void> {
+  // In-app delivery is "done" the moment the delivery row exists — the
+  // dashboard reads notification_delivery directly for the bell-icon
+  // inbox. The runner will mark this as sent immediately on return.
+}
+
+async function sendSlack(
+  delivery: NotificationDelivery,
+  channel: NotificationChannel,
+): Promise<void> {
+  const config = channel.config as { webhookUrl?: string; channelName?: string };
+  if (!config?.webhookUrl) {
+    throw new Error("Slack channel has no webhook URL configured");
+  }
+
+  // The webhook URL is encrypt()'d at storage time. Decrypt before
+  // POSTing — sending ciphertext to fetch() would fail URL parsing.
+  const webhookUrl = decrypt(config.webhookUrl);
+
+  const { title, body } = renderMessage(delivery);
+  const slackPayload = {
+    text: title,
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: title },
+      },
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "```\n" + body + "\n```" },
+      },
+    ],
+  };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(slackPayload),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Slack webhook returned ${res.status}: ${text.slice(0, 200)}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ─── Worker registry ─────────────────────────────────────────────────────── */
+
+const WORKERS: Record<
+  string,
+  (delivery: NotificationDelivery, channel: NotificationChannel) => Promise<void>
+> = {
+  email: sendEmail,
+  webhook: sendWebhook,
+  in_app: sendInApp,
+  slack: sendSlack,
+};
+
+/* ─── Runner loop ─────────────────────────────────────────────────────────── */
+
+const MAX_ATTEMPTS = 5;
+
+/**
+ * Process all currently-queued deliveries. Called by a periodic timer
+ * (started in app.ts boot) every few seconds. Each invocation claims a
+ * batch of queued rows, sends them concurrently, and marks the results.
+ *
+ * Retry policy:
+ *   - Transient failures (worker throws): up to MAX_ATTEMPTS attempts,
+ *     backoff via the next scheduled tick (no in-process delay — keeps
+ *     the loop simple and the DB row visibly "queued" between tries)
+ *   - Permanent failures (channel missing, malformed config): mark
+ *     failed immediately, surface in the dashboard
+ */
+export async function processQueuedNotifications(): Promise<void> {
+  const queued = await repos.notificationDelivery.claimQueued(25).catch(() => []);
+  if (queued.length === 0) return;
+
+  await Promise.all(
+    queued.map(async (delivery) => {
+      await repos.notificationDelivery.markSending(delivery.id).catch(() => {});
+
+      // Resolve channel — null channelId means the subscription pointed
+      // at a now-deleted channel. Mark failed permanently.
+      if (!delivery.channelId) {
+        await repos.notificationDelivery.markFailed(
+          delivery.id,
+          "Channel deleted",
+          false,
+        );
+        return;
+      }
+      const channel = await repos.notificationChannel
+        .findById(delivery.channelId)
+        .catch(() => undefined);
+      if (!channel) {
+        await repos.notificationDelivery.markFailed(
+          delivery.id,
+          "Channel not found",
+          false,
+        );
+        return;
+      }
+
+      const worker = WORKERS[channel.kind];
+      if (!worker) {
+        await repos.notificationDelivery.markFailed(
+          delivery.id,
+          `No worker for channel kind "${channel.kind}"`,
+          false,
+        );
+        return;
+      }
+
+      try {
+        await worker(delivery, channel);
+        await repos.notificationDelivery.markSent(delivery.id);
+        await repos.notificationChannel.touchLastDelivered(channel.id).catch(() => {});
+      } catch (err) {
+        const message = safeErrorMessage(err);
+        const attempts = delivery.attempts + 1;
+        const retry = attempts < MAX_ATTEMPTS;
+        await repos.notificationDelivery.markFailed(delivery.id, message, retry);
+        if (!retry) {
+          console.error(
+            `[notification] delivery ${delivery.id} failed permanently after ${attempts} attempts:`,
+            message,
+          );
+        }
+      }
+    }),
+  );
+}
+
+let runnerInterval: ReturnType<typeof setInterval> | null = null;
+
+/** Start the periodic runner. Called from app.ts boot. */
+export function startNotificationRunner(intervalMs = 5000): void {
+  if (runnerInterval) return;
+  runnerInterval = setInterval(() => {
+    void processQueuedNotifications().catch((err) =>
+      console.error("[notification] runner tick failed:", err),
+    );
+  }, intervalMs);
+}
+
+export function stopNotificationRunner(): void {
+  if (runnerInterval) {
+    clearInterval(runnerInterval);
+    runnerInterval = null;
+  }
+}
+
+/* ─── Helpers ─────────────────────────────────────────────────────────────── */
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}

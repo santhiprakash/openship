@@ -35,6 +35,7 @@
 
 import { sshManager } from "../../../lib/ssh-manager";
 import { MAIL_COMPONENTS } from "../mail-health.service";
+import { safeErrorMessage } from "@repo/core";
 
 export class UnknownComponentError extends Error {}
 
@@ -202,7 +203,7 @@ export async function restartAllComponents(
         });
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = safeErrorMessage(err);
       results.push({
         key: comp.key,
         unit: comp.unit,

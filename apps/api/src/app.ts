@@ -4,6 +4,8 @@ import { logger } from "hono/logger";
 import { env, trustedOrigins } from "./config/env";
 import { errorHandler, handleApiError } from "./middleware/error-handler";
 import { rateLimiter } from "./middleware/rate-limiter";
+import { clientIpMiddleware } from "./middleware/client-ip";
+import { betterAuthShield } from "./middleware/better-auth-shield";
 import { bootstrapPlatform } from "./lib/controller-helpers";
 
 import { authRoutes } from "./modules/auth/auth.routes";
@@ -18,12 +20,17 @@ import { healthRoutes } from "./modules/health/health.routes";
 import { githubRoutes } from "./modules/github";
 import * as githubAuth from "./modules/github/github.auth";
 import { settingsRoutes } from "./modules/settings/settings.routes";
+import { notificationsRoutes } from "./modules/notifications/notifications.routes";
 import { imageRoutes } from "./modules/images/images.routes";
 import { backupRoutes } from "./modules/backups/backup.routes";
+import { auditRoutes } from "./modules/audit/audit.routes";
+import { permissionsRoutes } from "./modules/permissions/permissions.routes";
 import { backupWebhookRoutes } from "./modules/backups/webhook.routes";
 import { backupDestinationRoutes } from "./modules/backup-destinations/destination.routes";
 import { reconcileAllSchedules } from "./modules/backups/triggers/cron";
 import { scheduleRetentionPrune } from "./modules/backups/retention-prune";
+import { scheduleAuditPrune } from "./modules/audit/audit-prune-schedule";
+import { schedulePendingGrantPrune } from "./modules/permissions/pending-grant-prune-schedule";
 import { backupOrchestrator } from "./modules/backups/backup.orchestrator";
 import { getJobRunner } from "./lib/job-runner";
 import { repos } from "@repo/db";
@@ -43,6 +50,7 @@ app.use(
 );
 app.use("*", errorHandler);
 app.use("*", logger());
+app.use("*", clientIpMiddleware);
 
 // Primary error path: Hono's compose() catches thrown errors at each
 // dispatch level and routes them to `this.errorHandler`, NOT up through
@@ -52,6 +60,12 @@ app.use("*", logger());
 app.onError(handleApiError);
 
 app.use("/api/auth/*", rateLimiter);
+
+// Shield Better Auth's organization-plugin reads (list-members,
+// list-invitations, get-active-member-role) — they leak admin-tier
+// data to restricted/member roles otherwise. Must register BEFORE the
+// /api/auth catch-all route mount so Hono runs it first.
+app.use("/api/auth/organization/*", betterAuthShield);
 
 /* ---------- Shared routes (self-hosted + cloud + desktop) ---------- */
 app.route("/api/health", healthRoutes);
@@ -69,6 +83,9 @@ app.route("/api/images", imageRoutes);
 app.route("/api", backupRoutes);
 app.route("/api/backup-destinations", backupDestinationRoutes);
 app.route("/api/webhooks/backup", backupWebhookRoutes);
+app.route("/api/audit", auditRoutes);
+app.route("/api/permissions", permissionsRoutes);
+app.route("/api/notifications", notificationsRoutes);
 
 /* ---------- OAuth callback landing pages ---------- */
 const authCallbackHtml = `<!DOCTYPE html><html><head><title>Success</title></head><body><script>window.close();</script><p>Authentication successful. You can close this window.</p></body></html>`;
@@ -176,6 +193,15 @@ if (env.CLOUD_MODE) {
     console.warn("[boot] scheduleRetentionPrune failed:", err),
   );
 
+  // Daily audit-log prune (per-org retention window).
+  void schedulePendingGrantPrune().catch((err) =>
+    console.warn("[boot] schedulePendingGrantPrune failed:", err),
+  );
+
+  void scheduleAuditPrune().catch((err) =>
+    console.warn("[boot] scheduleAuditPrune failed:", err),
+  );
+
   // Re-register every enabled cron policy with the runner.
   void reconcileAllSchedules().then((stats) =>
     console.log(
@@ -190,4 +216,15 @@ if (env.CLOUD_MODE) {
       );
     }
   });
+}
+
+// ─── Notification delivery runner ───────────────────────────────────
+//
+// Polls notification_delivery for queued rows every few seconds and
+// dispatches them to per-channel workers (email/webhook/in_app/slack).
+// Lightweight in-process timer — fine for the cluster sizes we target.
+{
+  const { startNotificationRunner } = await import("./lib/notification-workers");
+  startNotificationRunner();
+  console.log("[boot] notification runner started");
 }

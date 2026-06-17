@@ -11,6 +11,9 @@
 
 import type { Context } from "hono";
 import { env } from "../../../config";
+import { repos } from "@repo/db";
+import { getActiveOrganizationId } from "../../../lib/controller-helpers";
+import { permission } from "../../../lib/permission";
 import {
   countDomainDependents,
   createDomain,
@@ -36,6 +39,7 @@ import {
 import { getMailServerStats } from "./stats.service";
 import { scanDns } from "./dns-scan.service";
 import { sendTestEmail, TestEmailError } from "./test-email.service";
+import { safeErrorMessage } from "@repo/core";
 import {
   getComponentLogs,
   restartAllComponents,
@@ -67,12 +71,38 @@ function requireServerId(c: Context): string {
   return id;
 }
 
+/**
+ * Org-scoped guard: confirms the path's :serverId belongs to the caller's
+ * active organization. Returns null on success; returns a 404 Response on
+ * failure that handlers should pass straight back to the client. Both
+ * unknown and out-of-org server ids 404 indistinguishably to prevent
+ * cross-tenant existence leaks.
+ *
+ * Every admin handler (domains, mailboxes, components, dns, stats, etc.)
+ * must call this — they all reach the iRedMail psql/SSH layer via the
+ * named serverId, so an unguarded handler is a full mail-admin takeover.
+ */
+async function assertServerInOrg(
+  c: Context,
+  serverId: string,
+): Promise<Response | null> {
+  const organizationId = getActiveOrganizationId(c);
+  const server = await repos.server.getInOrganization(serverId, organizationId);
+  if (!server) {
+    return c.json({ error: "Server not found" }, 404);
+  }
+  return null;
+}
+
 // ─── Domains ─────────────────────────────────────────────────────────────────
 
 export async function listDomainsHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "read" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   try {
     const rows = await listDomains(serverId);
     return c.json({ domains: rows });
@@ -85,6 +115,9 @@ export async function getDomainHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "read" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const domain = c.req.param("domain");
   if (!domain) return c.json({ error: "domain required" }, 400);
   try {
@@ -100,6 +133,9 @@ export async function createDomainHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "write" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const body = await c.req.json().catch(() => ({}));
   try {
     const { row, dnsWarning } = await createDomain(serverId, {
@@ -122,6 +158,9 @@ export async function updateDomainHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "write" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const domain = c.req.param("domain");
   if (!domain) return c.json({ error: "domain required" }, 400);
   const body = await c.req.json().catch(() => ({}));
@@ -146,6 +185,9 @@ export async function deleteDomainHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "admin" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const domain = c.req.param("domain");
   if (!domain) return c.json({ error: "domain required" }, 400);
   const cascade = c.req.query("cascade") === "true";
@@ -175,6 +217,9 @@ export async function getDomainDnsHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "read" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const domain = c.req.param("domain");
   if (!domain) return c.json({ error: "domain required" }, 400);
   try {
@@ -197,6 +242,9 @@ export async function acknowledgeDomainDnsHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "write" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const domain = c.req.param("domain");
   if (!domain) return c.json({ error: "domain required" }, 400);
   try {
@@ -216,6 +264,9 @@ export async function pendingDomainDnsHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "read" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   try {
     const pending = await listPendingDomainDns(serverId);
     // Flatten { domain, state } → { domain, ...state } so the shape matches
@@ -232,6 +283,9 @@ export async function domainDependentsHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "read" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const domain = c.req.param("domain");
   if (!domain) return c.json({ error: "domain required" }, 400);
   try {
@@ -249,6 +303,9 @@ export async function listMailboxesHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "read" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const domain = c.req.query("domain");
   if (!domain) return c.json({ error: "domain query param required" }, 400);
   try {
@@ -263,6 +320,9 @@ export async function getMailboxHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "read" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const email = c.req.param("email");
   if (!email) return c.json({ error: "email required" }, 400);
   try {
@@ -278,6 +338,9 @@ export async function createMailboxHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "write" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const body = await c.req.json().catch(() => ({}));
   try {
     const row = await createMailbox(serverId, {
@@ -300,6 +363,9 @@ export async function updateMailboxHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "write" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const email = c.req.param("email");
   if (!email) return c.json({ error: "email required" }, 400);
   const body = await c.req.json().catch(() => ({}));
@@ -323,6 +389,9 @@ export async function deleteMailboxHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "admin" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const email = c.req.param("email");
   if (!email) return c.json({ error: "email required" }, 400);
   const hard = c.req.query("hard") === "true";
@@ -348,6 +417,9 @@ export async function getStatsHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "read" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   try {
     const stats = await getMailServerStats(serverId);
     return c.json(stats);
@@ -362,6 +434,9 @@ export async function sendTestEmailHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "write" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const body = await c.req.json().catch(() => ({}));
   try {
     const result = await sendTestEmail(serverId, {
@@ -386,6 +461,9 @@ export async function getDnsScanHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "read" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   try {
     const result = await scanDns(serverId);
     return c.json(result);
@@ -400,6 +478,9 @@ export async function runComponentActionHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "admin" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const key = c.req.param("key");
   if (!key) return c.json({ error: "key is required" }, 400);
   const action = c.req.param("action") as ComponentAction | undefined;
@@ -419,6 +500,9 @@ export async function restartAllComponentsHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "admin" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   try {
     const result = await restartAllComponents(serverId);
     return c.json(result);
@@ -431,6 +515,9 @@ export async function getComponentLogsHandler(c: Context) {
   const guard = localOnlyGuard(c);
   if (guard) return guard;
   const serverId = requireServerId(c);
+  await permission.assert(c, { resourceType: "mail_server", resourceId: serverId, action: "read" });
+  const orgGuard = await assertServerInOrg(c, serverId);
+  if (orgGuard) return orgGuard;
   const key = c.req.param("key");
   if (!key) return c.json({ error: "key is required" }, 400);
   const linesParam = c.req.query("lines");
@@ -449,7 +536,7 @@ export async function getComponentLogsHandler(c: Context) {
 // ─── Error mapping ───────────────────────────────────────────────────────────
 
 function errorJson(c: Context, err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = safeErrorMessage(err);
   // The SSH+psql layer throws plain Error for any non-shape error
   // (connection failure, SQL syntax, validation). 500 is the right default;
   // typed errors above are caught and mapped to 4xx individually.

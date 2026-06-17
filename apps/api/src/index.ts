@@ -2,8 +2,14 @@ import { serve } from "@hono/node-server";
 import { app } from "./app";
 import { env } from "./config/env";
 import { getJobRunner } from "./lib/job-runner";
+import { enforceRouteScanAtBoot } from "./lib/route-scanner";
 
 const port = env.PORT;
+
+// Refuse to start if any registered route is mis-tagged or any
+// mutation route was mounted on a raw Hono instance (bypassing
+// secureRouter). The scanner exits the process on critical errors.
+enforceRouteScanAtBoot(app);
 
 const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`🚀 Openship API running on http://localhost:${info.port}`);

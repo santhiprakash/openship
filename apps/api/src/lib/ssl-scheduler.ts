@@ -16,7 +16,7 @@
 import { repos } from "@repo/db";
 import { SYSTEM } from "@repo/core";
 import { platform } from "./controller-helpers";
-import { notify } from "./notifications";
+import { notification } from "./notification-dispatcher";
 
 // ─── Core renewal logic ──────────────────────────────────────────────────────
 
@@ -48,15 +48,21 @@ export async function renewExpiringCerts(): Promise<RenewalResult> {
 
   const batch = allDomains.slice(0, SYSTEM.DOMAINS.SSL_RENEW_BATCH_SIZE);
 
-  // Pre-fetch project → user map (avoids N+1)
+  // Pre-fetch project → (org, project name) so the dispatcher knows
+  // which org to fan out the notification to. Each org's members each
+  // receive notifications via their configured channels.
   const projectIds = [...new Set(batch.map((d) => d.projectId))];
-  const ownerCache = new Map<string, { email?: string; projectName: string }>();
-
+  const projectCache = new Map<
+    string,
+    { organizationId: string; projectName: string }
+  >();
   for (const pid of projectIds) {
     const project = await repos.project.findById(pid);
     if (!project) continue;
-    const user = await repos.user.findById(project.userId);
-    ownerCache.set(pid, { email: user?.email, projectName: project.name });
+    projectCache.set(pid, {
+      organizationId: project.organizationId,
+      projectName: project.name,
+    });
   }
 
   const details: RenewalResult["details"] = [];
@@ -64,7 +70,7 @@ export async function renewExpiringCerts(): Promise<RenewalResult> {
   let failed = 0;
 
   for (const domain of batch) {
-    const owner = ownerCache.get(domain.projectId);
+    const ctx = projectCache.get(domain.projectId);
 
     try {
       const result = await ssl.renewCert(domain.hostname);
@@ -78,13 +84,8 @@ export async function renewExpiringCerts(): Promise<RenewalResult> {
       renewed++;
       details.push({ domain: domain.hostname, status: "renewed" });
 
-      if (owner?.email) {
-        void notify("ssl_renewed", {
-          email: owner.email,
-          projectName: owner.projectName,
-          data: { domain: domain.hostname, expiresAt: result.expiresAt },
-        });
-      }
+      // ssl_renewed isn't a notification category (renewal success is
+      // expected — only failures are noteworthy). Skip dispatch.
     } catch (err) {
       failed++;
       const message = err instanceof Error ? err.message : "Unknown error";
@@ -92,14 +93,21 @@ export async function renewExpiringCerts(): Promise<RenewalResult> {
 
       await repos.domain.updateSsl(domain.id, { sslStatus: "error" }).catch(() => {});
 
-      if (owner?.email) {
+      if (ctx) {
         const daysLeft = Math.ceil(
           ((domain.sslExpiresAt?.getTime() ?? 0) - Date.now()) / 86_400_000,
         );
-        void notify("ssl_expiring", {
-          email: owner.email,
-          projectName: owner.projectName,
-          data: { domain: domain.hostname, daysLeft },
+        notification.emit({
+          organizationId: ctx.organizationId,
+          eventType: "ssl.renewal_failed",
+          resourceType: "domain",
+          resourceId: domain.id,
+          payload: {
+            projectName: ctx.projectName,
+            domain: domain.hostname,
+            daysLeft,
+            errorMessage: message,
+          },
         });
       }
     }

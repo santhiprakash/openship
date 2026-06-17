@@ -64,10 +64,9 @@ export type DeployableService = ComposeService & MonorepoSubAppFields & {
 /**
  * Narrow a service row's text `kind` column to the discriminator type.
  * Anything that isn't explicit "monorepo" is treated as "compose" - matches
- * the schema default and lets old rows without an explicit kind keep working.
+ * the schema default and handles rows without an explicit kind.
  *
- * One helper so every consumer narrows the same way - no scattered
- * `service.kind === "monorepo" ? "monorepo" : "compose"` wrappers.
+ * One helper so every consumer narrows the same way.
  */
 export function serviceKind(
   service: { kind?: string | null } | { kind?: "compose" | "monorepo" },
@@ -98,12 +97,11 @@ export function parseServicePort(value?: string | null): number | null {
  *
  *   1. `exposedPort` - explicit external mapping (highest precedence)
  *   2. First entry of `ports[]` - compose-style "HOST:CONTAINER" or "PORT"
- *   3. `fallback` - typically the project-level port for legacy single-app
- *      compatibility. When undefined the helper returns null.
+ *   3. `fallback` - typically the project-level port. When undefined the
+ *      helper returns null.
  *
  * Centralized so build.service.ts, deploy.service.ts, and routing-domains.ts
- * all compute the same number - three near-identical chains used to drift
- * in nullability and parser behavior.
+ * all compute the same number with consistent nullability and parser behavior.
  */
 export function resolveServicePort(
   service: { exposedPort?: string | null; ports?: string[] | null },

@@ -29,6 +29,9 @@ import {
 import { formatDuration, systemDebug } from "@/lib/system-debug";
 import { sshManager, buildSshConfig } from "../../lib/ssh-manager";
 import { repos } from "@repo/db";
+import { getUserId, getActiveOrganizationId } from "../../lib/controller-helpers";
+import { permission } from "../../lib/permission";
+import { safeErrorMessage } from "@repo/core";
 import {
   createSetupSession,
   getSetupSession,
@@ -114,6 +117,19 @@ function resolveInfraComponents(): string[] {
 export async function testConnection(c: Context) {
   if (env.CLOUD_MODE) return c.json({ error: "Not available" }, 404);
 
+  // Gate to org owner/admin: this endpoint connects to an arbitrary SSH host
+  // from the request body (onboarding/setup wizard flow). Even non-Hono
+  // permission paths don't apply here — there's no DB resource yet. We
+  // simply require the caller be an org admin+ to mitigate SSRF / port-scan
+  // oracles by unprivileged members. Private IPs are NOT blocked because
+  // admins may legitimately test internal hosts.
+  const userId = getUserId(c);
+  const orgId = getActiveOrganizationId(c);
+  const m = await repos.member.find(orgId, userId);
+  if (!m || (m.role !== "owner" && m.role !== "admin")) {
+    return c.json({ error: "Insufficient permissions" }, 403);
+  }
+
   const startedAt = Date.now();
   const result = await buildEphemeralExecutor(c);
 
@@ -184,6 +200,9 @@ export async function checkServer(c: Context) {
     const body = await c.req.json().catch(() => ({}));
     const serverId = body.serverId as string | undefined;
     if (!serverId) return c.json({ error: "serverId is required" }, 400);
+
+    getActiveOrganizationId(c);
+    await permission.assert(c, { resourceType: "server", resourceId: serverId, action: "admin" });
 
     const requestedComponents = body.components as string[] | undefined;
     debugSystemRequest(
@@ -265,6 +284,9 @@ export async function installComponent(c: Context) {
   const serverId = body.serverId as string | undefined;
   if (!serverId) return c.json({ error: "serverId is required" }, 400);
 
+  getActiveOrganizationId(c);
+  await permission.assert(c, { resourceType: "server", resourceId: serverId, action: "admin" });
+
   const componentName = body.component as string;
 
   if (!componentName || !ALLOWED_COMPONENTS.has(componentName)) {
@@ -321,6 +343,9 @@ export async function removeComponent(c: Context) {
   const body = await c.req.json().catch(() => ({}));
   const serverId = body.serverId as string | undefined;
   if (!serverId) return c.json({ error: "serverId is required" }, 400);
+
+  getActiveOrganizationId(c);
+  await permission.assert(c, { resourceType: "server", resourceId: serverId, action: "admin" });
 
   const componentName = body.component as string;
   if (!componentName || !REMOVABLE_COMPONENTS.has(componentName)) {
@@ -379,6 +404,9 @@ export async function installStream(c: Context) {
   const body = await c.req.json().catch(() => ({}));
   const serverId = body.serverId as string | undefined;
   if (!serverId) return c.json({ error: "serverId is required" }, 400);
+
+  getActiveOrganizationId(c);
+  await permission.assert(c, { resourceType: "server", resourceId: serverId, action: "admin" });
 
   const requestedComponents = body.components as string[] | undefined;
   const config = body.config ?? {};
@@ -457,7 +485,7 @@ export async function installStream(c: Context) {
             hasFailure = true;
           }
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = safeErrorMessage(err);
           appendSetupLog(session.id, name, msg, "error");
           updateComponentProgress(session.id, name, "failed", msg);
           hasFailure = true;
@@ -507,6 +535,12 @@ export async function getInstallSession(c: Context) {
     return c.json({ active: false }, 200);
   }
 
+  // Gate to org members with admin rights over the session's target server.
+  // Sessions are server-scoped, so existence-leak protection applies via the
+  // server resource (404-shape).
+  getActiveOrganizationId(c);
+  await permission.assert(c, { resourceType: "server", resourceId: session.serverId, action: "admin" });
+
   return c.json({
     active: true,
     sessionId: session.id,
@@ -535,6 +569,10 @@ export async function attachInstallStream(c: Context) {
   if (!session) {
     return c.json({ error: "No active session" }, 404);
   }
+
+  // Gate by the session's underlying server before opening the SSE stream.
+  getActiveOrganizationId(c);
+  await permission.assert(c, { resourceType: "server", resourceId: session.serverId, action: "admin" });
 
   return streamSSE(c, async (sseStream) => {
     let closed = false;
@@ -633,6 +671,9 @@ export async function monitorStream(c: Context) {
   const serverId = c.req.query("serverId");
   if (!serverId) return c.json({ error: "serverId query param is required" }, 400);
 
+  getActiveOrganizationId(c);
+  await permission.assert(c, { resourceType: "server", resourceId: serverId, action: "read" });
+
   const POLL_INTERVAL = 3_000;
 
   return streamSSE(c, async (sseStream) => {
@@ -653,7 +694,7 @@ export async function monitorStream(c: Context) {
           await sseStream.writeSSE({ event: "stats", data: raw });
         } catch (err) {
           if (ac.signal.aborted) break;
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = safeErrorMessage(err);
           await sseStream.writeSSE({
             event: "error",
             data: JSON.stringify({ error: msg }),

@@ -1,4 +1,5 @@
 import { createAuthClient } from "better-auth/react";
+import { organizationClient } from "better-auth/client/plugins";
 import { getAuthBaseUrl } from "@/lib/api/urls";
 
 /**
@@ -20,6 +21,7 @@ export const authClient = createAuthClient({
       delay: 0,
     },
   },
+  plugins: [organizationClient()],
 });
 
 export const {

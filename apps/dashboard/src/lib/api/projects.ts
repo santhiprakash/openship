@@ -144,7 +144,7 @@ export const projectsApi = {
   delete: (
     id: string | number,
     body: { deleteApp?: boolean; wipeVolumes?: boolean } = {},
-  ) => api.post<any>(endpoints.projects.delete(id), body),
+  ) => api.delete<any>(endpoints.projects.item(id), { body }),
 
   /** Read-only snapshot of what `delete(id)` will remove - services and their
    *  named volumes, project networks. Cheap, safe to call on modal open. */
@@ -168,9 +168,9 @@ export const projectsApi = {
       };
     }>(`${endpoints.projects.item(id)}/deletion-preview`),
 
-  /** Update name or description */
-  update: (id: string | number, action: string, value: string) =>
-    api.post<any>(endpoints.projects.update(id), { action, value }),
+  /** Update name or description — pass any subset of TUpdateProjectBody fields. */
+  update: (id: string | number, fields: Record<string, unknown>) =>
+    api.patch<any>(endpoints.projects.item(id), fields),
 
   /**
    * Get the per-project clone-token state. Returns only `{ hasToken, setAt }`
@@ -235,10 +235,10 @@ export const projectsApi = {
 
   /** Set environment variables */
   setEnv: (id: string | number, envVars: any) =>
-    api.post<any>(endpoints.projects.envSet(id), { envVars }),
+    api.put<any>(endpoints.projects.env(id), envVars),
 
   /** Get environment variables */
-  getEnv: (id: string | number) => api.get<any>(endpoints.projects.envGet(id)),
+  getEnv: (id: string | number) => api.get<any>(endpoints.projects.env(id)),
 
   /** Get git settings */
   getGit: (id: string | number) => api.get<any>(endpoints.projects.git(id)),

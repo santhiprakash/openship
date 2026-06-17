@@ -4,7 +4,7 @@
 
 import type { Context } from "hono";
 import { streamSSE } from "../../lib/sse";
-import { getUserId, param } from "../../lib/controller-helpers";
+import { getActiveOrganizationId, param } from "../../lib/controller-helpers";
 import { resolveDeploymentRuntime } from "../../lib/deployment-runtime";
 import { sshManager } from "../../lib/ssh-manager";
 import { repos } from "@repo/db";
@@ -16,17 +16,17 @@ import type { TAnalyticsQuery, TUsageQuery, TUsageStreamQuery } from "./analytic
 
 /** GET /analytics - cumulative summary */
 export async function summary(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const { projectId } = c.req.query() as unknown as TAnalyticsQuery;
-  const data = await analyticsService.getAnalyticsSummary(projectId, userId);
+  const data = await analyticsService.getAnalyticsSummary(projectId, organizationId);
   return c.json({ data });
 }
 
 /** GET /analytics/periods - time-series periods */
 export async function periods(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const { projectId, from, to } = c.req.query() as unknown as TAnalyticsQuery;
-  const data = await analyticsService.getAnalyticsPeriods(projectId, userId, from, to);
+  const data = await analyticsService.getAnalyticsPeriods(projectId, organizationId, from, to);
   return c.json({ data });
 }
 
@@ -34,9 +34,9 @@ export async function periods(c: Context) {
 
 /** GET /analytics/deployments - deployment success/fail/avg build stats */
 export async function deploymentStats(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const { projectId } = c.req.query() as unknown as TAnalyticsQuery;
-  const data = await analyticsService.getDeploymentStats(projectId, userId);
+  const data = await analyticsService.getDeploymentStats(projectId, organizationId);
   return c.json({ data });
 }
 
@@ -44,28 +44,29 @@ export async function deploymentStats(c: Context) {
 
 /** GET /analytics/usage - current container resource usage */
 export async function usage(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const { projectId } = c.req.query() as unknown as TUsageQuery;
-  const data = await analyticsService.getContainerUsage(projectId, userId);
+  const data = await analyticsService.getContainerUsage(projectId, organizationId);
   return c.json({ data });
 }
 
 /** GET /analytics/container - container info (status, IP, uptime) */
 export async function containerInfo(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const { projectId } = c.req.query() as unknown as TUsageQuery;
-  const data = await analyticsService.getContainerInfo(projectId, userId);
+  const data = await analyticsService.getContainerInfo(projectId, organizationId);
   return c.json({ data });
 }
 
 /** GET /analytics/usage/stream - SSE stream of real-time resource usage */
 export async function usageStream(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const { projectId } = c.req.query() as unknown as TUsageStreamQuery;
 
-  // Verify project access
+  // Verify project belongs to caller's active org. Membership is already
+  // confirmed by the route middleware.
   const project = await repos.project.findById(projectId);
-  if (!project || project.userId !== userId) {
+  if (!project || project.organizationId !== organizationId) {
     return c.json({ error: "Project not found" }, 404);
   }
 
@@ -116,10 +117,10 @@ export async function usageStream(c: Context) {
 
 // ─── Dashboard ───────────────────────────────────────────────────────────────
 
-/** GET /analytics/dashboard - overview stats for user's dashboard home */
+/** GET /analytics/dashboard - overview stats for the active org's dashboard */
 export async function dashboard(c: Context) {
-  const userId = getUserId(c);
-  const data = await analyticsService.getDashboardStats(userId);
+  const organizationId = getActiveOrganizationId(c);
+  const data = await analyticsService.getDashboardStats(organizationId);
   return c.json({ data });
 }
 

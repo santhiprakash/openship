@@ -6,7 +6,7 @@
  * Checks are fast, non-destructive, and run in parallel.
  */
 
-import { LANGUAGES, STACKS, type Language, type StackDefinition, type StackId } from "@repo/core";
+import { LANGUAGES, STACKS, safeErrorMessage, type Language, type StackDefinition, type StackId } from "@repo/core";
 import type { CommandExecutor } from "../types";
 import type { ToolchainStatus, ToolchainCheckResult } from "./types";
 import { toolchainCatalog } from "./catalog";
@@ -53,11 +53,11 @@ async function tryExec(
     if (isRemoteConnectionError(err)) {
       systemDebug(
         "toolchain",
-        `exec:abort ${command} (${formatDuration(startedAt)}) ${err instanceof Error ? err.message : String(err)}`,
+        `exec:abort ${command} (${formatDuration(startedAt)}) ${safeErrorMessage(err)}`,
       );
       throw err;
     }
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     systemDebug(
       "toolchain",
       `exec:fail ${command} (${formatDuration(startedAt)}) ${msg}`,

@@ -16,7 +16,7 @@
 import { Oblien } from "@repo/adapters";
 import { env } from "../../config/env";
 import { getOblienClient } from "../../lib/openship-cloud";
-import { getCloudToken } from "../../lib/cloud-client";
+import { getOrgCloudToken } from "../../lib/cloud-client";
 
 export interface ImageCatalogEntry {
   /** Unique slug, e.g. "postgres" - what the user picks in the catalog */
@@ -60,13 +60,16 @@ function cacheKey(userId: string | "saas", params: CatalogParams): string {
 
 /**
  * Pick the right Oblien client for the current deployment mode.
- * Throws "cloud-not-connected" when local-mode user has no cloud link.
+ * Throws "cloud-not-connected" when the org has no cloud link.
+ *
+ * The catalog is org-shared — every team member sees the same images
+ * via the org owner's namespace.
  */
-async function getClientForUser(userId: string): Promise<Oblien> {
+async function getClientForOrg(organizationId: string): Promise<Oblien> {
   if (env.CLOUD_MODE) {
     return getOblienClient();
   }
-  const tok = await getCloudToken(userId);
+  const tok = await getOrgCloudToken(organizationId);
   if (!tok) throw new Error("cloud-not-connected");
   return new Oblien({ token: tok.token });
 }
@@ -83,14 +86,17 @@ function normalizeImages(raw: unknown): ImageCatalogEntry[] {
   return list.filter((x): x is ImageCatalogEntry => !!x && typeof x === "object");
 }
 
-export async function listImages(userId: string, params: CatalogParams = {}): Promise<ImageCatalogEntry[]> {
-  const key = cacheKey(env.CLOUD_MODE ? "saas" : userId, params);
+export async function listImages(
+  organizationId: string,
+  params: CatalogParams = {},
+): Promise<ImageCatalogEntry[]> {
+  const key = cacheKey(env.CLOUD_MODE ? "saas" : organizationId, params);
   const hit = cache.get(key);
   if (hit && hit.expiresAt > Date.now()) {
     return hit.images;
   }
 
-  const client = await getClientForUser(userId);
+  const client = await getClientForOrg(organizationId);
   const response = await client.workspaces.images.list(params);
   const images = normalizeImages(response);
 

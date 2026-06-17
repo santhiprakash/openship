@@ -1,6 +1,7 @@
 import type { CommandExecutor } from "../types";
 import { formatDuration, systemDebug } from "./debug";
 import { isRemoteConnectionError } from "./errors";
+import { safeErrorMessage } from "@repo/core";
 
 export type SystemOs = "linux" | "darwin" | "unknown";
 export type SystemArch = "amd64" | "arm64" | "unknown";
@@ -43,11 +44,11 @@ async function execSafe(
     if (isRemoteConnectionError(err)) {
       systemDebug(
         "environment",
-        `exec:abort ${command} (${formatDuration(startedAt)}) ${err instanceof Error ? err.message : String(err)}`,
+        `exec:abort ${command} (${formatDuration(startedAt)}) ${safeErrorMessage(err)}`,
       );
       throw err;
     }
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     systemDebug(
       "environment",
       `exec:fail ${command} (${formatDuration(startedAt)}) ${msg}`,

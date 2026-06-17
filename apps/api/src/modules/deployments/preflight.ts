@@ -19,14 +19,17 @@ import { runCloudPreflight, type CloudPreflightData } from "../../lib/cloud-pref
 import type { DeployableService } from "../../lib/deployable-service";
 import { serviceKind } from "./compose/project-services";
 import { getRoutingBaseDomain } from "../../lib/routing-domains";
+import { resolveServerHost } from "../../lib/server-target";
 import { normalizeTargetPath } from "../../lib/public-endpoints";
 import {
   getInstallationId,
+  getInstallationIdByOrg,
   getGitHubAuthMode,
   getInstallUrl,
   resolveGitHubAuthMode,
 } from "../github/github.auth";
 import { canResolveTokenFor } from "../github/github.token";
+import { resolveRecords, lookupAddresses } from "../../lib/dns-resolver";
 
 export interface PreflightCheck {
   id: string;
@@ -81,6 +84,11 @@ export interface PreflightOptions {
    *  considered as a valid remote-clone source. Optional because the
    *  project row may not exist yet during a first-deploy preflight. */
   projectId?: string;
+  /** Active organization id — when set, App installation lookup prefers
+   *  `(organizationId, owner)` over the `(userId, owner)` path.
+   *  Multi-user safety: a teammate's deploy shouldn't depend on whichever
+   *  org member happened to install the App. */
+  organizationId?: string;
   /** Whether the build runs on the API host (`local`) or on the deploy
    *  target (`server`). For non-App auth modes, only `local` keeps the
    *  user's broad-scope token from leaving the API process. */
@@ -98,6 +106,7 @@ export interface PreflightOptions {
 async function checkGitHubAppInstallation(
   userId: string | undefined,
   owner: string | null | undefined,
+  organizationId?: string,
 ): Promise<PreflightCheck> {
   const baseCheck = {
     id: "github-app-installation",
@@ -117,7 +126,15 @@ async function checkGitHubAppInstallation(
   if (mode !== "app" && mode !== "cloud-app") {
     return { ...baseCheck, status: "pass" };
   }
-  const installationId = await getInstallationId(userId, owner).catch(() => null);
+  // Mirror tokenFor: prefer org-scoped installation row, fall back to
+  // the per-user row.
+  let installationId: number | null = null;
+  if (organizationId) {
+    installationId = await getInstallationIdByOrg(organizationId, owner).catch(() => null);
+  }
+  if (!installationId) {
+    installationId = await getInstallationId(userId, owner).catch(() => null);
+  }
   if (installationId) {
     return { ...baseCheck, status: "pass" };
   }
@@ -219,6 +236,7 @@ async function checkRemoteCloneToken(
   projectId: string | undefined,
   effectiveTarget: string,
   buildStrategy: "local" | "server" | undefined,
+  organizationId?: string,
 ): Promise<PreflightCheck> {
   const baseCheck = {
     id: "remote-clone-token",
@@ -230,9 +248,11 @@ async function checkRemoteCloneToken(
 
   // Existence check only — no mint. The real mint happens later in the
   // build pipeline when we actually need to clone.
-  const source = await canResolveTokenFor(userId, "remote", { projectId, owner }).catch(
-    () => null,
-  );
+  const source = await canResolveTokenFor(userId, "remote", {
+    projectId,
+    owner,
+    organizationId,
+  }).catch(() => null);
   if (source) return { ...baseCheck, status: "pass" };
 
   return {
@@ -504,7 +524,8 @@ async function requestCloudPreflight(
   }
 
   if (effectiveTarget === "cloud" || plat.target === "desktop") {
-    return getCloudPreflight(userId, input);
+    if (!snapshot.organizationId) return null;
+    return getCloudPreflight(snapshot.organizationId, input);
   }
 
   return null;
@@ -518,8 +539,14 @@ async function resolveCloudPreflight(
   const effectiveTarget =
     plat.target === "desktop" ? (snapshot.deployTarget ?? "cloud") : plat.target;
 
+  // MUST match deployment-runtime.ts:usesManagedRouting. If these two
+  // calculations drift, the preflight gate (CLOUD_REQUIRED_MANAGED_PROJECT_DOMAIN)
+  // becomes meaningless: a project that would crash at deploy time inside
+  // ensureManagedEdgeProxy (because no cloud account is linked) sails
+  // through preflight and dies AFTER the build runs.
   const usesManagedRouting =
-    plat.target === "desktop" && (effectiveTarget === "server" || effectiveTarget === "local");
+    plat.target === "selfhosted" ||
+    (plat.target === "desktop" && (effectiveTarget === "server" || effectiveTarget === "local"));
   const hasManagedPublicEndpoints =
     opts?.publicEndpoints?.some((endpoint) => endpoint.domainType !== "custom") ?? false;
   const needsManagedProjectDomain =
@@ -723,86 +750,158 @@ async function checkSlug(slug: string, cloud: CloudPreflightData | null): Promis
   return { id: "slug-available", label: "Subdomain availability", status: "pass" };
 }
 
+const CLOUD_EDGE_CNAME = "edge.openship.io";
+const DOMAIN_CHECK_TIMEOUT_MS = 4_000;
+
+/**
+ * Cloud route flow — the SaaS preflight result is the source of truth.
+ * No local DNS check is needed: the cloud has already resolved the
+ * customer-facing CNAME and cert state. Mirrors the verified/pending
+ * statuses that the Domains tab shows so the deploy modal stays
+ * consistent with the dashboard's verification UI.
+ */
+function checkCustomDomainCloudVerified(
+  customDomain: string,
+  cloud: NonNullable<CloudPreflightData["customDomain"]>,
+): PreflightCheck {
+  if (cloud.verified) {
+    if (cloud.message) {
+      return { id: "domain", label: "Domain DNS", status: "warn", message: cloud.message };
+    }
+    return { id: "domain", label: "Domain DNS", status: "pass" };
+  }
+
+  // Unverified custom domain on a cloud deploy — deploy proceeds via
+  // the free `.opsh.io` slug attached alongside the custom one. The
+  // custom domain shows as "pending" on the Domains tab with a Verify
+  // button; once DNS resolves, the cloud edge attaches a cert.
+  return {
+    id: "domain",
+    label: "Domain DNS",
+    status: "warn",
+    message:
+      cloud.message ??
+      `${customDomain} isn't DNS-verified yet — deploy continues on the free .opsh.io domain; verify the custom domain from the Domains tab to attach it.`,
+  };
+}
+
+/**
+ * Self-hosted route flow — operator points the domain at their own
+ * server. We compare resolved A records against the server's IPs so
+ * the most common DNS mistakes (typo'd IP, leftover parked-domain
+ * placeholder) get flagged before the build pipeline wastes ~60s only
+ * to fail at certbot. Both lookups are time-bounded so a black-holed
+ * resolver can't stall the preflight modal.
+ */
+async function checkCustomDomainSelfHosted(
+  customDomain: string,
+  snapshot?: DeploymentConfigSnapshot,
+): Promise<PreflightCheck> {
+  // Resolve every record type the deploy might care about. Each
+  // lookup is capped individually so one slow query can't drag the
+  // preflight past its budget.
+  const [a, aaaa, cname] = await Promise.all([
+    resolveRecords(customDomain, "A", { timeoutMs: DOMAIN_CHECK_TIMEOUT_MS }),
+    resolveRecords(customDomain, "AAAA", { timeoutMs: DOMAIN_CHECK_TIMEOUT_MS }),
+    resolveRecords(customDomain, "CNAME", { timeoutMs: DOMAIN_CHECK_TIMEOUT_MS }),
+  ]);
+  const anyResolved = a.length > 0 || aaaa.length > 0 || cname.length > 0;
+
+  if (!anyResolved) {
+    return {
+      id: "domain",
+      label: "Domain DNS",
+      status: "warn",
+      message: `No DNS records found yet for ${customDomain}. Point it at your server's IP; the deploy continues on the free .opsh.io domain — TLS issuance for ${customDomain} retries after Verify.`,
+    };
+  }
+
+  // Resolve the server's IP set. If the configured "host" is a
+  // hostname (not an IP literal), look it up too — we can't compare
+  // an IP record against a hostname string.
+  const serverHost = snapshot?.organizationId
+    ? await resolveServerHost(snapshot.organizationId, snapshot.serverId).catch(() => null)
+    : null;
+  let serverIps: string[] = [];
+  if (serverHost) {
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(serverHost) || serverHost.includes(":")) {
+      serverIps = [serverHost];
+    } else {
+      serverIps = await lookupAddresses(serverHost, { timeoutMs: DOMAIN_CHECK_TIMEOUT_MS });
+    }
+  }
+
+  // Only enforce the IP comparison when we actually have a server IP
+  // to compare against. On local-only setups without one, fall
+  // through to the permissive "something resolved" check — the
+  // operator owns DNS and we can't second-guess.
+  if (serverIps.length > 0 && a.length > 0) {
+    const matchesServer = a.some((ip) => serverIps.includes(ip));
+    if (!matchesServer) {
+      return {
+        id: "domain",
+        label: "Domain DNS",
+        status: "warn",
+        message: `${customDomain} resolves to ${a.join(", ")} but the server is at ${serverIps.join(", ")}. Point the A record at the server's IP; cert issuance will fail until DNS matches.`,
+      };
+    }
+  }
+
+  return { id: "domain", label: "Domain DNS", status: "pass" };
+}
+
+/**
+ * Cloud route fallback — caller is targeting cloud but the SaaS-side
+ * preflight didn't return customDomain data. Verify the CNAME points
+ * at the cloud edge directly. Non-blocking; the .opsh.io free domain
+ * stays attached so the deploy still ships.
+ */
+async function checkCustomDomainCloudCname(
+  customDomain: string,
+): Promise<PreflightCheck> {
+  const records = await resolveRecords(customDomain, "CNAME", {
+    timeoutMs: DOMAIN_CHECK_TIMEOUT_MS,
+  });
+  if (records.length === 0) {
+    return {
+      id: "domain",
+      label: "Domain DNS",
+      status: "warn",
+      message: `No CNAME record found for ${customDomain} yet. Add a CNAME pointing to ${CLOUD_EDGE_CNAME}, then click Verify on the Domains tab. Deploy continues on the free .opsh.io domain.`,
+    };
+  }
+  if (records.some((record) => record.toLowerCase() === CLOUD_EDGE_CNAME)) {
+    return { id: "domain", label: "Domain DNS", status: "pass" };
+  }
+  return {
+    id: "domain",
+    label: "Domain DNS",
+    status: "warn",
+    message: `CNAME for ${customDomain} doesn't point to ${CLOUD_EDGE_CNAME} yet (current: ${records.join(", ")}). Deploy continues on the free .opsh.io domain; fix DNS and verify from the Domains tab to attach the custom domain.`,
+  };
+}
+
+/**
+ * Domain DNS check dispatcher. Picks the right branch based on the
+ * effective deploy target — keeps the body of each branch focused.
+ */
 async function checkCustomDomain(
   customDomain: string,
   cloud: CloudPreflightData | null,
   snapshot?: DeploymentConfigSnapshot,
 ): Promise<PreflightCheck> {
   if (cloud?.runtime.ok && cloud.customDomain) {
-    if (cloud.customDomain.verified) {
-      if (cloud.customDomain.message) {
-        return {
-          id: "domain",
-          label: "Domain DNS",
-          status: "warn",
-          message: cloud.customDomain.message,
-        };
-      }
-      return { id: "domain", label: "Domain DNS", status: "pass" };
-    }
-
-    return {
-      id: "domain",
-      label: "Domain DNS",
-      status: "fail",
-      message: cloud.customDomain.message ?? `DNS not configured for ${customDomain}`,
-    };
+    return checkCustomDomainCloudVerified(customDomain, cloud.customDomain);
   }
-
-  // Self-hosted (deploying directly to an operator-managed server): the
-  // edge.openship.io CNAME check doesn't apply - the operator points the
-  // domain at their own server's IP. Soft-check that *something* resolves
-  // so a typo'd domain still fails preflight, but accept any record.
+  const plat = platform();
   const isSelfHostedTarget =
-    snapshot?.deployTarget === "server" || snapshot?.deployTarget === "local";
+    plat.target === "selfhosted" ||
+    snapshot?.deployTarget === "server" ||
+    snapshot?.deployTarget === "local";
   if (isSelfHostedTarget) {
-    try {
-      const dns = await import("node:dns/promises");
-      const lookups = await Promise.allSettled([
-        dns.resolve4(customDomain),
-        dns.resolve6(customDomain),
-        dns.resolveCname(customDomain),
-      ]);
-      const resolved = lookups.some(
-        (r) => r.status === "fulfilled" && r.value.length > 0,
-      );
-      if (resolved) {
-        return { id: "domain", label: "Domain DNS", status: "pass" };
-      }
-      return {
-        id: "domain",
-        label: "Domain DNS",
-        status: "warn",
-        message: `No DNS records found yet for ${customDomain}. Point it at your server's IP; the deploy will continue but TLS issuance will fail until DNS resolves.`,
-      };
-    } catch {
-      return { id: "domain", label: "Domain DNS", status: "pass" };
-    }
+    return checkCustomDomainSelfHosted(customDomain, snapshot);
   }
-
-  try {
-    const dns = await import("node:dns/promises");
-    const records = await dns.resolveCname(customDomain);
-    const pointsToEdge = records.some((record) => record.toLowerCase() === "edge.openship.io");
-
-    if (pointsToEdge) {
-      return { id: "domain", label: "Domain DNS", status: "pass" };
-    }
-
-    return {
-      id: "domain",
-      label: "Domain DNS",
-      status: "fail",
-      message: `CNAME for ${customDomain} does not point to edge.openship.io. Current target: ${records.join(", ") || "none"}`,
-    };
-  } catch {
-    return {
-      id: "domain",
-      label: "Domain DNS",
-      status: "fail",
-      message: `No CNAME record found for ${customDomain}. Add a CNAME record pointing to edge.openship.io`,
-    };
-  }
+  return checkCustomDomainCloudCname(customDomain);
 }
 
 async function checkCloudRuntime(
@@ -870,8 +969,11 @@ export async function runPreflightChecks(
   const plat = platform();
   const effectiveTarget =
     plat.target === "desktop" ? (snapshot.deployTarget ?? "cloud") : plat.target;
+  // Keep in sync with deployment-runtime.ts:usesManagedRouting — same
+  // calculation, same outcome. See note inside resolveCloudPreflight.
   const usesManagedRouting =
-    plat.target === "desktop" && (effectiveTarget === "server" || effectiveTarget === "local");
+    plat.target === "selfhosted" ||
+    (plat.target === "desktop" && (effectiveTarget === "server" || effectiveTarget === "local"));
   const hasEndpointRouting = !!opts?.publicEndpoints?.length;
   const hasManagedProjectDomain =
     !hasEndpointRouting && !!opts?.slug && !opts?.customDomain && usesManagedRouting;
@@ -904,14 +1006,15 @@ export async function runPreflightChecks(
   checks.push(await checkCloudRuntime(cloudPreflight, cloudRequirement));
 
   // GitHub App installation check - fires whenever the API is running in
-  // App auth mode (SaaS), regardless of deploy target. Previously this was
-  // gated on `effectiveTarget === "cloud"`, but the App installation token
-  // is also the only credential we're willing to ship downstream for
+  // App auth mode (SaaS), regardless of deploy target. The App installation
+  // token is the only credential we're willing to ship downstream for
   // self-hosted deploys originating from a SaaS API - see resolveBuildGitToken
   // in build.service.ts. Catching it here surfaces a clear "install the App
   // on <owner>" error instead of a 403 deep in the build pipeline.
   if (getGitHubAuthMode() === "app") {
-    checks.push(await checkGitHubAppInstallation(opts?.userId, opts?.gitOwner));
+    checks.push(
+      await checkGitHubAppInstallation(opts?.userId, opts?.gitOwner, opts?.organizationId),
+    );
   }
 
   // Remote-build credential check. For App-scoped modes (app / cloud-app)
@@ -936,6 +1039,7 @@ export async function runPreflightChecks(
       opts?.projectId,
       effectiveTarget,
       opts?.buildStrategy ?? (snapshot.buildStrategy as "local" | "server" | undefined),
+      opts?.organizationId,
     ),
   );
 
@@ -951,6 +1055,36 @@ export async function runPreflightChecks(
 
   if (opts?.publicEndpoints?.length) {
     checks.push(...(await checkPublicEndpoints(snapshot, opts.publicEndpoints, cloudPreflight, opts.userId)));
+  }
+
+  // Catch the "this deploy will have no public URL" foot-gun: self-hosted,
+  // no cloud requirement (so no managed slug routing), no custom domain,
+  // no public endpoints, no compose services exposed. buildProjectRouteDomains
+  // returns [] for this shape, registerResolvedRoutes logs
+  // "No domains configured" and exits, the container runs but the dashboard's
+  // "Open" button is empty. Surface this BEFORE the build kicks off so the
+  // operator can attach a domain or connect cloud first.
+  const hasAnyCustomDomain = !!opts?.customDomain;
+  const hasAnyEndpointDomain = (opts?.publicEndpoints ?? []).some(
+    (endpoint) => !!endpoint.domain || !!endpoint.customDomain,
+  );
+  const hasAnyComposeExposed = (opts?.composeServices ?? []).some(
+    (service) => service.exposed,
+  );
+  const willHavePublicUrl =
+    effectiveTarget === "cloud" ||
+    cloudRequirement !== "none" ||
+    hasAnyCustomDomain ||
+    hasAnyEndpointDomain ||
+    hasAnyComposeExposed;
+  if (!willHavePublicUrl) {
+    checks.push({
+      id: "public-url",
+      label: "Public URL",
+      status: "warn",
+      message:
+        "This deploy has no public domain attached. It will build and start but nothing will route to it. Add a custom domain on the Domains tab or connect Openship Cloud to get a free .opsh.io subdomain.",
+    });
   }
 
   return {

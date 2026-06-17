@@ -1,14 +1,21 @@
 /**
- * Service routes - mounted as sub-routes of /api/projects/:id/services
+ * Service routes — mounted as sub-routes of /api/projects/:id/services.
  *
- * Body-bearing routes are guarded by `@hono/typebox-validator` against
- * the schemas in service.schema.ts. Without the validator, a request
- * could ship arbitrary keys (or wrong types) straight into the DB layer.
+ * Every route declares a permission TAG that the secureRouter middleware
+ * enforces (permission check + audit event). The boot scanner refuses
+ * to start if any route lacks one.
+ *
+ * Tag conventions used here:
+ *   project:service:list  — list services for a project
+ *   project:service:read  — read one service
+ *   project:service:write — create/update service or container actions
+ *   project:service:admin — delete service
+ *   project:read          — listing containers for a project (project-scoped)
  */
 
 import { Hono } from "hono";
 import { tbValidator } from "@hono/typebox-validator";
-import { authMiddleware } from "../../middleware";
+import { secureRouter } from "../../lib/secure-router";
 import * as ctrl from "./service.controller";
 import {
   CreateServiceBody,
@@ -16,31 +23,70 @@ import {
   UpdateServiceBody,
 } from "./service.schema";
 
-export const serviceRoutes = new Hono();
+const r = secureRouter(new Hono(), {
+  module: "services",
+  basePath: "/api/projects/:id/services",
+});
 
-/* All service routes require authentication */
-serviceRoutes.use("*", authMiddleware);
+/* Auth runs before any permission check. */
 
 /* ─── Service CRUD ─────────────────────────────────────────────────────── */
-serviceRoutes.get("/", ctrl.list);
-serviceRoutes.post("/", tbValidator("json", CreateServiceBody), ctrl.create);
-serviceRoutes.get("/containers", ctrl.activeContainers);
-serviceRoutes.post("/sync", ctrl.syncFromCompose);
-serviceRoutes.get("/:serviceId", ctrl.getById);
-serviceRoutes.get("/:serviceId/logs", ctrl.runtimeLogs);
-serviceRoutes.get("/:serviceId/logs/stream", ctrl.runtimeLogStream);
-serviceRoutes.patch("/:serviceId", tbValidator("json", UpdateServiceBody), ctrl.update);
-serviceRoutes.delete("/:serviceId", ctrl.remove);
+r.get("/", { tag: "project:service:list" }, ctrl.list);
+r.post(
+  "/",
+  { tag: "project:service:write" },
+  tbValidator("json", CreateServiceBody),
+  ctrl.create,
+);
+r.get(
+  "/containers",
+  { tag: "project:read" },
+  ctrl.activeContainers,
+);
+r.post(
+  "/sync",
+  { tag: "project:service:write" },
+  ctrl.syncFromCompose,
+);
+r.get("/:serviceId", { tag: "project:service:read" }, ctrl.getById);
+r.get(
+  "/:serviceId/logs",
+  { tag: "project:service:read" },
+  ctrl.runtimeLogs,
+);
+r.get(
+  "/:serviceId/logs/stream",
+  { tag: "project:service:read" },
+  ctrl.runtimeLogStream,
+);
+r.patch(
+  "/:serviceId",
+  { tag: "project:service:write" },
+  tbValidator("json", UpdateServiceBody),
+  ctrl.update,
+);
+r.delete(
+  "/:serviceId",
+  { tag: "project:service:admin" },
+  ctrl.remove,
+);
 
 /* ─── Per-service container actions ─────────────────────────────────────── */
-serviceRoutes.post("/:serviceId/start", ctrl.startContainer);
-serviceRoutes.post("/:serviceId/stop", ctrl.stopContainer);
-serviceRoutes.post("/:serviceId/restart", ctrl.restartContainer);
+r.post("/:serviceId/start", { tag: "project:service:write" }, ctrl.startContainer);
+r.post("/:serviceId/stop", { tag: "project:service:write" }, ctrl.stopContainer);
+r.post("/:serviceId/restart", { tag: "project:service:write" }, ctrl.restartContainer);
 
 /* ─── Service environment variables ─────────────────────────────────────── */
-serviceRoutes.get("/:serviceId/env", ctrl.listEnvVars);
-serviceRoutes.put(
+r.get(
   "/:serviceId/env",
+  { tag: "project:service:read" },
+  ctrl.listEnvVars,
+);
+r.put(
+  "/:serviceId/env",
+  { tag: "project:service:write" },
   tbValidator("json", SetServiceEnvVarsBody),
   ctrl.setEnvVars,
 );
+
+export const serviceRoutes = r.hono;

@@ -17,16 +17,13 @@ export const endpoints = {
     import: "projects/import",
     info: (id: string | number) => `projects/${id}/info`,
     environments: (id: string | number) => `projects/${id}/environments`,
-    delete: (id: string | number) => `projects/${id}/delete`,
-    update: (id: string | number) => `projects/${id}/update`,
     options: (id: string | number) => `projects/${id}/options`,
     toggle: (id: string | number, action: "enable" | "disable") => `projects/${id}/${action}`,
     clearCache: (id: string | number) => `projects/${id}/clear-cache`,
     clearBuild: (id: string | number) => `projects/${id}/clear-build`,
     deploymentSession: (id: string | number) => `projects/${id}/deployment-session`,
     connect: (id: string | number) => `projects/${id}/connect`,
-    envSet: (id: string | number) => `projects/${id}/env/set`,
-    envGet: (id: string | number) => `projects/${id}/env/get`,
+    env: (id: string | number) => `projects/${id}/env`,
     git: (id: string | number) => `projects/${id}/git`,
     gitLink: (id: string | number) => `projects/${id}/git/link`,
     branches: (id: string | number) => `projects/${id}/branches`,
@@ -100,6 +97,7 @@ export const endpoints = {
   /* ---------------------------------------------------------------- */
   domains: {
     preview: "domains/preview",
+    verify: (id: string) => `domains/${encodeURIComponent(id)}/verify`,
   },
 
   /* ---------------------------------------------------------------- */
@@ -243,6 +241,21 @@ export const endpoints = {
     deployDefaults: "settings/deploy-defaults",
     cloneCredentials: "settings/clone-credentials",
     cloneStrategyPreference: "settings/clone-strategy-preference",
+  },
+
+  /* ---------------------------------------------------------------- */
+  /*  Notifications (channels, subscriptions, defaults, deliveries)   */
+  /* ---------------------------------------------------------------- */
+  notifications: {
+    categories: "notifications/categories",
+    channels: "notifications/channels",
+    channel: (id: string) => `notifications/channels/${id}`,
+    subscriptions: "notifications/subscriptions",
+    subscription: (id: string) => `notifications/subscriptions/${id}`,
+    defaults: "notifications/defaults",
+    deliveries: "notifications/deliveries",
+    unseenCount: "notifications/deliveries/unseen-count",
+    markSeen: (id: string) => `notifications/deliveries/${id}/seen`,
   },
 
   /* ---------------------------------------------------------------- */

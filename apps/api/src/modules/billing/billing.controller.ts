@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import { PLANS, PLAN_IDS, ANNUAL_DISCOUNT } from "@repo/core";
 import { getUserId } from "../../lib/controller-helpers";
+import { permission } from "../../lib/permission";
 import { createSubscriptionSchema } from "./billing.schema";
 import * as billingService from "./billing.service";
 
@@ -40,12 +41,14 @@ export async function listPlans(c: Context) {
 /* ---------- Subscriptions ---------- */
 
 export async function getSubscription(c: Context) {
+  await permission.assert(c, { resourceType: "billing", resourceId: "*", action: "read" });
   const userId = getUserId(c);
   const subscription = await billingService.getSubscription(userId);
   return c.json({ data: subscription });
 }
 
 export async function createSubscription(c: Context) {
+  await permission.assert(c, { resourceType: "billing", resourceId: "*", action: "write" });
   const userId = getUserId(c);
   const user = c.get("user");
   const body = await c.req.json();
@@ -62,12 +65,14 @@ export async function createSubscription(c: Context) {
 }
 
 export async function updateSubscription(c: Context) {
+  await permission.assert(c, { resourceType: "billing", resourceId: "*", action: "write" });
   const userId = getUserId(c);
   const { portalUrl } = await billingService.createPortalSession(userId);
   return c.json({ data: { portalUrl } });
 }
 
 export async function cancelSubscription(c: Context) {
+  await permission.assert(c, { resourceType: "billing", resourceId: "*", action: "admin" });
   const userId = getUserId(c);
   await billingService.cancelSubscription(userId);
   return c.json({ message: "Subscription cancelled" });
@@ -76,6 +81,7 @@ export async function cancelSubscription(c: Context) {
 /* ---------- Usage ---------- */
 
 export async function getUsage(c: Context) {
+  await permission.assert(c, { resourceType: "billing", resourceId: "*", action: "read" });
   const userId = getUserId(c);
   const usage = await billingService.getUsageSummary(userId);
   return c.json({ data: usage });
@@ -84,16 +90,19 @@ export async function getUsage(c: Context) {
 /* ---------- Payment Methods ---------- */
 
 export async function listPaymentMethods(c: Context) {
+  await permission.assert(c, { resourceType: "billing", resourceId: "*", action: "read" });
   return c.json({ data: [] });
 }
 
 export async function addPaymentMethod(c: Context) {
+  await permission.assert(c, { resourceType: "billing", resourceId: "*", action: "write" });
   return c.json({ message: "payment method added" }, 201);
 }
 
 /* ---------- Invoices ---------- */
 
 export async function listInvoices(c: Context) {
+  await permission.assert(c, { resourceType: "billing", resourceId: "*", action: "read" });
   return c.json({ data: [] });
 }
 

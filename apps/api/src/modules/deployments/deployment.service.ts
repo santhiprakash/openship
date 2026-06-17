@@ -9,6 +9,7 @@ import { repos } from "@repo/db";
 import { NotFoundError, ForbiddenError } from "@repo/core";
 import type { LogEntry } from "@repo/adapters";
 import { resolveDeploymentRuntime } from "../../lib/deployment-runtime";
+import { assertResourceInOrg } from "../../lib/controller-helpers";
 import { collectDeploymentManifest, executeCleanup } from "../projects/project-cleanup.service";
 
 async function listServiceContainerIds(deploymentId: string): Promise<string[]> {
@@ -25,14 +26,17 @@ async function listDeploymentContainerIds(dep: { id: string; containerId?: strin
 // ─── List deployments ────────────────────────────────────────────────────────
 
 export async function listDeployments(
-  userId: string,
-  opts: { projectId?: string; environment?: string; page?: number; perPage?: number },
+  organizationId: string,
+  opts: {
+    projectId?: string;
+    environment?: string;
+    page?: number;
+    perPage?: number;
+  },
 ) {
   if (opts.projectId) {
     const project = await repos.project.findById(opts.projectId);
-    if (!project || project.userId !== userId) {
-      throw new NotFoundError("Project", opts.projectId);
-    }
+    assertResourceInOrg(project, "Project", organizationId, opts.projectId);
     const result = await repos.deployment.listByProject(opts.projectId, {
       page: opts.page,
       perPage: opts.perPage,
@@ -48,9 +52,10 @@ export async function listDeployments(
     };
   }
 
-  // No projectId - return all deployments for this user, enriched with
-  // project names + isActive (one lookup per distinct project).
-  const result = await repos.deployment.listByUser(userId, {
+  // No projectId — list scoped to active org. organizationId is required
+  // on every authenticated route (the route-permission middleware
+  // ensures it's set before this is reached).
+  const result = await repos.deployment.listByOrganization(organizationId, {
     page: opts.page,
     perPage: opts.perPage,
   });
@@ -76,22 +81,28 @@ export async function listDeployments(
 
 // ─── Get deployment ──────────────────────────────────────────────────────────
 
-export async function getDeployment(deploymentId: string, userId: string) {
+export async function getDeployment(
+  deploymentId: string,
+  organizationId: string,
+) {
   const dep = await repos.deployment.findById(deploymentId);
-  if (!dep) throw new NotFoundError("Deployment", deploymentId);
+  assertResourceInOrg(dep, "Deployment", organizationId, deploymentId);
 
+  // Cross-check the parent project belongs to the same org. This guards
+  // against orphaned deployments whose project moved orgs.
   const project = await repos.project.findById(dep.projectId);
-  if (!project || project.userId !== userId) {
-    throw new NotFoundError("Deployment", deploymentId);
-  }
+  assertResourceInOrg(project, "Deployment", organizationId, deploymentId);
 
   return dep;
 }
 
 // ─── Delete deployment ───────────────────────────────────────────────────────
 
-export async function deleteDeployment(deploymentId: string, userId: string) {
-  const dep = await getDeployment(deploymentId, userId);
+export async function deleteDeployment(
+  deploymentId: string,
+  organizationId: string,
+) {
+  const dep = await getDeployment(deploymentId, organizationId);
 
   if (["queued", "building", "deploying"].includes(dep.status)) {
     throw new ForbiddenError("Cannot delete a deployment that is in progress. Cancel it first.");
@@ -117,11 +128,14 @@ export async function deleteDeployment(deploymentId: string, userId: string) {
 //
 // Thin wrapper around the RollbackOrchestrator. The orchestrator owns
 // the policy + the runtime primitive calls; this service just adds the
-// per-user ownership check via getDeployment.
+// per-org ownership check via getDeployment.
 
-export async function rollbackDeployment(deploymentId: string, userId: string) {
-  // Ownership / existence check (throws if user doesn't own the project).
-  const dep = await getDeployment(deploymentId, userId);
+export async function rollbackDeployment(
+  deploymentId: string,
+  organizationId: string,
+) {
+  // Existence + org-scope check (throws if deployment isn't in this org).
+  const dep = await getDeployment(deploymentId, organizationId);
   const { rollback } = await import("./rollback");
   await rollback(deploymentId);
   // Return the post-rollback deployment row (now with any updated container id).
@@ -132,10 +146,10 @@ export async function rollbackDeployment(deploymentId: string, userId: string) {
 
 export async function setDeploymentPin(
   deploymentId: string,
-  userId: string,
+  organizationId: string,
   pinned: boolean,
 ) {
-  const dep = await getDeployment(deploymentId, userId);
+  const dep = await getDeployment(deploymentId, organizationId);
   const { setPin } = await import("./rollback");
   await setPin(deploymentId, pinned);
   return (await repos.deployment.findById(dep.id)) ?? dep;
@@ -143,8 +157,11 @@ export async function setDeploymentPin(
 
 // ─── Reject partial deployment ─────────────────────────────────────────────
 
-export async function rejectDeployment(deploymentId: string, userId: string) {
-  const dep = await getDeployment(deploymentId, userId);
+export async function rejectDeployment(
+  deploymentId: string,
+  organizationId: string,
+) {
+  const dep = await getDeployment(deploymentId, organizationId);
 
   if (dep.status !== "ready") {
     throw new ForbiddenError("Can only reject a completed deployment");
@@ -157,10 +174,10 @@ export async function rejectDeployment(deploymentId: string, userId: string) {
   const previousDeploymentId = meta?.previousActiveDeploymentId;
 
   if (previousDeploymentId && previousDeploymentId !== deploymentId) {
-    await rollbackDeployment(previousDeploymentId, userId);
+    await rollbackDeployment(previousDeploymentId, organizationId);
   }
 
-  await deleteDeployment(deploymentId, userId);
+  await deleteDeployment(deploymentId, organizationId);
 
   return {
     success: true,
@@ -170,8 +187,12 @@ export async function rejectDeployment(deploymentId: string, userId: string) {
 
 // ─── Deployment logs ─────────────────────────────────────────────────────────
 
-export async function getDeploymentLogs(deploymentId: string, userId: string, tail?: number) {
-  const dep = await getDeployment(deploymentId, userId);
+export async function getDeploymentLogs(
+  deploymentId: string,
+  organizationId: string,
+  tail?: number,
+) {
+  const dep = await getDeployment(deploymentId, organizationId);
 
   const buildSessions = await repos.deployment.findBuildSession(deploymentId);
   if (buildSessions?.logs) {
@@ -188,8 +209,11 @@ export async function getDeploymentLogs(deploymentId: string, userId: string, ta
 
 // ─── Restart deployment ──────────────────────────────────────────────────────
 
-export async function restartDeployment(deploymentId: string, userId: string) {
-  const dep = await getDeployment(deploymentId, userId);
+export async function restartDeployment(
+  deploymentId: string,
+  organizationId: string,
+) {
+  const dep = await getDeployment(deploymentId, organizationId);
 
   if (dep.status !== "ready") {
     throw new ForbiddenError("Can only restart a running deployment");
@@ -209,8 +233,11 @@ export async function restartDeployment(deploymentId: string, userId: string) {
 
 // ─── Container info ──────────────────────────────────────────────────────────
 
-export async function getContainerInfo(deploymentId: string, userId: string) {
-  const dep = await getDeployment(deploymentId, userId);
+export async function getContainerInfo(
+  deploymentId: string,
+  organizationId: string,
+) {
+  const dep = await getDeployment(deploymentId, organizationId);
   if (!dep.containerId) {
     throw new ForbiddenError("Deployment has no container");
   }
@@ -220,8 +247,11 @@ export async function getContainerInfo(deploymentId: string, userId: string) {
 
 // ─── Container usage ─────────────────────────────────────────────────────────
 
-export async function getContainerUsage(deploymentId: string, userId: string) {
-  const dep = await getDeployment(deploymentId, userId);
+export async function getContainerUsage(
+  deploymentId: string,
+  organizationId: string,
+) {
+  const dep = await getDeployment(deploymentId, organizationId);
   if (!dep.containerId) {
     throw new ForbiddenError("Deployment has no container");
   }
@@ -231,8 +261,11 @@ export async function getContainerUsage(deploymentId: string, userId: string) {
 
 // ─── Build logs ──────────────────────────────────────────────────────────────
 
-export async function getBuildLogs(deploymentId: string, userId: string) {
-  await getDeployment(deploymentId, userId);
+export async function getBuildLogs(
+  deploymentId: string,
+  organizationId: string,
+) {
+  await getDeployment(deploymentId, organizationId);
 
   const buildSession = await repos.deployment.findBuildSession(deploymentId);
   if (!buildSession?.logs) {
@@ -240,3 +273,5 @@ export async function getBuildLogs(deploymentId: string, userId: string) {
   }
   return buildSession.logs as LogEntry[];
 }
+
+

@@ -33,6 +33,7 @@ import { user } from "./auth";
 import { project } from "./project";
 import { service } from "./service";
 import { servers } from "./servers";
+import { organization } from "./organization";
 
 // ─── backup_destination ──────────────────────────────────────────────────────
 
@@ -44,11 +45,12 @@ export const backupDestination = pgTable(
   "backup_destination",
   {
     id: text("id").primaryKey(),
-    userId: text("user_id")
+    /** Org that owns this destination — THE access primitive. */
+    organizationId: text("organization_id")
       .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
+      .references(() => organization.id, { onDelete: "cascade" }),
 
-    /** User-supplied display name. Unique per user via the index below. */
+    /** User-supplied display name. */
     name: text("name").notNull(),
     /** "s3_compatible" | "sftp" | "openship_server" | "local" | "http_upload" */
     kind: text("kind").notNull(),
@@ -85,10 +87,11 @@ export const backupDestination = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("uq_backup_destination_user_name_active")
-      .on(table.userId, table.name)
+    // Name is unique per org.
+    uniqueIndex("uq_backup_destination_org_name_active")
+      .on(table.organizationId, table.name)
       .where(sql`${table.deletedAt} IS NULL`),
-    index("idx_backup_destination_user").on(table.userId),
+    index("idx_backup_destination_org").on(table.organizationId),
   ],
 );
 
@@ -199,10 +202,11 @@ export const backupRun = pgTable(
     projectId: text("project_id").references(() => project.id, { onDelete: "set null" }),
     serviceId: text("service_id").references(() => service.id, { onDelete: "set null" }),
 
-    /** Denormalized for "what did this user do" forensic queries. */
-    userId: text("user_id")
+    /** Org that owns this run — THE access primitive. The actor who
+     *  triggered the run is captured below in triggeredByUserId. */
+    organizationId: text("organization_id")
       .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
+      .references(() => organization.id, { onDelete: "cascade" }),
 
     status: text("status").notNull().default("queued"),
     /** "manual" | "cron" | "webhook" | "pre_deploy" */
@@ -236,7 +240,7 @@ export const backupRun = pgTable(
     deletedAt: timestamp("deleted_at"),
   },
   (table) => [
-    index("idx_backup_run_user_started").on(table.userId, table.startedAt),
+    index("idx_backup_run_org_started").on(table.organizationId, table.startedAt),
     index("idx_backup_run_destination_started").on(table.destinationId, table.startedAt),
     index("idx_backup_run_project_started").on(table.projectId, table.startedAt),
     // Partial index for the boot-time stale-run sweep.
@@ -270,9 +274,11 @@ export const backupRestore = pgTable(
     projectId: text("project_id").references(() => project.id, { onDelete: "set null" }),
     serviceId: text("service_id").references(() => service.id, { onDelete: "set null" }),
 
-    userId: text("user_id")
+    /** Org that owns this restore — THE access primitive. Actor info
+     *  flows through triggeredByUserId / audit_event. */
+    organizationId: text("organization_id")
       .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
+      .references(() => organization.id, { onDelete: "cascade" }),
 
     status: text("status").notNull().default("queued"),
     /** "in_place" only in v1. "to_fork" reserved for v2. */
@@ -294,7 +300,7 @@ export const backupRestore = pgTable(
     confirmationToken: text("confirmation_token"),
   },
   (table) => [
-    index("idx_backup_restore_user_started").on(table.userId, table.startedAt),
+    index("idx_backup_restore_org_started").on(table.organizationId, table.startedAt),
     index("idx_backup_restore_run").on(table.runId),
   ],
 );

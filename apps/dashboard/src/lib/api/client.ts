@@ -177,6 +177,48 @@ async function request<T = unknown>(
   return doFetch<T>(url, body, timeout, init);
 }
 
+/* ------------------------------------------------------------------ */
+/*  Active organization header                                         */
+/* ------------------------------------------------------------------ */
+//
+// The API derives the org scope for list/create endpoints from:
+//   1. X-Organization-Id header (authoritative)
+//   2. Session cookie's default-org fallback
+//
+// The dashboard JS owns the current "view org" and sends it explicitly.
+// This eliminates the cross-tab races where one tab's auto-switch would
+// change another tab's list endpoint answer.
+//
+// Reads from a global slot set by the AccountSwitcher (or equivalent UI
+// state hook). When unset, the request goes without the header and the
+// API falls back to the session cookie — same as before.
+
+let _currentOrgId: string | null = null;
+
+/** Set the org id that subsequent API requests should declare. */
+export function setActiveOrganizationId(orgId: string | null) {
+  _currentOrgId = orgId;
+  if (typeof window !== "undefined") {
+    if (orgId) {
+      window.localStorage.setItem("openship.activeOrgId", orgId);
+    } else {
+      window.localStorage.removeItem("openship.activeOrgId");
+    }
+  }
+}
+
+/** Read the current org id slot (used in tests / debugging). */
+export function getActiveOrganizationId(): string | null {
+  return _currentOrgId;
+}
+
+// Restore from localStorage on module load so a page refresh keeps the
+// previously-active org in context until the auth hook sets a fresh one.
+if (typeof window !== "undefined") {
+  const stored = window.localStorage.getItem("openship.activeOrgId");
+  if (stored) _currentOrgId = stored;
+}
+
 async function doFetch<T>(
   url: URL,
   body: unknown,
@@ -192,6 +234,13 @@ async function doFetch<T>(
 
   if (body && typeof body === "object" && !(body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
+  }
+
+  // Always send X-Organization-Id when we know what org the user is
+  // viewing. The API uses this for list/create scope; detail endpoints
+  // ignore it (they derive org from the resource).
+  if (_currentOrgId && !headers.has("X-Organization-Id")) {
+    headers.set("X-Organization-Id", _currentOrgId);
   }
 
   /* --- Fetch ------------------------------------------------------ */

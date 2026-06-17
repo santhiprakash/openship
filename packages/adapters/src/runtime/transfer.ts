@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 
 import type { WorkspaceHandle } from "oblien";
 
-import { TRANSFER_EXCLUDES } from "@repo/core";
+import { TRANSFER_EXCLUDES, safeErrorMessage } from "@repo/core";
 import { getTarCreateArgs, getTarCreateEnv } from "../archive";
 import type { CommandExecutor } from "../types";
 import { BuildLogger, sq } from "./build-pipeline";
@@ -96,7 +96,7 @@ async function verifyExecutorTransfer(
     if (err instanceof Error && err.message.includes("is empty")) throw err;
     // If the count command itself fails (e.g. dir doesn't exist), that's a transfer failure
     throw new Error(
-      `Transfer verification failed: ${err instanceof Error ? err.message : String(err)}`,
+      `Transfer verification failed: ${safeErrorMessage(err)}`,
     );
   }
 }

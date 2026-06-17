@@ -92,3 +92,34 @@ export function verifyEmailTemplate(user: { name?: string | null; email: string 
     text: `Hi ${user.name || "there"},\n\nVerify your email: ${url}\n\nIf you didn't create an account, ignore this email.`,
   };
 }
+
+/* ------------------------------------------------------------------ */
+/*  Organization invitation                                            */
+/* ------------------------------------------------------------------ */
+
+export function organizationInviteEmail(opts: {
+  invitee: { email: string };
+  inviter: { name?: string | null; email: string };
+  organizationName: string;
+  url: string;
+}) {
+  const inviterLabel = opts.inviter.name || opts.inviter.email;
+  const html = layout(`
+    <p style="color:#111827;font-size:16px;font-weight:600;margin:0 0 12px">You're invited to ${opts.organizationName}</p>
+    <p style="color:#374151;font-size:14px;line-height:1.6;margin:0 0 4px">
+      ${inviterLabel} invited you to collaborate on <strong>${opts.organizationName}</strong> in ${BRAND}.
+      Accept the invite to join the team and access shared projects, deployments, and servers.
+    </p>
+    ${ctaButton(opts.url, "Accept invitation")}
+    <p style="color:#9ca3af;font-size:13px;margin:0">
+      If you don't have an Openship account yet, you'll be asked to create one with this email
+      (${opts.invitee.email}). The invitation expires in 7 days.
+    </p>
+  `);
+
+  return {
+    subject: `${inviterLabel} invited you to ${opts.organizationName} on ${BRAND}`,
+    html,
+    text: `${inviterLabel} invited you to ${opts.organizationName} on ${BRAND}.\n\nAccept: ${opts.url}\n\nThe invitation expires in 7 days.`,
+  };
+}

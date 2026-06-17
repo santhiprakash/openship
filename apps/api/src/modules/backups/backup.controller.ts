@@ -7,12 +7,14 @@
 import type { Context } from "hono";
 import crypto from "node:crypto";
 import { repos } from "@repo/db";
-import { getUserId, param } from "../../lib/controller-helpers";
+import { getUserId, getActiveOrganizationId, assertResourceInOrg, param } from "../../lib/controller-helpers";
+import { permission } from "../../lib/permission";
 import { streamSSE } from "../../lib/sse";
 import { triggerManualBackup } from "./triggers/manual";
 import { backupRunBus } from "./backup.sse";
 import { restoreRunBus } from "./restore.sse";
 import { restoreOrchestrator } from "./restore.orchestrator";
+import { safeErrorMessage } from "@repo/core";
 import {
   createPolicy,
   deletePolicy,
@@ -26,19 +28,22 @@ import {
 // ─── Policies ────────────────────────────────────────────────────────────────
 
 export async function listProjectPolicies(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "projectId");
+  await permission.assert(c, { resourceType: "project", resourceId: projectId, action: "read" });
   try {
-    const policies = await listPoliciesByProject(projectId, userId);
+    const policies = await listPoliciesByProject(projectId, organizationId);
     return c.json({ data: policies });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 404);
+    return c.json({ error: safeErrorMessage(err) }, 404);
   }
 }
 
 export async function createProjectPolicy(c: Context) {
   const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "projectId");
+  await permission.assert(c, { resourceType: "project", resourceId: projectId, action: "write" });
   const body = await c.req.json<{
     serviceId?: string | null;
     destinationId: string;
@@ -56,7 +61,7 @@ export async function createProjectPolicy(c: Context) {
     return c.json({ error: "destinationId is required" }, 400);
   }
   try {
-    const policy = await createPolicy(userId, {
+    const policy = await createPolicy(userId, organizationId, {
       projectId,
       serviceId: body.serviceId ?? null,
       destinationId: body.destinationId,
@@ -72,13 +77,24 @@ export async function createProjectPolicy(c: Context) {
     });
     return c.json({ data: policy });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    return c.json({ error: safeErrorMessage(err) }, 400);
   }
 }
 
 export async function patchPolicy(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const policyId = param(c, "policyId");
+  // Derive parent projectId for the permission gate. Restricted users
+  // need a grant on the project; the policy doesn't have a grant root
+  // of its own.
+  const existing = await repos.backupPolicy.findById(policyId);
+  if (existing?.projectId) {
+    await permission.assert(c, {
+      resourceType: "project",
+      resourceId: existing.projectId,
+      action: "write",
+    });
+  }
   const raw = (await c.req
     .json<Record<string, unknown>>()
     .catch(() => ({}))) as Record<string, unknown>;
@@ -110,50 +126,62 @@ export async function patchPolicy(c: Context) {
   }
 
   try {
-    const policy = await updatePolicy(policyId, userId, patch);
+    const policy = await updatePolicy(policyId, organizationId, patch);
     return c.json({ data: policy });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    return c.json({ error: safeErrorMessage(err) }, 400);
   }
 }
 
 export async function removePolicy(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const policyId = param(c, "policyId");
+  // Derive parent projectId — delete is an admin-level mutation on the
+  // parent project's resource tree.
+  const existing = await repos.backupPolicy.findById(policyId);
+  if (existing?.projectId) {
+    await permission.assert(c, {
+      resourceType: "project",
+      resourceId: existing.projectId,
+      action: "admin",
+    });
+  }
   try {
-    await deletePolicy(policyId, userId);
+    await deletePolicy(policyId, organizationId);
     return c.json({ data: { ok: true } });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    return c.json({ error: safeErrorMessage(err) }, 400);
   }
 }
 
 // ─── Runs ────────────────────────────────────────────────────────────────────
 
 export async function listRuns(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const projectId = param(c, "projectId");
+  await permission.assert(c, { resourceType: "project", resourceId: projectId, action: "read" });
   const serviceId = c.req.query("serviceId");
   const limit = Number(c.req.query("limit") ?? "50");
   try {
-    const runs = await listRunsForProject(projectId, userId, {
+    const runs = await listRunsForProject(projectId, organizationId, {
       limit: Number.isFinite(limit) ? limit : 50,
       serviceId,
     });
     return c.json({ data: runs });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 404);
+    return c.json({ error: safeErrorMessage(err) }, 404);
   }
 }
 
 export async function getOneRun(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const runId = param(c, "runId");
+  await permission.assert(c, { resourceType: "backup_run", resourceId: runId, action: "read" });
   try {
-    const run = await getRun(runId, userId);
+    const run = await getRun(runId, organizationId);
     return c.json({ data: run });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 404);
+    return c.json({ error: safeErrorMessage(err) }, 404);
   }
 }
 
@@ -167,15 +195,16 @@ export async function getOneRun(c: Context) {
  * DB row is authoritative.
  */
 export async function streamRun(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const runId = param(c, "runId");
+  await permission.assert(c, { resourceType: "backup_run", resourceId: runId, action: "read" });
 
   // Ownership check before opening the stream.
   let initial;
   try {
-    initial = await getRun(runId, userId);
+    initial = await getRun(runId, organizationId);
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 404);
+    return c.json({ error: safeErrorMessage(err) }, 404);
   }
 
   return streamSSE(c, async (stream) => {
@@ -240,16 +269,23 @@ export async function streamRun(c: Context) {
 
 export async function triggerManual(c: Context) {
   const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const policyId = param(c, "policyId");
-  const clientIp =
-    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
-    c.req.header("x-real-ip") ??
-    undefined;
+  // Derive parent projectId — running a backup is a write on the project.
+  const policy = await repos.backupPolicy.findById(policyId);
+  if (policy?.projectId) {
+    await permission.assert(c, {
+      resourceType: "project",
+      resourceId: policy.projectId,
+      action: "write",
+    });
+  }
+  const clientIp = c.var.clientIp ?? undefined;
   try {
-    const { runId } = await triggerManualBackup({ policyId, userId, clientIp });
+    const { runId } = await triggerManualBackup({ policyId, userId, organizationId, clientIp });
     return c.json({ data: { runId } });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    return c.json({ error: safeErrorMessage(err) }, 400);
   }
 }
 
@@ -262,15 +298,17 @@ export async function triggerManual(c: Context) {
  */
 export async function prepareRestore(c: Context) {
   const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const runId = param(c, "runId");
-  const clientIp =
-    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
-    c.req.header("x-real-ip") ??
-    undefined;
+  // Restore prep is a destructive admin op against the run's destination.
+  await permission.assert(c, { resourceType: "backup_run", resourceId: runId, action: "admin" });
+  const clientIp = c.var.clientIp ?? undefined;
 
-  // Ownership check.
+  // Ownership check (org-scoped).
   const run = await repos.backupRun.findById(runId);
-  if (!run || run.userId !== userId) {
+  try {
+    assertResourceInOrg(run, "Backup run", organizationId, runId);
+  } catch {
     return c.json({ error: "Backup run not found" }, 404);
   }
 
@@ -283,7 +321,7 @@ export async function prepareRestore(c: Context) {
     });
     return c.json({ data: { restoreId, confirmationToken } });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    return c.json({ error: safeErrorMessage(err) }, 400);
   }
 }
 
@@ -293,7 +331,9 @@ export async function prepareRestore(c: Context) {
  */
 export async function applyRestore(c: Context) {
   const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const restoreId = param(c, "restoreId");
+  await permission.assert(c, { resourceType: "backup_restore", resourceId: restoreId, action: "admin" });
   const body = await c.req
     .json<{ confirmationToken?: string }>()
     .catch(() => ({} as { confirmationToken?: string }));
@@ -301,31 +341,36 @@ export async function applyRestore(c: Context) {
     return c.json({ error: "confirmationToken is required" }, 400);
   }
   try {
-    await restoreOrchestrator.apply(restoreId, body.confirmationToken, userId);
+    await restoreOrchestrator.apply(restoreId, body.confirmationToken, userId, organizationId);
     return c.json({ data: { ok: true } });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    return c.json({ error: safeErrorMessage(err) }, 400);
   }
 }
 
 /** POST /api/backup-restores/:restoreId/cancel */
 export async function cancelRestore(c: Context) {
   const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const restoreId = param(c, "restoreId");
+  await permission.assert(c, { resourceType: "backup_restore", resourceId: restoreId, action: "admin" });
   try {
-    await restoreOrchestrator.cancel(restoreId, userId);
+    await restoreOrchestrator.cancel(restoreId, userId, organizationId);
     return c.json({ data: { ok: true } });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    return c.json({ error: safeErrorMessage(err) }, 400);
   }
 }
 
 /** GET /api/backup-restores/:restoreId */
 export async function getOneRestore(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const restoreId = param(c, "restoreId");
+  await permission.assert(c, { resourceType: "backup_restore", resourceId: restoreId, action: "read" });
   const row = await repos.backupRestore.findById(restoreId);
-  if (!row || row.userId !== userId) {
+  try {
+    assertResourceInOrg(row, "Restore", organizationId, restoreId);
+  } catch {
     return c.json({ error: "Restore not found" }, 404);
   }
   return c.json({ data: row });
@@ -336,10 +381,13 @@ export async function getOneRestore(c: Context) {
  * SSE channel for restore progress. Same shape as backup-runs/:id/stream.
  */
 export async function streamRestore(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const restoreId = param(c, "restoreId");
+  await permission.assert(c, { resourceType: "backup_restore", resourceId: restoreId, action: "read" });
   const initial = await repos.backupRestore.findById(restoreId);
-  if (!initial || initial.userId !== userId) {
+  try {
+    assertResourceInOrg(initial, "Restore", organizationId, restoreId);
+  } catch {
     return c.json({ error: "Restore not found" }, 404);
   }
 
@@ -403,14 +451,17 @@ export async function streamRestore(c: Context) {
  * - protected:false clears the lock so retention prune can drop it.
  */
 export async function protectRun(c: Context) {
-  const userId = getUserId(c);
+  const organizationId = getActiveOrganizationId(c);
   const runId = param(c, "runId");
+  await permission.assert(c, { resourceType: "backup_run", resourceId: runId, action: "write" });
   const body = await c.req
     .json<{ until?: string; protected?: boolean }>()
     .catch(() => ({} as { until?: string; protected?: boolean }));
 
   const run = await repos.backupRun.findById(runId);
-  if (!run || run.userId !== userId) {
+  try {
+    assertResourceInOrg(run, "Backup run", organizationId, runId);
+  } catch {
     return c.json({ error: "Backup run not found" }, 404);
   }
 

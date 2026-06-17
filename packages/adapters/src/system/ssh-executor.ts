@@ -19,6 +19,7 @@ import {
 import type { Client as SshClient, SFTPWrapper } from "ssh2";
 import type { Readable, Duplex } from "node:stream";
 import { connectSshClient, openSftp, openSshUnixSocket, type StreamLocalCapableClient } from "./ssh-client";
+import { safeErrorMessage } from "@repo/core";
 
 /** Clamp a window dimension to a sane range to avoid garbage values
  *  reaching ssh2.Client.shell() / channel.setWindow(). */
@@ -556,7 +557,7 @@ export class SshExecutor implements CommandExecutor {
         // Fall back to tar-piped-through-pipeLocal, which RIDES the
         // existing ssh2 connection - same auth as every other openship
         // command. If steps 1-N succeeded, this will succeed too.
-        const message = err instanceof Error ? err.message : String(err);
+        const message = safeErrorMessage(err);
         onLog?.(
           logEntry(
             `rsync transfer failed (${message}); falling back to tar stream through the existing SSH connection.`,

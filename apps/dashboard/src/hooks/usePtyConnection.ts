@@ -62,18 +62,8 @@ const HEARTBEAT_INTERVAL_MS = 25_000;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
 interface UsePtyConnectionArgs {
-  /**
-   * Server to open the shell on. Required when target is omitted —
-   * preserved for backward compatibility with the original
-   * server-only callers. Either this OR `target` must be provided.
-   */
-  serverId?: string | null | undefined;
-  /**
-   * Target to open a shell against — discriminated `{kind, id}`.
-   * Required for service terminals; either this OR `serverId` for
-   * server terminals.
-   */
-  target?: PtyTarget | null;
+  /** Target to open a shell against — discriminated `{kind, id}`. */
+  target: PtyTarget | null;
   /** Receives every binary PTY chunk from the server. */
   onBytes: (chunk: Uint8Array) => void;
   /**
@@ -126,8 +116,7 @@ export interface PtyConnection {
 const TERMINAL_CLOSE_CODES = new Set([4400, 4401, 4403, 4404, 4429]);
 
 export function usePtyConnection({
-  serverId,
-  target: targetProp,
+  target,
   onBytes,
   onReady,
   onExit,
@@ -135,14 +124,6 @@ export function usePtyConnection({
   enabled,
   resumeToken,
 }: UsePtyConnectionArgs): PtyConnection {
-  // Normalize to a single `target` shape. If both are passed, `target`
-  // wins (explicit beats compat shim). When the caller passes only
-  // a serverId, we synthesize a server-kind target.
-  const target: PtyTarget | null = targetProp
-    ? targetProp
-    : serverId
-      ? { kind: "server", id: serverId }
-      : null;
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);

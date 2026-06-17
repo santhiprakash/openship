@@ -31,7 +31,9 @@ import { repos } from "@repo/db";
 import type { ShellSession } from "@repo/adapters";
 import type { TerminalExitReason } from "@repo/db";
 import { resolveDeploymentRuntime } from "../../lib/deployment-runtime";
-import { safeErrorMessage } from "../../lib/safe-error";
+import { safeErrorMessage } from "@repo/core";
+import { getActiveOrganizationId } from "../../lib/controller-helpers";
+import { checkPermission } from "../../lib/permission";
 import {
   attachServiceWs,
   consumeServiceTerminalTicket,
@@ -92,12 +94,18 @@ type ErrorCode =
 // ─── Service ownership + resolution ─────────────────────────────────────────
 
 /**
- * Look up the service, verify the caller owns the parent project, and
- * resolve the runtime + containerId. Returns null on any failure with
- * a structured reason — controller decides which close code to emit.
+ * Look up the service, verify the parent project belongs to the caller's
+ * active organization, and resolve the runtime + containerId. Returns
+ * null on any failure with a structured reason — controller decides
+ * which close code to emit.
+ *
+ * Scoping is by `project.organizationId` rather than `project.userId`
+ * so org-member terminals work for shared projects. NULL-org rows pass
+ * via the `assertResourceInOrg`-style allowance.
  */
-async function resolveServiceForUser(
+async function resolveServiceForOrg(
   serviceId: string,
+  organizationId: string,
   userId: string,
 ): Promise<
   | { ok: true; containerId: string; runtime: import("@repo/adapters").RuntimeAdapter }
@@ -106,10 +114,28 @@ async function resolveServiceForUser(
   const service = await repos.service.findById(serviceId);
   if (!service) return { ok: false, code: "server_not_found", message: "Service not found" };
 
+  // Primary gate: opening a service shell is admin-tier (full reach into
+  // the container). We use the pure resolver because the WS upgrade path
+  // doesn't carry a Hono context; the HTTP ticket path also calls this
+  // helper, so funneling both through checkPermission keeps the gate in
+  // one spot. 404-shape on deny — never confirm existence to non-admins.
+  const allowed = await checkPermission(userId, organizationId, {
+    resourceType: "project",
+    resourceId: service.projectId,
+    action: "admin",
+  });
+  if (!allowed) {
+    return { ok: false, code: "server_not_found", message: "Service not found" };
+  }
+
   const project = await repos.project.findById(service.projectId);
-  if (!project || project.userId !== userId) {
+  if (
+    !project ||
+    (project.organizationId != null && project.organizationId !== organizationId)
+  ) {
     // Same 404-shape as backup endpoints: don't leak existence vs.
-    // authorization.
+    // authorization. NULL-org projects pass through for any caller —
+    // same allowance assertResourceInOrg makes.
     return { ok: false, code: "server_not_found", message: "Service not found" };
   }
 
@@ -130,11 +156,13 @@ async function resolveServiceForUser(
   }
 
   // Resolve the runtime that built/owns this deployment (Docker vs Cloud).
+  // The current caller's userId is forwarded for any cloud-side audit;
+  // the deployment's org context determines cloud tenancy.
   let runtime: import("@repo/adapters").RuntimeAdapter;
   try {
     const resolved = await resolveDeploymentRuntime({
       meta: dep.meta,
-      userId: project.userId,
+      organizationId: dep.organizationId,
     });
     runtime = resolved.runtime;
   } catch (err) {
@@ -187,7 +215,10 @@ export async function issueTicket(c: Context) {
   // burning an upgrade attempt. We deliberately do NOT precheck the
   // runtime / containerId at ticket time — those checks belong to the
   // WS open path, which can communicate a structured error frame.
-  const result = await resolveServiceForUser(serviceId, user.id);
+  // Org-scoped + permission-gated — out-of-org / non-admin services 404
+  // indistinguishably from missing.
+  const organizationId = getActiveOrganizationId(c);
+  const result = await resolveServiceForOrg(serviceId, organizationId, user.id);
   if (!result.ok && (result.code === "server_not_found" || result.code === "not_deployed")) {
     return c.json({ error: result.message }, 404);
   }
@@ -223,18 +254,40 @@ export const serviceTerminalWsHandler = upgradeWebSocket(async (c) => {
 
   let userId: string | null = null;
   let ticketServiceId: string | null = null;
+  // Resolve activeOrganizationId here — the WS upgrade route skips the
+  // HTTP authMiddleware (auth happens inside this factory), so the org
+  // context is not pre-set. Mirror the middleware's logic.
+  let activeOrgId: string | null = null;
   if (ticket) {
     userId = ticket.userId;
     ticketServiceId = ticket.serviceId;
+    const memberships = await repos.member.listByUser(userId).catch(() => []);
+    if (memberships.length > 0) activeOrgId = memberships[0].organizationId;
   } else {
     try {
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
-      if (session?.user?.id) userId = session.user.id;
+      if (session?.user?.id) {
+        userId = session.user.id;
+        const sessOrgId =
+          (session.session as { activeOrganizationId?: string | null } | null)
+            ?.activeOrganizationId ?? null;
+        if (sessOrgId) {
+          const stillMember = await repos.member
+            .isMember(sessOrgId, userId)
+            .catch(() => false);
+          if (stillMember) activeOrgId = sessOrgId;
+        }
+        if (!activeOrgId) {
+          const memberships = await repos.member.listByUser(userId).catch(() => []);
+          if (memberships.length > 0) activeOrgId = memberships[0].organizationId;
+        }
+      }
     } catch {
       /* fall through */
     }
   }
   if (!userId) return openInitFailure("ssh_auth", "Unauthorized", 4401);
+  if (!activeOrgId) return openInitFailure("ssh_auth", "No active organization", 4401);
 
   // 3. Service existence + path binding
   const pathServiceId = c.req.param("serviceId");
@@ -244,10 +297,11 @@ export const serviceTerminalWsHandler = upgradeWebSocket(async (c) => {
     return openInitFailure("ssh_auth", "Ticket / path mismatch", 4401);
   }
 
-  // Resolve runtime + containerId. This validates ownership too —
-  // resolveServiceForUser refuses if the caller doesn't own the
-  // service's project.
-  const resolved = await resolveServiceForUser(pathServiceId, userId);
+  // Resolve runtime + containerId. Org-scoped + admin-permission-gated
+  // — refuses if the parent project doesn't belong to the caller's active
+  // organization, OR if the caller lacks admin permission on the project
+  // (opening a service shell is admin-tier).
+  const resolved = await resolveServiceForOrg(pathServiceId, activeOrgId, userId);
   if (!resolved.ok) {
     const closeCode =
       resolved.code === "server_not_found"
@@ -272,10 +326,7 @@ export const serviceTerminalWsHandler = upgradeWebSocket(async (c) => {
     }
   }
 
-  const clientIp =
-    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
-    c.req.header("x-real-ip") ||
-    null;
+  const clientIp = c.var.clientIp;
   const userAgent = c.req.header("user-agent") ?? null;
 
   const ctx: HandshakeCtx = {

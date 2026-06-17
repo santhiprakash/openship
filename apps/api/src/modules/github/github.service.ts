@@ -15,6 +15,7 @@ import {
 } from "./github.auth";
 import { listLocalGhRepos } from "./github.local-auth";
 import { isIgnoredRepoPath } from "../../lib/project-root-detector";
+import { repos as dbRepos } from "@repo/db";
 import type {
   GitHubRepository,
   GitHubBranch,
@@ -111,13 +112,14 @@ export function mapRepositories(repos: GitHubRepository[]): MappedRepository[] {
 export async function listUserOwnedRepos(
   userId: string,
   owner?: string,
+  opts: { organizationId?: string } = {},
 ): Promise<MappedRepository[]> {
   if (!owner) {
     // User's own repos
     const data = await githubFetch<GitHubRepository[]>({
       userId,
+      organizationId: opts.organizationId,
       url: "https://api.github.com/user/repos",
-      useUserToken: true,
       params: { per_page: 100, sort: "updated", affiliation: "owner,collaborator,organization_member" },
     });
     return mapRepositories(Array.isArray(data) ? data : []);
@@ -126,28 +128,51 @@ export async function listUserOwnedRepos(
   // Org repos
   const data = await githubFetch<GitHubRepository[]>({
     userId,
+    organizationId: opts.organizationId,
     url: `https://api.github.com/orgs/${encodeURIComponent(owner)}/repos`,
-    useUserToken: true,
     params: { type: "all", per_page: 100 },
   });
   return mapRepositories(Array.isArray(data) ? data : []);
 }
 
 /**
- * Fetch repositories visible to the installation.
+ * Fetch repositories the user can access through a specific GitHub App
+ * installation.
+ *
+ * Uses the USER-SCOPED endpoint /user/installations/{id}/repositories
+ * (authed with the user's GitHub OAuth token) rather than the install-
+ * scoped /installation/repositories endpoint (which requires an App
+ * installation access token — a different token type that fails with
+ * 403 "must authenticate with an installation access token" if a user
+ * OAuth token leaks in).
+ *
+ * Why this is the right choice:
+ *   - The dashboard wants to show "repos the USER can deploy", which
+ *     is the user-scoped intersection of (repos in the install) ∩ (repos
+ *     the user has read access to).
+ *   - User-scoped tokens are what we always have on the SaaS after the
+ *     OAuth-first Connect flow. Installation tokens are minted only when
+ *     a deploy actually needs to clone (via tokenFor("remote", ctx)).
+ *   - Avoids a class of subtle 403s when tokenFor falls through to OAuth
+ *     after an installation-token mint fails on edge cases.
  */
 export async function listInstallationRepos(
   userId: string,
   owner: string,
   installationId?: number,
+  opts: { organizationId?: string } = {},
 ): Promise<MappedRepository[]> {
+  if (!installationId) return [];
   const data = await githubFetch<{ repositories: GitHubRepository[] }>({
     userId,
-    url: "https://api.github.com/installation/repositories",
-    params: { type: "all", per_page: 100 },
-    owner,
-    installationId,
+    organizationId: opts.organizationId,
+    url: `https://api.github.com/user/installations/${installationId}/repositories`,
+    params: { per_page: 100 },
   });
+  // Owner arg kept in the signature for symmetry with caller sites + future
+  // filtering, but the endpoint is installation-id-scoped so the param is
+  // currently unused.
+  void owner;
   return mapRepositories(data.repositories ?? []);
 }
 
@@ -157,9 +182,11 @@ export async function listInstallationRepos(
 export async function listOrgRepos(
   userId: string,
   org: string,
+  opts: { organizationId?: string } = {},
 ): Promise<MappedRepository[]> {
   const data = await githubFetch<GitHubRepository[]>({
     userId,
+    organizationId: opts.organizationId,
     url: `https://api.github.com/orgs/${encodeURIComponent(org)}/repos`,
     params: { type: "all", per_page: 100 },
     owner: org,
@@ -174,17 +201,18 @@ export async function getRepository(
   userId: string,
   owner: string,
   repo: string,
-  opts: { withBranches?: boolean } = {},
+  opts: { withBranches?: boolean; organizationId?: string } = {},
 ): Promise<RepositoryDetail> {
   const data = await githubFetch<GitHubRepository>({
     userId,
+    organizationId: opts.organizationId,
     owner,
     url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
   });
 
   let branches: GitHubBranch[] | undefined;
   if (opts.withBranches) {
-    branches = await listBranches(userId, owner, repo);
+    branches = await listBranches(userId, owner, repo, { organizationId: opts.organizationId });
   }
 
   return {
@@ -207,7 +235,7 @@ export async function getRepository(
 export async function createRepository(
   userId: string,
   name: string,
-  opts: { description?: string; private?: boolean; owner?: string } = {},
+  opts: { description?: string; private?: boolean; owner?: string; organizationId?: string } = {},
 ): Promise<GitHubRepository> {
   const url = opts.owner
     ? `https://api.github.com/orgs/${encodeURIComponent(opts.owner)}/repos`
@@ -215,10 +243,10 @@ export async function createRepository(
 
   return githubFetch<GitHubRepository>({
     userId,
+    organizationId: opts.organizationId,
     url,
     method: "POST",
     owner: opts.owner,
-    useUserToken: !opts.owner, // user/repos needs user token
     params: {
       name,
       description: opts.description ?? `Repository created by Openship`,
@@ -234,9 +262,11 @@ export async function deleteRepository(
   userId: string,
   owner: string,
   repo: string,
+  opts: { organizationId?: string } = {},
 ): Promise<void> {
   await githubFetch({
     userId,
+    organizationId: opts.organizationId,
     owner,
     url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
     method: "DELETE",
@@ -252,9 +282,11 @@ export async function listBranches(
   userId: string,
   owner: string,
   repo: string,
+  opts: { organizationId?: string } = {},
 ): Promise<GitHubBranch[]> {
   return githubFetch<GitHubBranch[]>({
     userId,
+    organizationId: opts.organizationId,
     owner,
     url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`,
     params: { per_page: 100 },
@@ -337,11 +369,12 @@ export async function listFiles(
   userId: string,
   owner: string,
   repo: string,
-  opts: { branch?: string; path?: string } = {},
+  opts: { branch?: string; path?: string; organizationId?: string } = {},
 ): Promise<GitHubFileContent[]> {
   const filePath = opts.path ?? "";
   return githubFetch<GitHubFileContent[]>({
     userId,
+    organizationId: opts.organizationId,
     owner,
     url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${filePath}`,
     params: opts.branch ? { ref: opts.branch } : undefined,
@@ -388,7 +421,7 @@ export async function getFileContent(
   owner: string,
   repo: string,
   file: string,
-  opts: { branch?: string; json?: boolean } = {},
+  opts: { branch?: string; json?: boolean; organizationId?: string } = {},
 ): Promise<{
   sha: string;
   size: number;
@@ -397,6 +430,7 @@ export async function getFileContent(
 }> {
   const data = await githubFetch<GitHubFileContent>({
     userId,
+    organizationId: opts.organizationId,
     owner,
     url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${file}`,
     params: opts.branch ? { ref: opts.branch } : undefined,
@@ -429,11 +463,12 @@ export async function listWebhooks(
   userId: string,
   owner: string,
   repo: string,
+  opts: { organizationId?: string } = {},
 ): Promise<GitHubWebhook[]> {
   return githubFetch<GitHubWebhook[]>({
     userId,
+    organizationId: opts.organizationId,
     owner,
-    useUserToken: true,
     url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks`,
   });
 }
@@ -451,6 +486,7 @@ export async function createWebhook(
   repo: string,
   webhookUrl: string,
   secret?: string,
+  opts: { organizationId?: string } = {},
 ): Promise<{ hookId: number; events: string[]; active: boolean }> {
   const config: Record<string, unknown> = {
     url: webhookUrl,
@@ -460,8 +496,8 @@ export async function createWebhook(
 
   const data = await githubFetch<GitHubWebhook>({
     userId,
+    organizationId: opts.organizationId,
     owner,
-    useUserToken: true,
     url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks`,
     method: "POST",
     params: {
@@ -483,15 +519,21 @@ export async function updateWebhook(
   owner: string,
   repo: string,
   hookId: number,
-  patch: { active?: boolean; events?: string[]; config?: Record<string, unknown> },
+  patch: {
+    active?: boolean;
+    events?: string[];
+    config?: Record<string, unknown>;
+    organizationId?: string;
+  },
 ): Promise<{ id: number; active: boolean; events: string[] }> {
+  const { organizationId, ...restPatch } = patch;
   const data = await githubFetch<GitHubWebhook>({
     userId,
+    organizationId,
     owner,
-    useUserToken: true,
     url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks/${hookId}`,
     method: "PATCH",
-    params: patch,
+    params: restPatch,
   });
   return { id: data.id, active: data.active, events: data.events };
 }
@@ -504,11 +546,12 @@ export async function deleteWebhook(
   owner: string,
   repo: string,
   hookId: number,
+  opts: { organizationId?: string } = {},
 ): Promise<void> {
   await githubFetch({
     userId,
+    organizationId: opts.organizationId,
     owner,
-    useUserToken: true,
     url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks/${hookId}`,
     method: "DELETE",
   });
@@ -585,91 +628,46 @@ export async function updateCheckRun(
 // ─── User organisations ──────────────────────────────────────────────────────
 
 /**
- * Build account list from the GitHub API (non-app modes).
- * Returns the authenticated user + their orgs.
+ * Check whether the user has a default clone token configured.
+ *
+ * "Default" here = `user_settings.clone_token_encrypted IS NOT NULL
+ * AND clone_token_as_default = true`. We don't need to DECRYPT the
+ * token — just confirm it exists and is marked default. A configured
+ * default clone token means the user has opted in to using it for any
+ * repo they can see, so "Local only" badging is misleading for those
+ * users (the token covers it). One DB read, no per-repo cost.
  */
-export async function listUserAccounts(
-  userId: string,
-  status: { login: string; id: number; avatar_url: string },
-): Promise<MappedAccount[]> {
-  const accounts: MappedAccount[] = [
-    { login: status.login, id: status.id, avatar_url: status.avatar_url, type: "User" },
-  ];
-  try {
-    const orgs = await githubFetch<Array<{ login: string; id: number; avatar_url: string }>>({
-      userId,
-      url: "https://api.github.com/user/orgs",
-      useUserToken: true,
-    });
-    for (const org of orgs) {
-      accounts.push({ login: org.login, id: org.id, avatar_url: org.avatar_url, type: "Organization" });
-    }
-  } catch { /* empty */ }
-  return accounts;
+async function userHasDefaultCloneToken(userId: string): Promise<boolean> {
+  const settings = await dbRepos.settings.findByUser(userId).catch(() => null);
+  return !!(settings?.cloneTokenEncrypted && settings.cloneTokenAsDefault);
 }
 
 /**
- * List the user's GitHub organisations via API (non-app modes).
+ * SOURCE OF TRUTH for the "Local only" badge.
+ *
+ * Returns true ONLY when all of these are true:
+ *   - The repo is private (public repos clone anonymously — no badge)
+ *   - The user has NO default clone token (a clone token works for any
+ *     visible repo, regardless of App coverage)
+ *   - The Openship App is connected at all (if not, the page-level
+ *     "Install App" banner is the right place to surface the gap —
+ *     don't badge every single repo)
+ *   - The repo's owner has NO App installation (if they do, the App
+ *     can mint an install token for the repo, no badge needed)
+ *
+ * Client never duplicates this logic. It just reads `repo.source`.
  */
-export async function listUserOrgsViaApi(userId: string): Promise<MappedAccount[]> {
-  try {
-    const orgs = await githubFetch<Array<{ login: string; id: number; avatar_url: string }>>({
-      userId,
-      url: "https://api.github.com/user/orgs",
-      useUserToken: true,
-    });
-    return orgs.map((o) => ({ login: o.login, id: o.id, avatar_url: o.avatar_url, type: "Organization" }));
-  } catch {
-    return [];
-  }
-}
-
-/**
- * List orgs with their repos via API (non-app modes).
- */
-export async function listUserOrgsWithReposViaApi(
-  userId: string,
-): Promise<Array<{ org: MappedAccount; repos: MappedRepository[] }>> {
-  const orgs = await listUserOrgsViaApi(userId);
-  return Promise.all(
-    orgs.map(async (org) => {
-      const repos = await listUserOwnedRepos(userId, org.login);
-      return { org, repos };
-    }),
-  );
-}
-
-/**
- * List the user's GitHub organisations (app mode - via installations).
- */
-export async function listUserOrgs(userId: string): Promise<MappedAccount[]> {
-  const installations = await getUserInstallations(userId);
-  return mapAccounts(installations.filter((i) => i.account.type === "Organization"));
-}
-
-/**
- * List orgs with their repos (mirrors old fetchUserOrgsWithRepos).
- */
-export async function listUserOrgsWithRepos(
-  userId: string,
-): Promise<Array<{ org: MappedAccount; repos: MappedRepository[] }>> {
-  const installations = await getUserInstallations(userId);
-  const orgInstallations = installations.filter((i) => i.account.type === "Organization");
-
-  return Promise.all(
-    orgInstallations.map(async (inst) => {
-      const repos = await listOrgRepos(userId, inst.account.login);
-      return {
-        org: {
-          login: inst.account.login,
-          id: inst.account.id,
-          avatar_url: inst.account.avatar_url,
-          type: inst.account.type,
-        },
-        repos,
-      };
-    }),
-  );
+function shouldTagLocalOnly(args: {
+  repo: { private: boolean; owner: string };
+  appInstalledOwners: Set<string>;
+  hasUserCloneToken: boolean;
+  appConnected: boolean;
+}): boolean {
+  if (!args.repo.private) return false;
+  if (args.hasUserCloneToken) return false;
+  if (!args.appConnected) return false;
+  if (args.appInstalledOwners.has(args.repo.owner.toLowerCase())) return false;
+  return true;
 }
 
 /**
@@ -731,7 +729,13 @@ export async function getUserHome(userId: string): Promise<{
     try {
       const status = await getUserStatus(userId);
       const installations = await getUserInstallations(userId, status);
-      accounts = mapAccounts(installations);
+      // Tag every App installation account with source: "app" so the
+      // dashboard can distinguish them from any CLI-side accounts that
+      // get merged in later. Without this tag the settings card would
+      // (and did) render CLI org memberships as if they were App
+      // installations — see GitHubConnection.tsx where appAccounts
+      // gates rendering on state.sources.openshipApp.connected.
+      accounts = mapAccounts(installations).map((acct) => ({ ...acct, source: "app" as const }));
       for (const i of installations) {
         appInstalledOwners.add(i.account.login.toLowerCase());
       }
@@ -756,13 +760,15 @@ export async function getUserHome(userId: string): Promise<{
     }
 
     // Merge gh CLI repos when available (self-hosted + cloud-connected
-    // case). Tagging rule for each CLI repo (cheap, zero extra API calls):
+    // case). The `source: "cli"` tag means "Local only" in the dashboard,
+    // so the rule is precise about when to apply it. SOURCE OF TRUTH for
+    // "is this repo Local only?" lives entirely server-side — the client
+    // just reads `repo.source`. See shouldTagLocalOnly() for the rule set.
     //
-    //   1. Already in primary install's repo list   → "both"
-    //   2. Owner has an App installation            → "both" (presumed
-    //      App-covered — we haven't fetched that install's list, but
-    //      the App is connected to the org)
-    //   3. Neither                                  → "cli" (truly local-only)
+    // Pre-fetch the user's clone-token default ONCE (no per-repo DB hit),
+    // so the rule can be evaluated in O(1) per repo.
+    const hasUserCloneToken = await userHasDefaultCloneToken(userId);
+
     if (state.sources.ghCli.available) {
       try {
         const ghRepos = await listLocalGhRepos(userId);
@@ -774,11 +780,18 @@ export async function getUserHome(userId: string): Promise<{
           const key = r.full_name.toLowerCase();
           const existing = byFullName.get(key);
           if (existing) {
+            // Visible from both sources — App-covered, no "Local only" badge.
             existing.source = "both";
-          } else if (appInstalledOwners.has(r.owner.toLowerCase())) {
-            // Owner has an App installation — presume App-covered.
-            // Per-repo accuracy comes when the user opens that org in
-            // the picker and fetchReposForOwner loads the real list.
+          } else if (
+            !shouldTagLocalOnly({
+              repo: r,
+              appInstalledOwners,
+              hasUserCloneToken,
+              appConnected: true, // we're in the App-primary branch
+            })
+          ) {
+            // CLI-only but the rules say "don't badge" — covered by some
+            // other path (public, clone token, owner has install).
             byFullName.set(key, { ...r, source: "both" });
           } else {
             byFullName.set(key, { ...r, source: "cli" });
@@ -797,12 +810,17 @@ export async function getUserHome(userId: string): Promise<{
   // state.primary === "gh-cli". The App isn't connected; listings flow
   // through the user OAuth token (which resolveToken resolves to the
   // gh CLI fallback in this case).
+  //
+  // Per the source-of-truth rule in shouldTagLocalOnly(): when the App
+  // is not connected at all, individual repos do NOT get a "Local only"
+  // badge — the page-level "Install GitHub App" banner is the right
+  // place to surface that gap. Badging every single row would be noise.
+  // We leave `source` undefined so the dashboard renders a clean list.
   let repos: MappedRepository[] = [];
   try {
     const data = await githubFetch<GitHubRepository[]>({
       userId,
       url: "https://api.github.com/user/repos",
-      useUserToken: true,
       params: {
         per_page: 100,
         sort: "updated",
@@ -810,16 +828,23 @@ export async function getUserHome(userId: string): Promise<{
       },
     });
     repos = mapRepositories(Array.isArray(data) ? data : []);
-    for (const r of repos) r.source = "cli";
+    // No per-repo source tag — App is unavailable, so badge would be redundant
+    // with the page-level connect-the-App prompt.
   } catch {
     /* empty */
   }
 
   // Build account list from /user + /user/orgs using the same token.
+  // Every account on this path is tagged source: "cli" — they're CLI
+  // org memberships, NOT GitHub App installations. The library page
+  // uses this list to populate the owner picker (still useful for
+  // browsing repos) but the settings GitHub card refuses to render
+  // them as App installations because of the source tag + the
+  // appConnected gate in GitHubConnection.tsx.
   const cliLogin = state.sources.ghCli.login;
   const cliAvatar = state.sources.ghCli.avatarUrl;
   const accounts: MappedAccount[] = cliLogin
-    ? [{ login: cliLogin, id: 0, avatar_url: cliAvatar ?? "", type: "User" }]
+    ? [{ login: cliLogin, id: 0, avatar_url: cliAvatar ?? "", type: "User", source: "cli" }]
     : [];
   try {
     const orgs = await githubFetch<
@@ -827,7 +852,6 @@ export async function getUserHome(userId: string): Promise<{
     >({
       userId,
       url: "https://api.github.com/user/orgs",
-      useUserToken: true,
     });
     for (const org of orgs) {
       accounts.push({
@@ -835,6 +859,7 @@ export async function getUserHome(userId: string): Promise<{
         id: org.id,
         avatar_url: org.avatar_url,
         type: "Organization",
+        source: "cli",
       });
     }
   } catch {
@@ -915,18 +940,66 @@ export async function getAvailableStrategies(
   return { current, available };
 }
 
-/** True when the URL points to localhost or a private/unreachable address. */
+/**
+ * True when the URL points to a host that is NOT reachable from the
+ * public internet — so GitHub's webhook delivery would fail.
+ *
+ * Used to decide between webhook strategies in resolveWebhookStrategy:
+ *   - reachable → "repo" (per-repo webhook directly to this URL)
+ *   - unreachable → "none" (caller falls back to polling or domain
+ *     delivery via the project's webhookDomain)
+ *
+ * Conservative on parse failure (returns true). A typo'd URL is safer
+ * to assume unreachable than to register a webhook GitHub will never
+ * be able to deliver to.
+ *
+ * Covers the full set of non-routable host shapes:
+ *   - DNS sentinels: localhost, *.local (mDNS)
+ *   - IPv4 loopback: 127.0.0.0/8 (ALL of 127, not just .0.1)
+ *   - IPv4 unspecified: 0.0.0.0
+ *   - IPv4 RFC1918 private: 10/8, 172.16/12, 192.168/16
+ *   - IPv4 link-local / APIPA: 169.254.0.0/16
+ *   - IPv6 loopback: ::1 (with optional [::1] bracket form)
+ *   - IPv6 link-local: fe80::/10
+ *   - IPv6 ULA: fc00::/7 (fc/fd prefix)
+ */
 function isLocalUrl(url: string): boolean {
   try {
     const { hostname } = new URL(url);
-    return (
+    if (!hostname) return true;
+
+    // DNS sentinel cases. `.local` is mDNS (Bonjour) — reachable only on
+    // the local link, never from the public internet.
+    if (
       hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
       hostname === "0.0.0.0" ||
-      hostname === "::1" ||
-      hostname.endsWith(".local") ||
-      /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(hostname)
-    );
+      hostname.endsWith(".local")
+    ) {
+      return true;
+    }
+
+    // IPv6 (URL parses bracketed form; strip the brackets for matching).
+    // Same hostname can also arrive un-bracketed if the caller passed a
+    // bare IP. fe80::/10 → fe80..febf (first byte top 10 bits); fc00::/7
+    // → fc00..fdff (first byte top 7 bits, fc or fd).
+    const v6 = hostname.startsWith("[") && hostname.endsWith("]")
+      ? hostname.slice(1, -1)
+      : hostname;
+    if (v6 === "::1") return true;
+    if (/^fe[89ab][0-9a-f]?:/i.test(v6)) return true; // link-local
+    if (/^f[cd][0-9a-f]{2}:/i.test(v6)) return true; // ULA
+
+    // IPv4: full 127/8 + 0/8-sentinel handled above + RFC1918 + link-local.
+    // (Not collapsed into a single regex — readability beats brevity here,
+    // and each /8|/12|/16 has a different intent that benefits from being
+    // named in the source.)
+    if (/^127\./.test(hostname)) return true;                       // loopback /8
+    if (/^10\./.test(hostname)) return true;                        // RFC1918 /8
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;   // RFC1918 /12
+    if (/^192\.168\./.test(hostname)) return true;                  // RFC1918 /16
+    if (/^169\.254\./.test(hostname)) return true;                  // link-local /16
+
+    return false;
   } catch {
     return true;
   }
@@ -946,6 +1019,7 @@ export async function registerWebhook(
   owner: string,
   repo: string,
   webhookUrl = `${runtimeTarget.api}/api/webhooks/github`,
+  opts: { organizationId?: string } = {},
 ): Promise<{ hookId: number | null; events: string[] }> {
   try {
     const result = await createWebhook(
@@ -954,12 +1028,15 @@ export async function registerWebhook(
       repo,
       webhookUrl,
       env.GITHUB_WEBHOOK_SECRET || undefined,
+      { organizationId: opts.organizationId },
     );
     return { hookId: result.hookId, events: result.events };
   } catch (err) {
     /* 422 = webhook already exists - find it */
     if (err instanceof Error && err.message.includes("422")) {
-      const existing = await listWebhooks(userId, owner, repo);
+      const existing = await listWebhooks(userId, owner, repo, {
+        organizationId: opts.organizationId,
+      });
       const targetUrl = normalizeWebhookUrl(webhookUrl);
       const match = existing.find((h) =>
         normalizeWebhookUrl(h.config?.url) === targetUrl,
@@ -977,6 +1054,7 @@ export async function registerWebhook(
         active: true,
         events: [...GITHUB_DEPLOY_WEBHOOK_EVENTS],
         config,
+        organizationId: opts.organizationId,
       });
       return { hookId: updated.id, events: updated.events };
     }

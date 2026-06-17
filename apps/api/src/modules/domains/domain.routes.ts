@@ -1,24 +1,32 @@
 /**
  * Domain routes - mounted at /api/domains in app.ts.
  *
- * All routes require authentication.
+ * Every route declares a permission tag enforced by secureRouter.
  */
 
 import { Hono } from "hono";
-import { authMiddleware } from "../../middleware";
+import { tbValidator } from "@hono/typebox-validator";
+import { secureRouter } from "../../lib/secure-router";
 import * as ctrl from "./domain.controller";
+import { AddDomainBody } from "./domain.schema";
 
-export const domainRoutes = new Hono();
+const r = secureRouter(new Hono(), {
+  module: "domains",
+  basePath: "/api/domains",
+});
 
-/* All domain routes require authentication */
-domainRoutes.use("*", authMiddleware);
 
 /* ─── Domains ──────────────────────────────────────────────────────────── */
-domainRoutes.get("/", ctrl.list);
-domainRoutes.post("/", ctrl.add);
-domainRoutes.post("/preview", ctrl.preview);
-domainRoutes.delete("/:id", ctrl.remove);
-domainRoutes.post("/:id/verify", ctrl.verify);
-domainRoutes.get("/:id/records", ctrl.records);
-domainRoutes.post("/:id/renew", ctrl.renewSsl);
-domainRoutes.post("/renew-all", ctrl.renewAllSsl);
+r.get("/", { tag: "domain:list" }, ctrl.list);
+r.post("/", { tag: "domain:write" }, tbValidator("json", AddDomainBody), ctrl.add);
+// Side-effect-free DNS probe — POST is used to carry hostname in body.
+// readOnly opts out of the scanner's "POST must be write/admin" rule.
+r.post("/preview", { tag: "domain:read", readOnly: true }, ctrl.preview);
+r.delete("/:id", { tag: "domain:admin" }, ctrl.remove);
+r.post("/:id/verify", { tag: "domain:write" }, ctrl.verify);
+r.get("/:id/records", { tag: "domain:read" }, ctrl.records);
+r.post("/:id/renew", { tag: "domain:write" }, ctrl.renewSsl);
+r.post("/renew-all", { tag: "domain:write" }, ctrl.renewAllSsl);
+r.post("/verify-pending", { tag: "domain:write" }, ctrl.verifyPending);
+
+export const domainRoutes = r.hono;

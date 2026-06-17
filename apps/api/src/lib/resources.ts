@@ -14,9 +14,8 @@ import {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Normalize a possibly-legacy DB value into cpuCores.
- * Old format: { cpus, cpuConfig: { quotaUs, periodUs }, memoryMb }
- * New format: { cpuCores, memoryMb }
+ * Extract cpuCores from a raw DB value, accepting either { cpuCores },
+ * { cpuConfig: { quotaUs, periodUs } }, or { cpus }.
  */
 function extractCpuCores(raw: Record<string, unknown>): number | undefined {
   if (typeof raw.cpuCores === "number") return raw.cpuCores;
@@ -79,7 +78,7 @@ export function decodeResources(input: {
 
 /**
  * Ensure a ResourceConfig has all fields populated with safe defaults.
- * Handles legacy DB format ({ cpus, cpuConfig }) transparently.
+ * Accepts { cpus, cpuConfig } shapes transparently via extractCpuCores.
  */
 export function withDefaults(
   config?: ResourceConfig | Record<string, unknown> | null,

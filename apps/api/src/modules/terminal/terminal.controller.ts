@@ -48,6 +48,8 @@ import {
   touchSession,
   unregisterSession,
 } from "../../lib/terminal-session-manager";
+import { getActiveOrganizationId } from "../../lib/controller-helpers";
+import { permission, checkPermission } from "../../lib/permission";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -107,10 +109,21 @@ export async function issueTicket(c: Context) {
   const serverId = typeof body?.serverId === "string" ? body.serverId : "";
   if (!serverId) return c.json({ error: "serverId required" }, 400);
 
-  // Existence + (future) authz check at ticket time. Surface the same
+  // Primary gate: opening a PTY is administrative. Even at ticket-mint
+  // time we want to reject restricted users without an admin grant — the
+  // ticket would otherwise be a "free pass" past the WS upgrade gate below.
+  await permission.assert(c, {
+    resourceType: "server",
+    resourceId: serverId,
+    action: "admin",
+  });
+  // Existence + cross-org authz check at ticket time. Surface the same
   // 404 the WS would, so the dashboard can show a clear error without
-  // burning an upgrade attempt.
-  const server = await repos.server.get(serverId);
+  // burning an upgrade attempt. We use the org-scoped getter — out-of-org
+  // (or unknown) server ids return 404 indistinguishably to prevent
+  // existence leaks across tenants.
+  const organizationId = getActiveOrganizationId(c);
+  const server = await repos.server.getInOrganization(serverId, organizationId);
   if (!server) return c.json({ error: "Server not found" }, 404);
 
   const { token, expiresIn } = issueTerminalTicket(user.id, serverId);
@@ -160,18 +173,45 @@ export const terminalWsHandler = upgradeWebSocket(async (c) => {
   // it binds (userId, serverId) together.
   let userId: string | null = null;
   let ticketServerId: string | null = null;
+  // Resolve activeOrganizationId here — the WS upgrade route deliberately
+  // skips the HTTP authMiddleware (auth happens inside this factory), so
+  // it's not pre-set on the Hono context. We mirror the middleware's
+  // logic: prefer session.activeOrganizationId, fall back to the user's
+  // oldest membership.
+  let activeOrgId: string | null = null;
   if (ticket) {
     userId = ticket.userId;
     ticketServerId = ticket.serverId;
+    // Ticket-authed: resolve org from the user's memberships (the ticket
+    // doesn't carry orgId, but the issueTicket path already validated
+    // org-scoped access).
+    const memberships = await repos.member.listByUser(userId).catch(() => []);
+    if (memberships.length > 0) activeOrgId = memberships[0].organizationId;
   } else {
     try {
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
-      if (session?.user?.id) userId = session.user.id;
+      if (session?.user?.id) {
+        userId = session.user.id;
+        const sessOrgId =
+          (session.session as { activeOrganizationId?: string | null } | null)
+            ?.activeOrganizationId ?? null;
+        if (sessOrgId) {
+          const stillMember = await repos.member
+            .isMember(sessOrgId, userId)
+            .catch(() => false);
+          if (stillMember) activeOrgId = sessOrgId;
+        }
+        if (!activeOrgId) {
+          const memberships = await repos.member.listByUser(userId).catch(() => []);
+          if (memberships.length > 0) activeOrgId = memberships[0].organizationId;
+        }
+      }
     } catch {
       // fall through to reject below
     }
   }
   if (!userId) return openInitFailure("ssh_auth", "Unauthorized", 4401);
+  if (!activeOrgId) return openInitFailure("ssh_auth", "No active organization", 4401);
 
   // ── 3. Server existence + path-binding sanity ──────────────────────────
   const pathServerId = c.req.param("serverId");
@@ -181,7 +221,23 @@ export const terminalWsHandler = upgradeWebSocket(async (c) => {
   if (ticketServerId && ticketServerId !== pathServerId) {
     return openInitFailure("ssh_auth", "Ticket / path mismatch", 4401);
   }
-  const server = await repos.server.get(pathServerId);
+  // Primary gate: opening a PTY is administrative. We call the pure
+  // resolver (no Hono context) directly here because the WS upgrade path
+  // resolves userId + activeOrgId manually above (authMiddleware is
+  // bypassed for the upgrade). 404-shape on deny via openInitFailure so
+  // we don't leak existence to non-admins.
+  const allowed = await checkPermission(userId, activeOrgId, {
+    resourceType: "server",
+    resourceId: pathServerId,
+    action: "admin",
+  });
+  if (!allowed) {
+    return openInitFailure("server_not_found", "Server not found", 4404);
+  }
+  // Org-scoped lookup: returns 404 indistinguishably whether the server
+  // doesn't exist or belongs to a different org. This is the cross-tenant
+  // SSH PTY gate (defense in depth alongside the permission check above).
+  const server = await repos.server.getInOrganization(pathServerId, activeOrgId);
   if (!server) return openInitFailure("server_not_found", "Server not found", 4404);
 
   // ── 4. Per-user concurrent session cap (skipped for resumes) ──────────
@@ -200,10 +256,7 @@ export const terminalWsHandler = upgradeWebSocket(async (c) => {
   }
 
   // ── 5. Capture client metadata for the audit row ───────────────────────
-  const clientIp =
-    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
-    c.req.header("x-real-ip") ||
-    null;
+  const clientIp = c.var.clientIp;
   const userAgent = c.req.header("user-agent") ?? null;
 
   // ── 6. Open the PTY (lazy — happens in onOpen so the failure path

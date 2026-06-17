@@ -82,13 +82,31 @@ const IN_FLIGHT_RESTORE_STATUSES: BackupRestoreStatus[] = [
 
 export function createBackupDestinationRepo(db: Database) {
   return {
-    async list(userId: string): Promise<BackupDestination[]> {
+    /**
+     * Org-scoped list — returns every destination in the org. Access is
+     * already verified at the route boundary; this just scopes the rows.
+     */
+    async listByOrganization(organizationId: string): Promise<BackupDestination[]> {
       return db.query.backupDestination.findMany({
         where: and(
-          eq(backupDestination.userId, userId),
+          eq(backupDestination.organizationId, organizationId),
           isNull(backupDestination.deletedAt),
         ),
         orderBy: (t, { asc }) => [asc(t.createdAt)],
+      });
+    },
+
+    /** Org-scoped variant of `findByName`. Uniqueness is per-org now. */
+    async findByNameInOrganization(
+      organizationId: string,
+      name: string,
+    ): Promise<BackupDestination | undefined> {
+      return db.query.backupDestination.findFirst({
+        where: and(
+          eq(backupDestination.organizationId, organizationId),
+          eq(backupDestination.name, name),
+          isNull(backupDestination.deletedAt),
+        ),
       });
     },
 
@@ -101,18 +119,8 @@ export function createBackupDestinationRepo(db: Database) {
       });
     },
 
-    async findByName(
-      userId: string,
-      name: string,
-    ): Promise<BackupDestination | undefined> {
-      return db.query.backupDestination.findFirst({
-        where: and(
-          eq(backupDestination.userId, userId),
-          eq(backupDestination.name, name),
-          isNull(backupDestination.deletedAt),
-        ),
-      });
-    },
+    // findByName removed — use findByNameInOrganization. Name uniqueness
+    // is per-org now (uq_backup_destination_org_name_active).
 
     async create(data: NewBackupDestination): Promise<BackupDestination> {
       const [row] = await db.insert(backupDestination).values(data).returning();
@@ -121,7 +129,7 @@ export function createBackupDestinationRepo(db: Database) {
 
     async update(
       id: string,
-      data: Partial<Omit<NewBackupDestination, "id" | "userId" | "createdAt">>,
+      data: Partial<Omit<NewBackupDestination, "id" | "createdAt">>,
     ): Promise<BackupDestination | undefined> {
       const [row] = await db
         .update(backupDestination)
@@ -246,8 +254,24 @@ export function createBackupPolicyRepo(db: Database) {
       });
     },
 
-    /** Every enabled policy with a non-null cron expression. Used by
-     *  the cron-trigger boot reconcile to register repeat jobs. */
+    /**
+     * Every enabled policy with a non-null cron expression.
+     *
+     * Two access shapes:
+     *   - `listEnabledScheduled()`            return everything in one
+     *                                         batch. Convenient for
+     *                                         small instances; can
+     *                                         block boot under large
+     *                                         policy counts.
+     *   - `iterateEnabledScheduled(pageSize)` async generator that
+     *                                         yields rows in batches.
+     *                                         Cron boot should use
+     *                                         this so a single org
+     *                                         with thousands of
+     *                                         policies doesn't delay
+     *                                         every other org's
+     *                                         schedule registration.
+     */
     async listEnabledScheduled(): Promise<BackupPolicy[]> {
       return db.query.backupPolicy.findMany({
         where: and(
@@ -256,6 +280,28 @@ export function createBackupPolicyRepo(db: Database) {
           sql`${backupPolicy.cronExpression} IS NOT NULL`,
         ),
       });
+    },
+
+    async *iterateEnabledScheduled(
+      pageSize = 100,
+    ): AsyncIterableIterator<BackupPolicy> {
+      let offset = 0;
+      while (true) {
+        const page = await db.query.backupPolicy.findMany({
+          where: and(
+            isNull(backupPolicy.deletedAt),
+            eq(backupPolicy.enabled, true),
+            sql`${backupPolicy.cronExpression} IS NOT NULL`,
+          ),
+          orderBy: (t, { asc }) => [asc(t.id)],
+          limit: pageSize,
+          offset,
+        });
+        if (page.length === 0) return;
+        for (const row of page) yield row;
+        if (page.length < pageSize) return;
+        offset += pageSize;
+      }
     },
 
     /** Every enabled policy with `trigger_on_pre_deploy = true` for a
@@ -309,17 +355,31 @@ export function createBackupPolicyRepo(db: Database) {
 
 export function createBackupRunRepo(db: Database) {
   return {
-    async listByUser(
-      userId: string,
-      opts?: { limit?: number; projectId?: string; serviceId?: string },
+    /**
+     * Org-scoped list — returns every run for the org, optionally
+     * narrowed by project/service. Access already verified at the
+     * route boundary.
+     */
+    async listByOrganization(
+      organizationId: string,
+      opts?: {
+        limit?: number;
+        offset?: number;
+        projectId?: string;
+        serviceId?: string;
+      },
     ): Promise<BackupRun[]> {
-      const conditions = [eq(backupRun.userId, userId), isNull(backupRun.deletedAt)];
+      const conditions = [
+        eq(backupRun.organizationId, organizationId),
+        isNull(backupRun.deletedAt),
+      ];
       if (opts?.projectId) conditions.push(eq(backupRun.projectId, opts.projectId));
       if (opts?.serviceId) conditions.push(eq(backupRun.serviceId, opts.serviceId));
       return db.query.backupRun.findMany({
         where: and(...conditions),
         orderBy: (t, { desc }) => [desc(t.startedAt)],
         limit: opts?.limit ?? 100,
+        offset: opts?.offset ?? 0,
       });
     },
 
@@ -351,7 +411,7 @@ export function createBackupRunRepo(db: Database) {
     async transition(
       id: string,
       status: BackupRunStatus,
-      patch?: Partial<Omit<NewBackupRun, "id" | "userId" | "startedAt">>,
+      patch?: Partial<Omit<NewBackupRun, "id" | "startedAt">>,
     ): Promise<void> {
       const TERMINAL: BackupRunStatus[] = [
         "succeeded",
@@ -429,12 +489,13 @@ export function createBackupRunRepo(db: Database) {
 
 export function createBackupRestoreRepo(db: Database) {
   return {
-    async listByUser(
-      userId: string,
+    /** Org-scoped list of restores. */
+    async listByOrganization(
+      organizationId: string,
       opts?: { limit?: number },
     ): Promise<BackupRestore[]> {
       return db.query.backupRestore.findMany({
-        where: eq(backupRestore.userId, userId),
+        where: eq(backupRestore.organizationId, organizationId),
         orderBy: (t, { desc }) => [desc(t.startedAt)],
         limit: opts?.limit ?? 100,
       });

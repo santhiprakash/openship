@@ -1,51 +1,56 @@
 /**
  * GitHub routes - all authenticated GitHub endpoints.
  *
- * Mounted at /api/github in app.ts.
- * Every route goes through authMiddleware (session required).
+ * Mounted at /api/github in app.ts. Every permission-tagged route
+ * runs authMiddleware (auto-injected by secureRouter) which also
+ * resolves the active organization id onto context — required by
+ * tokenFor's self-hosted gh-cli operator-vs-member gate.
  *
- * TypeBox validation is applied at the route level using typebox-validator
- * for params/query/body where applicable.
+ * The only public route here is /connect/redirect, the GitHub OAuth
+ * callback, which intentionally has no user session yet.
  */
 
 import { Hono } from "hono";
-import { authMiddleware, localOnly } from "../../middleware";
+import { localOnly } from "../../middleware";
+import { secureRouter } from "../../lib/secure-router";
 import * as ctrl from "./github.controller";
 
-export const githubRoutes = new Hono();
-
-/* All GitHub routes require authentication */
-githubRoutes.use("*", authMiddleware);
+const r = secureRouter(new Hono(), {
+  module: "github",
+  basePath: "/api/github",
+});
 
 /* ─── Status / Connection ──────────────────────────────────────────────── */
-githubRoutes.get("/status", ctrl.getStatus);
-githubRoutes.get("/local-status", localOnly, ctrl.getLocalStatus);
-githubRoutes.get("/connect/poll", localOnly, ctrl.pollConnect);
-githubRoutes.get("/home", ctrl.getHome);
-githubRoutes.post("/connect", ctrl.connect);
-githubRoutes.get("/connect/redirect", ctrl.connectRedirect);
-githubRoutes.post("/disconnect", ctrl.disconnect);
+r.get("/status", { tag: "github:read" }, ctrl.getStatus);
+r.get("/local-status", { tag: "github:read" }, localOnly, ctrl.getLocalStatus);
+r.get("/connect/poll", { tag: "github:read" }, localOnly, ctrl.pollConnect);
+r.get("/home", { tag: "github:read" }, ctrl.getHome);
+r.post("/connect", { tag: "github:write" }, ctrl.connect);
+r.public("get", "/connect/redirect", { reason: "GitHub OAuth callback - no session yet during redirect" }, ctrl.connectRedirect);
+r.post("/disconnect", { tag: "github:admin" }, ctrl.disconnect);
 
 /* ─── Accounts / Organisations ─────────────────────────────────────────── */
-githubRoutes.get("/accounts", ctrl.listAccounts);
-githubRoutes.get("/orgs", ctrl.listOrgs);
-githubRoutes.get("/orgs/repos", ctrl.listOrgsWithRepos);
-githubRoutes.get("/orgs/:org/repos", ctrl.listOrgRepos);
+// /home returns { state, accounts, repos } in one round trip — the
+// dashboard's only entry point.
+r.get("/orgs/:org/repos", { tag: "github:list" }, ctrl.listOrgRepos);
 
 /* ─── Repositories ─────────────────────────────────────────────────────── */
-githubRoutes.get("/repos", ctrl.listRepos);
-githubRoutes.post("/repos", ctrl.createRepo);
-githubRoutes.get("/repos/:owner/:repo", ctrl.getRepo);
-githubRoutes.delete("/repos/:owner/:repo", ctrl.deleteRepo);
+r.get("/repos", { tag: "github:list" }, ctrl.listRepos);
+r.post("/repos", { tag: "github:write" }, ctrl.createRepo);
+r.get("/repos/:owner/:repo", { tag: "github:read" }, ctrl.getRepo);
+r.delete("/repos/:owner/:repo", { tag: "github:admin" }, ctrl.deleteRepo);
 
 /* ─── Branches ─────────────────────────────────────────────────────────── */
-githubRoutes.get("/repos/:owner/:repo/branches", ctrl.listBranches);
+r.get("/repos/:owner/:repo/branches", { tag: "github:list" }, ctrl.listBranches);
 
 /* ─── Files ────────────────────────────────────────────────────────────── */
-githubRoutes.get("/repos/:owner/:repo/files", ctrl.listFiles);
-githubRoutes.get("/repos/:owner/:repo/file", ctrl.getFile);
+r.get("/repos/:owner/:repo/files", { tag: "github:list" }, ctrl.listFiles);
+r.get("/repos/:owner/:repo/file", { tag: "github:read" }, ctrl.getFile);
 
 /* ─── Repo Webhooks ────────────────────────────────────────────────────── */
-githubRoutes.get("/repos/:owner/:repo/webhooks", ctrl.listWebhooks);
-githubRoutes.post("/repos/:owner/:repo/webhooks", ctrl.registerWebhook);
-githubRoutes.delete("/repos/:owner/:repo/webhooks", ctrl.deleteWebhook);
+r.get("/repos/:owner/:repo/webhooks", { tag: "github:list" }, ctrl.listWebhooks);
+r.post("/repos/:owner/:repo/webhooks", { tag: "github:write" }, ctrl.registerWebhook);
+r.delete("/repos/:owner/:repo/webhooks", { tag: "github:admin" }, ctrl.deleteWebhook);
+
+export const githubRoutes = r.hono;
+

@@ -27,6 +27,7 @@ import {
 } from "node:dns/promises";
 import { sshManager } from "../../../lib/ssh-manager";
 import { readState } from "../mail-state";
+import { safeErrorMessage } from "@repo/core";
 
 export type DnsCheckStatus = "pass" | "warn" | "fail" | "unknown";
 
@@ -431,7 +432,7 @@ function missing(
     status: "unknown",
     expected,
     actual: "",
-    message: `Lookup failed: ${err instanceof Error ? err.message : String(err)}`,
+    message: `Lookup failed: ${safeErrorMessage(err)}`,
   };
 }
 

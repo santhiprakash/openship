@@ -16,6 +16,7 @@ import { resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { CommandExecutor, LogEntry, SystemLogCallback, SystemLog } from "@repo/adapters";
 import { updatePostmasterPassword } from "./mail-credentials.service";
+import { safeErrorMessage } from "@repo/core";
 import {
   installRsync,
   installOpenResty,
@@ -52,7 +53,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return safeErrorMessage(err);
 }
 
 /**
@@ -651,9 +652,8 @@ export async function stepRunInstaller(
         message: `iRedMail is already installed, but the postmaster password rotation failed: ${errMsg(err)}`,
       };
     }
-    // Self-heal: boxes provisioned before the FAIL2BAN_DB_PASSWD fix have
-    // an empty password in .pgpass and a busted PG role. Realign them so
-    // root stops getting cron mail every minute.
+    // Self-heal: realign .pgpass and the PG role when they have an empty
+    // password and a broken state, so root stops getting cron mail every minute.
     try {
       await repairFail2banAuth(exec, secrets.FAIL2BAN_DB_PASSWD, stepId, log);
     } catch (err) {

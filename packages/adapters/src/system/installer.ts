@@ -10,6 +10,7 @@ import type { CommandExecutor, LogEntry } from "../types";
 import type { InstallerConfig, InstallResult, SystemLogCallback, SystemLog } from "./types";
 import { systemCatalog } from "./catalog";
 import { resolveEnvironment, type EnvironmentProfile } from "./environment";
+import { safeErrorMessage } from "@repo/core";
 import {
   deployLuaScripts,
   detectOpenRestyPaths,
@@ -94,7 +95,7 @@ export async function installDocker(
     onLog(log(`Docker ${parsed} installed`));
     return { component: "docker", success: true, version: parsed };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     onLog(log(`Docker installation failed: ${msg}`, "error"));
     return { component: "docker", success: false, error: msg };
   }
@@ -123,7 +124,7 @@ export async function installGit(
     onLog(log(opts?.label ? `Git ${parsed} installed in ${opts.label}` : `Git ${parsed} installed`));
     return { component: "git", success: true, version: parsed };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     onLog(log(`Git installation failed: ${msg}`, "error"));
     return { component: "git", success: false, error: msg };
   }
@@ -151,7 +152,7 @@ export async function installRsync(
     onLog(log(`rsync ${parsed} installed`));
     return { component: "rsync", success: true, version: parsed };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     onLog(log(`rsync installation failed: ${msg}`, "error"));
     return { component: "rsync", success: false, error: msg };
   }
@@ -179,7 +180,7 @@ export async function installCertbot(
     onLog(log(`Certbot ${parsed} installed`));
     return { component: "certbot", success: true, version: parsed };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     onLog(log(`Certbot installation failed: ${msg}`, "error"));
     return { component: "certbot", success: false, error: msg };
   }
@@ -260,7 +261,7 @@ export async function installOpenResty(
     onLog(log(`OpenResty ${parsed} installed`));
     return { component: "openresty", success: true, version: parsed };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     onLog(log(`OpenResty installation failed: ${msg}`, "error"));
     return { component: "openresty", success: false, error: msg };
   }
@@ -283,7 +284,7 @@ export async function uninstallRsync(
     onLog(log("rsync removed"));
     return { component: "rsync", success: true };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     return { component: "rsync", success: false, error: msg };
   }
 }
@@ -303,7 +304,7 @@ export async function uninstallCertbot(
     onLog(log("Certbot removed"));
     return { component: "certbot", success: true };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     return { component: "certbot", success: false, error: msg };
   }
 }
@@ -355,7 +356,7 @@ export async function uninstallOpenResty(
     onLog(log("OpenResty removed"));
     return { component: "openresty", success: true };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     onLog(log(`OpenResty removal failed: ${msg}`, "error"));
     return { component: "openresty", success: false, error: msg };
   }

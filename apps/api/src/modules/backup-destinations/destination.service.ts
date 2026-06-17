@@ -16,8 +16,10 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { realpath } from "node:fs/promises";
 import { encryptSecretField } from "../../lib/credential-encryption";
+import { assertResourceInOrg } from "../../lib/controller-helpers";
 import { env } from "../../config/env";
 import { toAdapterRow } from "./hydrate-server";
+import { safeErrorMessage } from "@repo/core";
 
 /**
  * Resolve + sandbox a local destination endpoint. Refuses any path
@@ -189,34 +191,31 @@ export function serializeDestination(row: BackupDestination): SerializedDestinat
 
 // ─── CRUD ────────────────────────────────────────────────────────────────────
 
-export async function listDestinations(userId: string): Promise<SerializedDestination[]> {
-  const rows = await repos.backupDestination.list(userId);
+export async function listDestinations(organizationId: string): Promise<SerializedDestination[]> {
+  const rows = await repos.backupDestination.listByOrganization(organizationId);
   return rows.map(serializeDestination);
 }
 
 export async function getDestination(
   id: string,
-  userId: string,
+  organizationId: string,
 ): Promise<SerializedDestination> {
   const row = await repos.backupDestination.findById(id);
-  if (!row || row.userId !== userId) throw new Error("Destination not found");
+  assertResourceInOrg(row, "Destination", organizationId, id);
   return serializeDestination(row);
 }
 
 export async function createDestination(
   userId: string,
+  organizationId: string,
   input: CreateDestinationInput,
 ): Promise<SerializedDestination> {
   await validateInput(input);
 
   // Ownership check for openship_server: the serverId arrives from the
-  // request body and MUST belong to the calling user. Without this
+  // request body and MUST belong to the calling org. Without this
   // check, an attacker could create a destination using a victim's
-  // server row and SSH-impersonate them. Note: the `servers` table
-  // currently has no userId column (pre-existing single-tenant model),
-  // so this gate also lives upstream — but multi-user installs need
-  // it here. If servers becomes per-user, replace this with
-  // `if (server.userId !== userId)`.
+  // server row and SSH-impersonate them.
   if (input.kind === "openship_server") {
     if (!input.serverId) {
       throw new Error("openship_server destinations require a serverId");
@@ -225,11 +224,22 @@ export async function createDestination(
     if (!server) {
       throw new Error("Server not accessible");
     }
+    // Cross-org check when the server has an org stamp; rows without one fall through.
+    if (
+      "organizationId" in server &&
+      (server as { organizationId?: string | null }).organizationId &&
+      (server as { organizationId?: string | null }).organizationId !== organizationId
+    ) {
+      throw new Error("Server not accessible");
+    }
   }
 
   // Uniqueness check (DB has a partial unique index but we want a clean
   // error message before hitting the constraint).
-  const existing = await repos.backupDestination.findByName(userId, input.name);
+  const existing = await repos.backupDestination.findByNameInOrganization(
+    organizationId,
+    input.name,
+  );
   if (existing) {
     throw new Error(`A destination named "${input.name}" already exists`);
   }
@@ -237,7 +247,7 @@ export async function createDestination(
   const id = `bkd_${crypto.randomUUID()}`;
   const row = await repos.backupDestination.create({
     id,
-    userId,
+    organizationId,
     name: input.name,
     kind: input.kind,
     endpoint: input.endpoint ?? null,
@@ -260,17 +270,14 @@ export async function createDestination(
 
 export async function updateDestination(
   id: string,
-  userId: string,
+  organizationId: string,
   patch: UpdateDestinationInput,
 ): Promise<SerializedDestination> {
   const existing = await repos.backupDestination.findById(id);
-  if (!existing || existing.userId !== userId) throw new Error("Destination not found");
+  assertResourceInOrg(existing, "Destination", organizationId, id);
 
-  // P1-8: re-validate on PATCH. createDestination's validateInput()
-  // was previously the only sandbox check — letting an attacker
-  // create an innocent destination and PATCH the endpoint outside
-  // BACKUP_LOCAL_ROOT. For the `local` kind, every endpoint change
-  // must clear validateLocalEndpoint() again.
+  // Re-validate on PATCH: for the `local` kind, every endpoint change
+  // must clear validateLocalEndpoint() so the path stays inside BACKUP_LOCAL_ROOT.
   if (patch.name !== undefined) {
     if (!patch.name.trim()) throw new Error("Name is required");
     if (patch.name.length > 80) throw new Error("Name is too long (max 80 chars)");
@@ -316,9 +323,9 @@ export async function updateDestination(
   return serializeDestination(row);
 }
 
-export async function deleteDestination(id: string, userId: string): Promise<void> {
+export async function deleteDestination(id: string, organizationId: string): Promise<void> {
   const row = await repos.backupDestination.findById(id);
-  if (!row || row.userId !== userId) throw new Error("Destination not found");
+  assertResourceInOrg(row, "Destination", organizationId, id);
 
   const result = await repos.backupDestination.softDelete(id);
   if (!result.ok) {
@@ -330,10 +337,10 @@ export async function deleteDestination(id: string, userId: string): Promise<voi
 
 export async function preflightDestination(
   id: string,
-  userId: string,
+  organizationId: string,
 ): Promise<{ ok: boolean; reason?: string }> {
   const row = await repos.backupDestination.findById(id);
-  if (!row || row.userId !== userId) throw new Error("Destination not found");
+  assertResourceInOrg(row, "Destination", organizationId, id);
 
   try {
     const adapterRow = await toAdapterRow(row);
@@ -346,7 +353,7 @@ export async function preflightDestination(
     await repos.backupDestination.setLastVerified(id, false, result.reason);
     return { ok: false, reason: result.reason };
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = safeErrorMessage(err);
     await repos.backupDestination.setLastVerified(id, false, reason);
     return { ok: false, reason };
   }

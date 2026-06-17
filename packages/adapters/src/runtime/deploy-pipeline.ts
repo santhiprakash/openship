@@ -19,7 +19,7 @@
 
 import type { DeployConfig, LogCallback, RouteConfig, SslResult } from "../types";
 import type { BuildLogger } from "./build-pipeline";
-import { DeployError } from "@repo/core";
+import { DeployError, safeErrorMessage } from "@repo/core";
 import {
   registerResolvedRoutes,
   type RouteRegistrationOptions,
@@ -147,7 +147,7 @@ export async function runDeployPipeline(
         await new Promise((r) => setTimeout(r, 1000));
       } catch (err) {
         // Log but don't abort - best-effort teardown so we can still try the new deploy.
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = safeErrorMessage(err);
         logger.log(`Warning: failed to stop previous deployment: ${msg}\n`, "warn");
       }
     }
@@ -202,7 +202,7 @@ export async function runDeployPipeline(
 
     return { status: "ready", containerId, url };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     const errorCode = err instanceof DeployError ? err.code : undefined;
     const errorDetails = err instanceof DeployError ? err.details : undefined;
     logger.step("deploy", "failed", `Deploy failed: ${msg}`);

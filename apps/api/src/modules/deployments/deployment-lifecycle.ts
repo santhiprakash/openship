@@ -17,7 +17,8 @@ import { repos, type Project, type Deployment } from "@repo/db";
 import { DockerRuntime, type LogEntry } from "@repo/adapters";
 import type { RuntimeAdapter } from "@repo/adapters";
 import { SYSTEM } from "@repo/core";
-import { notifyDeploySuccess, notifyBuildFailed } from "../../lib/notifications";
+import { notification } from "../../lib/notification-dispatcher";
+import { audit } from "../../lib/audit";
 import * as sessionManager from "./session-manager";
 import { detectAndStoreFavicon } from "../../lib/favicon-detector";
 import {
@@ -118,16 +119,57 @@ export async function onFailure(
     errorMessage,
   });
 
-  // 3. Notify
-  const user = await repos.user.findById(dep.userId);
-  if (user?.email) {
-    const lastLogs = collapsed.slice(-50).map((l) => l.message).join("\n");
-    void notifyBuildFailed(user.email, project, {
+  // 3. Notify — dispatch to every subscribed channel (per-user prefs +
+  //    org defaults). Fire-and-forget: the dispatcher fans out across
+  //    email/webhook/in-app/slack based on each member's subscriptions.
+  const lastLogs = collapsed.slice(-50).map((l) => l.message).join("\n");
+  notification.emit({
+    organizationId: dep.organizationId,
+    eventType: "deployment.failed",
+    resourceType: "deployment",
+    resourceId: dep.id,
+    payload: {
+      projectName: project.name,
       branch: dep.branch,
-      error: errorMessage ?? "Unknown error",
-      logs: lastLogs,
-    });
-  }
+      commitSha: dep.commitSha,
+      errorMessage: errorMessage ?? "Unknown error",
+      logsTail: lastLogs,
+      durationMs,
+    },
+  });
+
+  // 4. Audit — async fire-and-forget; never blocks the failure path.
+  // actorUserId is null here because the lifecycle runs in background;
+  // the user who triggered the deploy is recorded on the original
+  // `deployment.created` audit_event row.
+  audit.recordAsync(
+    { organizationId: dep.organizationId, actorUserId: null },
+    {
+      eventType: "deployment.failed",
+      resourceType: "deployment",
+      resourceId: dep.id,
+      before: { status: dep.status },
+      after: {
+        status: "failed",
+        projectId: project.id,
+        branch: dep.branch,
+        commitSha: dep.commitSha,
+        errorMessage,
+        durationMs,
+      },
+    },
+  );
+}
+
+/** Find any owner of the org for notifications. */
+async function findOrgOwnerForNotification(
+  organizationId: string,
+): Promise<{ email: string } | null> {
+  const members = await repos.member.listByOrganization(organizationId).catch(() => []);
+  const owner = members.find((m) => m.role === "owner") ?? members[0];
+  if (!owner) return null;
+  const user = await repos.user.findById(owner.userId).catch(() => null);
+  return user?.email ? { email: user.email } : null;
 }
 
 export async function onCancelled(
@@ -196,26 +238,47 @@ export async function onSuccess(
       : dep.meta,
   });
 
-  // Pre-deploy backups used to fire here — moved upstream to
-  // build.service.ts:runDeploy() so the snapshot captures the
-  // OLD container before runtime.destroy(). See firePreDeployBackups
-  // call site in build.service.ts for the new location.
-
   await repos.project.setActiveDeployment(project.id, dep.id);
   await repos.deployment.finishBuildSession(buildSessionId, "ready", result.durationMs, persistLogs());
   sessionManager.updateStatus(dep.id, "ready", {
     warningMessage: result.warningMessage,
   });
 
-  const user = await repos.user.findById(dep.userId);
-  if (user?.email) {
-    void notifyDeploySuccess(user.email, project, {
+  notification.emit({
+    organizationId: dep.organizationId,
+    eventType: "deployment.succeeded",
+    resourceType: "deployment",
+    resourceId: dep.id,
+    payload: {
+      projectName: project.name,
       branch: dep.branch,
       commitSha: dep.commitSha,
       url: result.url,
       durationMs: result.durationMs,
-    });
-  }
+    },
+  });
+
+  // Audit — async fire-and-forget. actorUserId null; the trigger
+  // attribution lives on the original `deployment.created` row.
+  // Records BOTH before and after for state transitions so an auditor
+  // can see exactly what changed without joining the deployment table.
+  audit.recordAsync(
+    { organizationId: dep.organizationId, actorUserId: null },
+    {
+      eventType: "deployment.succeeded",
+      resourceType: "deployment",
+      resourceId: dep.id,
+      before: { status: dep.status },
+      after: {
+        status: "ready",
+        projectId: project.id,
+        branch: dep.branch,
+        commitSha: dep.commitSha,
+        url: result.url,
+        durationMs: result.durationMs,
+      },
+    },
+  );
 
   // Async favicon detection - don't block the deploy response
   if (result.url) {

@@ -9,9 +9,13 @@
 
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { secureRouter } from "../../lib/secure-router";
 import { handleWebhook } from "./webhook.controller";
 
-export const webhookRoutes = new Hono();
+const r = secureRouter(new Hono(), {
+  module: "webhooks",
+  basePath: "/api/webhooks",
+});
 
 /** 5 MB - well above typical GitHub payloads (~200 KB). */
 const MAX_WEBHOOK_BODY = 5 * 1024 * 1024;
@@ -22,8 +26,14 @@ const MAX_WEBHOOK_BODY = 5 * 1024 * 1024;
  */
 const webhookIpCounts = new Map<string, { count: number; resetAt: number }>();
 
-webhookRoutes.use("*", async (c, next) => {
-  const ip = c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
+r.use("*", async (c, next) => {
+  const ip = c.var.clientIp;
+  if (!ip) {
+    return c.json(
+      { error: "Missing client IP — webhook must come through the proxy" },
+      400,
+    );
+  }
   const now = Date.now();
   const window = 60_000;
   const max = 120;
@@ -39,8 +49,13 @@ webhookRoutes.use("*", async (c, next) => {
   await next();
 });
 
-webhookRoutes.post(
+r.public(
+  "post",
   "/:provider",
+  { reason: "Provider webhook (GitHub/Stripe) - HMAC/signature verified in handler" },
   bodyLimit({ maxSize: MAX_WEBHOOK_BODY }),
   handleWebhook,
 );
+
+export const webhookRoutes = r.hono;
+

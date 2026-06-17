@@ -52,7 +52,7 @@ const GithubPermissionModal: React.FC<GithubPermissionModalProps> = ({
         {/* Body */}
         <div className="p-6 space-y-4">
           <p className="text-sm text-gray-600 mb-6">
-            Select which repositories Oblien can access. You can change this later in your GitHub settings.
+            Select which repositories Openship can access. You can change this later in your GitHub settings.
           </p>
 
           {/* Public Only Option */}

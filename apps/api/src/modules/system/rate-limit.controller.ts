@@ -15,6 +15,9 @@ import {
 } from "@repo/adapters";
 import { env } from "../../config";
 import { withOpenRestyRouting } from "@/lib/openresty-paths";
+import { getActiveOrganizationId } from "../../lib/controller-helpers";
+import { permission } from "../../lib/permission";
+import { safeErrorMessage } from "@repo/core";
 
 function assertNotCloud(c: Context): boolean {
   if (env.CLOUD_MODE) {
@@ -36,7 +39,11 @@ function isValidCidr(cidr: string): boolean {
 export async function getRateLimit(c: Context) {
   if (!assertNotCloud(c)) return c.res;
 
-  const server = await repos.server.get(getServerId(c));
+  const organizationId = getActiveOrganizationId(c);
+  const serverId = getServerId(c);
+  await permission.assert(c, { resourceType: "server", resourceId: serverId, action: "read" });
+
+  const server = await repos.server.getInOrganization(serverId, organizationId);
   if (!server) return c.json({ error: "Server not found" }, 404);
 
   try {
@@ -50,7 +57,7 @@ export async function getRateLimit(c: Context) {
 
     return c.json({ config });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     return c.json({ error: `Failed to read OpenResty rate limit config: ${msg}` }, 500);
   }
 }
@@ -58,8 +65,11 @@ export async function getRateLimit(c: Context) {
 export async function updateRateLimit(c: Context) {
   if (!assertNotCloud(c)) return c.res;
 
+  const organizationId = getActiveOrganizationId(c);
   const serverId = getServerId(c);
-  const server = await repos.server.get(serverId);
+  await permission.assert(c, { resourceType: "server", resourceId: serverId, action: "admin" });
+
+  const server = await repos.server.getInOrganization(serverId, organizationId);
   if (!server) return c.json({ error: "Server not found" }, 404);
 
   const body = await c.req.json<{
@@ -104,7 +114,7 @@ export async function updateRateLimit(c: Context) {
 
     return c.json({ success: true, config });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     return c.json({
       success: false,
       error: isRemoving

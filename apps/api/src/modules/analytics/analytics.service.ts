@@ -244,7 +244,7 @@ const EMPTY_SUMMARY: AnalyticsSummary = {
 };
 
 async function fetchCloudTimeseries(
-  userId: string,
+  organizationId: string,
   domain: string,
   params: { from: number; to: number; interval: "hour" },
 ): Promise<CloudTimeseriesResponse | null> {
@@ -254,7 +254,7 @@ async function fetchCloudTimeseries(
     return client.analytics.timeseries(domain, params);
   }
 
-  return cloudAnalyticsProxy(userId, "timeseries", domain, params);
+  return cloudAnalyticsProxy(organizationId, "timeseries", domain, params);
 }
 
 export interface AnalyticsSummary {
@@ -313,10 +313,10 @@ export interface ContainerUsageSnapshot {
  */
 export async function getAnalyticsSummary(
   projectId: string,
-  userId: string,
+  organizationId: string,
 ): Promise<AnalyticsSummary> {
   const project = await repos.project.findById(projectId);
-  if (!project || project.userId !== userId) {
+  if (!project || project.organizationId !== organizationId) {
     throw new NotFoundError("Project", projectId);
   }
 
@@ -330,7 +330,7 @@ export async function getAnalyticsSummary(
     const fromMs = toMs - 24 * 60 * 60 * 1000;
     const params = { from: fromMs, to: toMs, interval: "hour" as const };
     const responses = await Promise.all(
-      sources.map((source) => fetchCloudTimeseries(userId, source.domain, params).catch(() => null)),
+      sources.map((source) => fetchCloudTimeseries(organizationId, source.domain, params).catch(() => null)),
     );
     const buckets = responses.flatMap((response) => response?.data ?? []);
 
@@ -371,12 +371,12 @@ export async function getAnalyticsSummary(
  */
 export async function getAnalyticsPeriods(
   projectId: string,
-  userId: string,
+  organizationId: string,
   from?: string,
   to?: string,
 ): Promise<AnalyticsPeriod[]> {
   const project = await repos.project.findById(projectId);
-  if (!project || project.userId !== userId) {
+  if (!project || project.organizationId !== organizationId) {
     throw new NotFoundError("Project", projectId);
   }
 
@@ -388,7 +388,7 @@ export async function getAnalyticsPeriods(
     const fromMs = from ? new Date(from).getTime() : toMs - 24 * 60 * 60 * 1000;
     const params = { from: fromMs, to: toMs, interval: "hour" as const };
     const responses = await Promise.all(
-      sources.map((source) => fetchCloudTimeseries(userId, source.domain, params).catch(() => null)),
+      sources.map((source) => fetchCloudTimeseries(organizationId, source.domain, params).catch(() => null)),
     );
     const buckets = responses.flatMap((response) => response?.data ?? []);
 
@@ -432,11 +432,11 @@ export async function getAnalyticsPeriods(
  */
 export async function getDeploymentStats(
   projectId: string,
-  userId: string,
+  organizationId: string,
   days = 30,
 ): Promise<DeploymentStats> {
   const project = await repos.project.findById(projectId);
-  if (!project || project.userId !== userId) {
+  if (!project || project.organizationId !== organizationId) {
     throw new NotFoundError("Project", projectId);
   }
 
@@ -497,10 +497,10 @@ export async function getDeploymentStats(
  */
 export async function getContainerUsage(
   projectId: string,
-  userId: string,
+  organizationId: string,
 ): Promise<ResourceUsage | null> {
   const project = await repos.project.findById(projectId);
-  if (!project || project.userId !== userId) {
+  if (!project || project.organizationId !== organizationId) {
     throw new NotFoundError("Project", projectId);
   }
 
@@ -516,9 +516,9 @@ export async function getContainerUsage(
 /**
  * Get container info (status, IP, uptime, current usage).
  */
-export async function getContainerInfo(projectId: string, userId: string) {
+export async function getContainerInfo(projectId: string, organizationId: string) {
   const project = await repos.project.findById(projectId);
-  if (!project || project.userId !== userId) {
+  if (!project || project.organizationId !== organizationId) {
     throw new NotFoundError("Project", projectId);
   }
 
@@ -534,13 +534,15 @@ export async function getContainerInfo(projectId: string, userId: string) {
 // ─── Dashboard home stats ────────────────────────────────────────────────────
 
 /**
- * Get overview stats for the user's dashboard home.
+ * Get overview stats for the dashboard home — scoped to the caller's
+ * current organization. Returns counts for projects + deployments in
+ * the active org only (not cross-org).
  */
-export async function getDashboardStats(userId: string) {
-  const { rows: projects, total: totalProjects } = await repos.project.listByUser(userId, {
-    page: 1,
-    perPage: 10_000,
-  });
+export async function getDashboardStats(organizationId: string) {
+  const { rows: projects, total: totalProjects } = await repos.project.listByOrganization(
+    organizationId,
+    { page: 1, perPage: 10_000 },
+  );
 
   const activeProjects = projects.filter((p) => p.activeDeploymentId).length;
 

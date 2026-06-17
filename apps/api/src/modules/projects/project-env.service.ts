@@ -3,15 +3,20 @@
  */
 
 import { repos } from "@repo/db";
-import { NotFoundError, ValidationError, SYSTEM } from "@repo/core";
+import { ValidationError, SYSTEM } from "@repo/core";
 import { encrypt, decrypt } from "../../lib/encryption";
+import { assertResourceInOrg } from "../../lib/controller-helpers";
 import type { TSetEnvVarsBody } from "./project.schema";
 
 // ─── List env vars ───────────────────────────────────────────────────────────
 
-export async function listEnvVars(projectId: string, userId: string, environment?: string) {
+export async function listEnvVars(
+  projectId: string,
+  organizationId: string,
+  environment?: string,
+) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   const vars = await repos.project.listEnvVars(projectId, environment);
 
@@ -36,9 +41,13 @@ export async function listEnvVars(projectId: string, userId: string, environment
 
 // ─── Set env vars ────────────────────────────────────────────────────────────
 
-export async function setEnvVars(projectId: string, userId: string, data: TSetEnvVarsBody) {
+export async function setEnvVars(
+  projectId: string,
+  organizationId: string,
+  data: TSetEnvVarsBody,
+) {
   const p = await repos.project.findById(projectId);
-  if (!p || p.userId !== userId) throw new NotFoundError("Project", projectId);
+  assertResourceInOrg(p, "Project", organizationId, projectId);
 
   const keys = data.vars.map((v) => v.key);
   const unique = new Set(keys);
@@ -61,3 +70,5 @@ export async function setEnvVars(projectId: string, userId: string, data: TSetEn
   await repos.project.bulkSetEnvVars(projectId, data.environment, encrypted);
   return { count: data.vars.length };
 }
+
+

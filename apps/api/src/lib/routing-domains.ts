@@ -16,6 +16,7 @@ export interface PlannedRouteDomain {
   serviceId?: string;
   isPrimary?: boolean;
   createIfMissing?: boolean;
+  verified?: boolean;
 }
 
 export function getRoutingBaseDomain(): string {
@@ -65,12 +66,18 @@ export function buildProjectRouteDomains(opts: {
   const seen = new Set<string>();
   const planned: PlannedRouteDomain[] = [];
 
+  
+  const domainByHostname = new Map(
+    projectDomains.map((domain) => [domain.hostname.toLowerCase(), domain]),
+  );
+
   const add = (
     hostname: string,
     domainType: "free" | "custom",
     skipSsl = false,
     destination?: { targetPort?: number; targetPath?: string },
     isPrimary = planned.length === 0,
+    verified?: boolean,
   ) => {
     const normalized = hostname.trim().toLowerCase();
     if (!normalized || seen.has(normalized)) return;
@@ -78,10 +85,23 @@ export function buildProjectRouteDomains(opts: {
     seen.add(normalized);
 
     const managed = resolveManagedHostname(normalized);
+    // Free managed routes are always considered verified (we own the DNS
+    // for *.opsh.io). For custom routes, fall back to the domain row if
+    // the caller didn't pass an explicit value.
+    const isVerified = managed.isManaged
+      ? true
+      : verified ?? domainByHostname.get(normalized)?.verified ?? false;
+
+    // SSL gating: certbot is run synchronously inside route-registration
+    // and a failed --webroot call would fail the whole deploy. So we
+    // only provision SSL when the hostname is actually DNS-verified;
+    // pending custom domains get an HTTP-only route on disk now and the
+    // cert is provisioned after the user clicks Verify (see
+    // domain.service.ts → verifyDomain).
     planned.push({
       hostname: normalized,
       tls: true,
-      provisionSsl: runtimeName === "bare" && !managed.isManaged && !skipSsl,
+      provisionSsl: runtimeName === "bare" && !managed.isManaged && !skipSsl && isVerified,
       isCloud: managed.isManaged,
       ...(destination?.targetPort !== undefined ? { targetPort: destination.targetPort } : {}),
       ...(destination?.targetPath ? { targetPath: destination.targetPath } : {}),
@@ -89,6 +109,7 @@ export function buildProjectRouteDomains(opts: {
       managedSubdomain: managed.subdomain,
       isPrimary,
       createIfMissing: true,
+      verified: isVerified,
     });
   };
 
@@ -104,39 +125,69 @@ export function buildProjectRouteDomains(opts: {
         continue;
       }
 
-      if (endpoint.domainType === "custom" && endpoint.customDomain) {
-        add(endpoint.customDomain, "custom", false, destination, index === 0);
-        continue;
-      }
-
+      // Free .opsh.io fallback FIRST. The free domain is always attached
+      // when managed routing is available — it's the "deploy URL" that
+      // always works, regardless of whether the user also configured a
+      // custom domain (or whether that custom domain has finished DNS
+      // verification). Mirrors Vercel/Netlify/CF Pages — the platform
+      // URL is permanent; the custom domain is additive.
       const routeSlug = endpoint.domain || managedSlug;
       if (routeSlug && usesManagedRouting) {
         add(`${routeSlug}.${getRoutingBaseDomain()}`, "free", true, destination, index === 0);
+      }
+
+      // Custom domain SECOND. Attached as an additional route — when DNS
+      // points correctly and SSL provisions, traffic flows through this
+      // hostname. While DNS is pending, the HTTP-only route exists in
+      // OpenResty so the user can hit the box (and so certbot --webroot
+      // has a place to serve the ACME challenge from); TLS is only
+      // issued *after* /verify confirms DNS. Traffic in the meantime
+      // still works via the free fallback above.
+      if (endpoint.domainType === "custom" && endpoint.customDomain) {
+        // isPrimary stays false on the custom domain — the free route is
+        // the technical primary (always-reachable). isPrimary on the
+        // domain row gets flipped to the custom hostname inside
+        // verifyDomain once DNS verifies, so subsequent routing decisions
+        // (analytics, deploy URL surfaced in the dashboard) point at the
+        // custom domain.
+        add(endpoint.customDomain, "custom", false, destination, false);
       }
     }
 
     return planned;
   }
 
-  if (customDomain) add(customDomain, "custom");
-  for (const domain of projectDomains) {
-    if (domain.verified && !domain.serviceId) {
-      add(
-        domain.hostname,
-        domain.domainType === "free" ? "free" : "custom",
-        domain.domainType === "free",
-        domain.targetPath
-          ? { targetPath: domain.targetPath }
-          : domain.targetPort !== null && domain.targetPort !== undefined
-            ? { targetPort: domain.targetPort }
-            : undefined,
-        domain.isPrimary,
-      );
-    }
-  }
+  // Free .opsh.io fallback FIRST so it's the primary "always works"
+  // route. Custom domain (if any) is attached as an additional route;
+  // SSL is only issued for it once DNS verifies (see add() — verified
+  // gates provisionSsl).
   const routeSlug = managedSlug;
   if (routeSlug && usesManagedRouting) {
     add(`${routeSlug}.${getRoutingBaseDomain()}`, "free", true);
+  }
+  if (customDomain) add(customDomain, "custom");
+  for (const domain of projectDomains) {
+    if (domain.serviceId) continue;
+    // We attach BOTH verified and pending custom domains — the HTTP-only
+    // route is created in OpenResty / edge so the box is reachable on
+    // port 80 (and certbot --webroot can serve the ACME challenge from
+    // the same route). SSL is gated on domain.verified inside add(), so
+    // pending domains stay covered by the free fallback above until the
+    // user clicks Verify; verifyDomain then triggers cert provisioning
+    // which re-registers the route with HTTPS.
+    if (domain.domainType === "free" && !domain.verified) continue;
+    add(
+      domain.hostname,
+      domain.domainType === "free" ? "free" : "custom",
+      domain.domainType === "free",
+      domain.targetPath
+        ? { targetPath: domain.targetPath }
+        : domain.targetPort !== null && domain.targetPort !== undefined
+          ? { targetPort: domain.targetPort }
+          : undefined,
+      domain.isPrimary,
+      domain.verified,
+    );
   }
 
   return planned;
@@ -152,14 +203,13 @@ export function buildServiceRouteDomain(opts: {
   if (!service.exposed) return null;
 
   // Use the canonical port resolver so we honor `ports[]` too - not just
-  // `exposedPort`. The previous Number() coercion silently produced NaN
-  // for compose-style "host:container" strings.
+  // `exposedPort`.
   const resolvedPort = resolveServicePort(service);
   const targetPort = resolvedPort ?? undefined;
 
   // Monorepo sub-apps always get a namespaced hostname (`<project>-<app>`).
   // Compose services keep the "frontend"/"web"/"app" → bare-project-label
-  // shortcut for backward compat. See defaultServiceHostnameLabel for why.
+  // shortcut. See defaultServiceHostnameLabel for why.
   const hostname = service.domainType === "custom"
     ? service.customDomain?.trim().toLowerCase()
     : usesManagedRouting

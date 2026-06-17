@@ -113,6 +113,18 @@ export {
   buildServiceTerminalWsUrl,
 } from "./service-terminal";
 
+/* --- Notifications ------------------------------------------------- */
+export { notificationsApi } from "./notifications";
+export type {
+  NotificationCategory,
+  NotificationChannel,
+  NotificationSubscription,
+  NotificationDefault,
+  NotificationDelivery,
+  ChannelKind,
+  DeliveryStatus,
+} from "./notifications";
+
 /* --- Backups ------------------------------------------------------- */
 export { backupDestinationsApi, backupsApi } from "./backups";
 export type {

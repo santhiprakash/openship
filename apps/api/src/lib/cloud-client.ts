@@ -74,6 +74,27 @@ async function cloudFetch(
 }
 
 /**
+ * Org-bearing variant of cloudFetch. Resolves the org owner's cloud
+ * session token via findOrgOwnerCloudLink, then makes the call as
+ * that user. Every org-scoped cloud bridge function uses this — the
+ * pattern is "any member of the org gets to act with the owner's
+ * SaaS identity for org-scoped operations".
+ *
+ * Returns null when no member of the org has linked Openship Cloud.
+ */
+async function cloudFetchAsOrgOwner(
+  organizationId: string,
+  path: string,
+  init?: RequestInit,
+): Promise<Response | null> {
+  const linked = await repos.settings
+    .findOrgOwnerCloudLink(organizationId)
+    .catch(() => undefined);
+  if (!linked) return null;
+  return cloudFetch(linked.userId, path, init);
+}
+
+/**
  * Defensive JSON parser for cloud responses. Cloud endpoints SHOULD
  * return application/json — but a dev server may serve a 200 HTML
  * error page, or a proxy may return a captive-portal page, etc.
@@ -98,9 +119,31 @@ async function readCloudJson<T>(res: Response): Promise<T | null> {
 // ─── Cloud session management ────────────────────────────────────────────────
 
 /**
- * Disconnect from Openship Cloud - clear stored session.
+ * Disconnect from Openship Cloud.
+ *
+ * Two-step: (1) tell SaaS to revoke the session row server-side, then
+ * (2) clear the local copy. Step 1 is best-effort — if SaaS is
+ * unreachable we still clear locally so the user isn't stuck. Without
+ * step 1 the SaaS session would linger for its full 30-day TTL,
+ * usable by anyone who exfiltrated the token from local DB before the
+ * disconnect.
  */
 export async function disconnectCloud(userId: string): Promise<void> {
+  try {
+    const res = await cloudFetch(userId, "/api/cloud/disconnect", {
+      method: "POST",
+    });
+    if (res && !res.ok) {
+      console.warn(
+        `[cloud disconnect] SaaS returned ${res.status} on session revoke; clearing local anyway`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[cloud disconnect] SaaS revoke failed (clearing local anyway):`,
+      err instanceof Error ? err.message : err,
+    );
+  }
   await repos.settings.update(userId, { cloudSessionToken: null });
   tokenCache.delete(userId);
 }
@@ -180,17 +223,36 @@ export async function getCloudToken(
   return { token, namespace };
 }
 
+/**
+ * Org-scoped cloud-token lookup. Returns the owner's cloud token —
+ * only the owner can link Openship Cloud, and their connection is the
+ * org's cloud identity for every member to use under the hood.
+ */
+export async function getOrgCloudToken(
+  organizationId: string,
+): Promise<{ token: string; namespace: string; userId: string } | null> {
+  const settings = await repos.settings
+    .findOrgOwnerCloudLink(organizationId)
+    .catch(() => undefined);
+  if (!settings) return null;
+  const token = await getCloudToken(settings.userId);
+  if (!token) return null;
+  return { ...token, userId: settings.userId };
+}
+
+/**
+ * Preflight is org-scoped (slug availability, custom-domain DNS,
+ * namespace quota all check against the org owner's namespace).
+ */
 export async function getCloudPreflight(
-  userId: string,
+  organizationId: string,
   input: { slug?: string; customDomain?: string },
 ): Promise<CloudPreflightData | null> {
-  const res = await cloudFetch(userId, "/api/cloud/preflight", {
+  const res = await cloudFetchAsOrgOwner(organizationId, "/api/cloud/preflight", {
     method: "POST",
     body: JSON.stringify(input),
   });
-
   if (!res || !res.ok) return null;
-
   const json = await readCloudJson<{ data: CloudPreflightData }>(res);
   return json?.data ?? null;
 }
@@ -203,19 +265,19 @@ export async function getCloudPreflight(
  * Sends just the slug + target IP - the SaaS constructs the full domain.
  */
 export async function syncEdgeProxy(
-  userId: string,
+  organizationId: string,
   slug: string,
   target: string,
 ): Promise<void> {
-  const res = await cloudFetch(userId, "/api/cloud/edge-proxy", {
+  const res = await cloudFetchAsOrgOwner(organizationId, "/api/cloud/edge-proxy", {
     method: "POST",
     body: JSON.stringify({ slug, target }),
   });
-
   if (!res) {
-    throw new Error("Cannot sync edge proxy: no Openship Cloud account linked");
+    throw new Error(
+      "Cannot sync edge proxy: no member of this organization has linked Openship Cloud",
+    );
   }
-
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`Edge proxy sync failed (${res.status}): ${text}`);
@@ -231,12 +293,12 @@ export async function syncEdgeProxy(
  * Local/desktop instances call this; the SaaS uses its master client.
  */
 export async function cloudAnalyticsProxy<T>(
-  userId: string,
+  organizationId: string,
   operation: "timeseries" | "requests" | "streamToken",
   domain: string,
   params?: Record<string, unknown>,
 ): Promise<T | null> {
-  const res = await cloudFetch(userId, "/api/cloud/analytics", {
+  const res = await cloudFetchAsOrgOwner(organizationId, "/api/cloud/analytics", {
     method: "POST",
     body: JSON.stringify({ operation, domain, params }),
   });
@@ -256,7 +318,7 @@ export async function cloudAnalyticsProxy<T>(
  * no changes. Throws on failure (caller wraps with a friendly error).
  */
 export async function cloudPagesProxy(
-  userId: string,
+  organizationId: string,
   input: {
     workspace_id: string;
     path: string;
@@ -265,11 +327,10 @@ export async function cloudPagesProxy(
     domain?: string;
   },
 ): Promise<{ page: { slug: string; url?: string | null } }> {
-  const res = await cloudFetch(userId, "/api/cloud/pages", {
+  const res = await cloudFetchAsOrgOwner(organizationId, "/api/cloud/pages", {
     method: "POST",
     body: JSON.stringify(input),
   });
-
   if (!res) {
     throw new Error("Not connected to Openship Cloud — connect your account in Settings.");
   }
@@ -327,13 +388,35 @@ export interface CloudGithubUserStatus {
   id?: number;
 }
 
-/** Returns the GitHub App install URL for this user, with a one-time `state`
- *  the cloud will verify on the callback. The local instance opens this URL
- *  in a popup and waits for the cloud to redirect back with `?code=...`. */
-export async function cloudGithubInstallUrl(
+/**
+ * Returns a single-use GitHub OAuth start URL on the SaaS for this user.
+ * The local instance opens this URL in a popup; the SaaS handles the
+ * entire OAuth round-trip (popup → SaaS oauth-bridge → GitHub OAuth →
+ * SaaS Better Auth callback → SaaS oauth-success page). After this
+ * completes the SaaS has a `account` row with providerId='github' for
+ * the user, and subsequent /user-status and /installations calls work.
+ *
+ * Returns null when the user isn't connected to Openship Cloud.
+ */
+export async function cloudGithubOauthHandoff(
   userId: string,
+): Promise<{ url: string } | null> {
+  const res = await cloudFetch(userId, "/api/cloud/github/oauth-handoff", {
+    method: "POST",
+  });
+  if (!res || !res.ok) return null;
+  const json = await readCloudJson<{ data: { url: string } }>(res);
+  return json?.data ?? null;
+}
+
+/** Returns the GitHub App install URL for the org owner, with a one-time
+ *  `state` the cloud will verify on the callback. The local instance opens
+ *  this URL in a popup and the cloud attributes the resulting installation
+ *  to the org owner so every team member shares access to it. */
+export async function cloudGithubInstallUrl(
+  organizationId: string,
 ): Promise<{ url: string; state: string } | null> {
-  const res = await cloudFetch(userId, "/api/cloud/github/install-url", {
+  const res = await cloudFetchAsOrgOwner(organizationId, "/api/cloud/github/install-url", {
     method: "POST",
   });
   if (!res || !res.ok) return null;
@@ -341,31 +424,12 @@ export async function cloudGithubInstallUrl(
   return json?.data ?? null;
 }
 
-/** Exchange a post-install `code` (delivered to the local callback) for the
- *  cloud user's newly-attached installations. Side effect on the cloud side
- *  is none beyond recording the install — tokens are minted on demand later. */
-export async function cloudGithubExchangeCode(
-  userId: string,
-  code: string,
-  state: string,
-): Promise<{ installations: CloudGithubInstallation[] } | null> {
-  const res = await cloudFetch(userId, "/api/cloud/github/exchange-code", {
-    method: "POST",
-    body: JSON.stringify({ code, state }),
-  });
-  if (!res || !res.ok) return null;
-  const json = await readCloudJson<{
-    data: { installations: CloudGithubInstallation[] };
-  }>(res);
-  return json?.data ?? null;
-}
-
-/** List the cloud user's GitHub App installations. Local caches results
- *  briefly; canonical state lives in the cloud. */
+/** List the org's GitHub App installations (the org owner's account on
+ *  the SaaS owns them). One SaaS round-trip regardless of org size. */
 export async function cloudGithubInstallations(
-  userId: string,
+  organizationId: string,
 ): Promise<CloudGithubInstallation[] | null> {
-  const res = await cloudFetch(userId, "/api/cloud/github/installations", {
+  const res = await cloudFetchAsOrgOwner(organizationId, "/api/cloud/github/installations", {
     method: "GET",
   });
   if (!res || !res.ok) return null;
@@ -373,14 +437,14 @@ export async function cloudGithubInstallations(
   return json?.data ?? null;
 }
 
-/** Mint a short-lived installation access token for cloning the given owner.
- *  Cloud signs the JWT with its private key, hits GitHub, and returns the
- *  token to the local instance which uses it directly against github.com. */
+/** Mint a short-lived installation access token for cloning the given
+ *  owner. Resolves through the org owner so any team member can deploy
+ *  using the team's installation. */
 export async function cloudGithubInstallationToken(
-  userId: string,
+  organizationId: string,
   input: { installationId?: number; owner: string; repos?: string[] },
 ): Promise<CloudGithubInstallationToken | null> {
-  const res = await cloudFetch(userId, "/api/cloud/github/installation-token", {
+  const res = await cloudFetchAsOrgOwner(organizationId, "/api/cloud/github/installation-token", {
     method: "POST",
     body: JSON.stringify(input),
   });

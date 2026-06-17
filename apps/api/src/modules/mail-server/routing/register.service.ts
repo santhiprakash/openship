@@ -29,6 +29,7 @@ import {
   type MailRoute,
   type MailServerRouteInput,
   type MailServerRoutePlan,
+  safeErrorMessage,
 } from "@repo/core";
 import { platform } from "../../../lib/controller-helpers";
 
@@ -69,7 +70,7 @@ export async function registerMailServerRoutes(
         routeId: route.id,
         hostname: route.hostname,
         ok: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: safeErrorMessage(err),
       });
     }
   }
@@ -98,7 +99,7 @@ export async function removeMailServerRoutes(
         routeId: route.id,
         hostname: route.hostname,
         ok: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: safeErrorMessage(err),
       });
     }
   }

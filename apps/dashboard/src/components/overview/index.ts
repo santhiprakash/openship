@@ -21,10 +21,6 @@ export { default as ApiRequestsCard } from './ApiRequestsCard';
 // Loading skeleton
 export { default as OverviewSkeleton } from './LoadingSkeleton';
 
-// Legacy components (keeping for backwards compatibility)
-export { default as UsageStats } from './UsageStats';
-export { default as EmptyState } from './EmptyState';
-
 // Types
 export * from './types';
 

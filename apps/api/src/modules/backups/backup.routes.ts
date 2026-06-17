@@ -7,40 +7,47 @@
 
 import { Hono } from "hono";
 import { authMiddleware } from "../../middleware/auth";
+import { secureRouter } from "../../lib/secure-router";
 import * as ctrl from "./backup.controller";
 
-export const backupRoutes = new Hono();
+const r = secureRouter(new Hono(), {
+  module: "backups",
+  basePath: "/api",
+});
 
 // ⚠ This sub-app is mounted at `/api` (app.ts:62). Using `.use("*", …)`
 // here would apply authMiddleware to EVERY /api/* request in Hono v4 —
 // including unrelated sibling sub-apps mounted at /api/cloud, etc. —
 // which would 401 the cloud `exchange-code` endpoint among others.
 // Scope the auth middleware to the actual backup paths instead.
-backupRoutes.use("/projects/*", authMiddleware);
-backupRoutes.use("/backup-policies/*", authMiddleware);
-backupRoutes.use("/backup-runs/*", authMiddleware);
-backupRoutes.use("/backup-restores/*", authMiddleware);
+r.use("/projects/*", authMiddleware);
+r.use("/backup-policies/*", authMiddleware);
+r.use("/backup-runs/*", authMiddleware);
+r.use("/backup-restores/*", authMiddleware);
 
 // Policies
-backupRoutes.get("/projects/:projectId/backup-policies", ctrl.listProjectPolicies);
-backupRoutes.post("/projects/:projectId/backup-policies", ctrl.createProjectPolicy);
-backupRoutes.patch("/backup-policies/:policyId", ctrl.patchPolicy);
-backupRoutes.delete("/backup-policies/:policyId", ctrl.removePolicy);
+r.get("/projects/:projectId/backup-policies", { tag: "project:write", ids: { project: "projectId" } }, ctrl.listProjectPolicies);
+r.post("/projects/:projectId/backup-policies", { tag: "project:write", ids: { project: "projectId" } }, ctrl.createProjectPolicy);
+r.patch("/backup-policies/:policyId", { tag: "backup_destination:backup_policy:write" }, ctrl.patchPolicy);
+r.delete("/backup-policies/:policyId", { tag: "backup_destination:backup_policy:write" }, ctrl.removePolicy);
 
 // Manual trigger
-backupRoutes.post("/backup-policies/:policyId/run", ctrl.triggerManual);
+r.post("/backup-policies/:policyId/run", { tag: "backup_destination:backup_policy:write" }, ctrl.triggerManual);
 
 // Runs
-backupRoutes.get("/projects/:projectId/backup-runs", ctrl.listRuns);
-backupRoutes.get("/backup-runs/:runId", ctrl.getOneRun);
-backupRoutes.get("/backup-runs/:runId/stream", ctrl.streamRun);
+r.get("/projects/:projectId/backup-runs", { tag: "project:write", ids: { project: "projectId" } }, ctrl.listRuns);
+r.get("/backup-runs/:runId", { tag: "backup_destination:backup_run:read" }, ctrl.getOneRun);
+r.get("/backup-runs/:runId/stream", { tag: "backup_destination:backup_run:read" }, ctrl.streamRun);
 
 // Protect-from-retention
-backupRoutes.post("/backup-runs/:runId/protect", ctrl.protectRun);
+r.post("/backup-runs/:runId/protect", { tag: "backup_destination:backup_run:write" }, ctrl.protectRun);
 
 // Restore
-backupRoutes.post("/backup-runs/:runId/restore/prepare", ctrl.prepareRestore);
-backupRoutes.post("/backup-restores/:restoreId/apply", ctrl.applyRestore);
-backupRoutes.post("/backup-restores/:restoreId/cancel", ctrl.cancelRestore);
-backupRoutes.get("/backup-restores/:restoreId", ctrl.getOneRestore);
-backupRoutes.get("/backup-restores/:restoreId/stream", ctrl.streamRestore);
+r.post("/backup-runs/:runId/restore/prepare", { tag: "backup_destination:backup_run:write" }, ctrl.prepareRestore);
+r.post("/backup-restores/:restoreId/apply", { tag: "backup_destination:backup_restore:write" }, ctrl.applyRestore);
+r.post("/backup-restores/:restoreId/cancel", { tag: "backup_destination:backup_restore:write" }, ctrl.cancelRestore);
+r.get("/backup-restores/:restoreId", { tag: "backup_destination:backup_restore:read" }, ctrl.getOneRestore);
+r.get("/backup-restores/:restoreId/stream", { tag: "backup_destination:backup_restore:read" }, ctrl.streamRestore);
+
+export const backupRoutes = r.hono;
+

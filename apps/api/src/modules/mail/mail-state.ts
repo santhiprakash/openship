@@ -50,8 +50,7 @@ export interface MailWebmailState {
    *   "self"  - operator-managed server (this mail VPS or another openship server).
    *   "cloud" - Opshcloud-managed, behind an *.opsh.io URL.
    *
-   * Defaults to "self" when missing (legacy state files from before the
-   * cloud flow shipped).
+   * Defaults to "self" when missing.
    */
   target?: "self" | "cloud";
   /**

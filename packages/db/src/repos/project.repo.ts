@@ -2,6 +2,7 @@ import { eq, and, isNull, desc, sql, type SQL } from "drizzle-orm";
 import { generateId } from "@repo/core";
 import type { Database } from "../client";
 import { project, envVar } from "../schema";
+import { member } from "../schema/organization";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -39,9 +40,14 @@ export function createProjectRepo(db: Database) {
       });
     },
 
-    async findBySlug(userId: string, slug: string) {
+    /** Slug uniqueness scoped to one org. */
+    async findBySlugInOrg(organizationId: string, slug: string) {
       return db.query.project.findFirst({
-        where: and(eq(project.userId, userId), eq(project.slug, slug), isNull(project.deletedAt)),
+        where: and(
+          eq(project.organizationId, organizationId),
+          eq(project.slug, slug),
+          isNull(project.deletedAt),
+        ),
       });
     },
 
@@ -76,13 +82,59 @@ export function createProjectRepo(db: Database) {
       });
     },
 
-    async listByUser(userId: string, opts?: { page?: number; perPage?: number }) {
+    /**
+     * List every project visible to a user — across ALL orgs they're a
+     * member of. Resolves via the `member` join (not a stamped user_id
+     * column, which doesn't exist anymore). Useful for "show me
+     * everything I have access to" views like cross-org dashboards.
+     *
+     * For scoped lookups on the user's CURRENT org, prefer
+     * `listByOrganization(activeOrgId, ...)`.
+     */
+    async listForUser(userId: string, opts?: { page?: number; perPage?: number }) {
+      const page = opts?.page ?? 1;
+      const perPage = opts?.perPage ?? 20;
+      const offset = (page - 1) * perPage;
+
+      const rows = await db
+        .select({ project })
+        .from(project)
+        .innerJoin(member, eq(member.organizationId, project.organizationId))
+        .where(and(eq(member.userId, userId), isNull(project.deletedAt)))
+        .orderBy(desc(project.createdAt))
+        .limit(perPage)
+        .offset(offset);
+
+      const [{ value: total }] = await db
+        .select({ value: sql<number>`count(*)` })
+        .from(project)
+        .innerJoin(member, eq(member.organizationId, project.organizationId))
+        .where(and(eq(member.userId, userId), isNull(project.deletedAt)));
+
+      return {
+        rows: rows.map((r) => r.project),
+        total: Number(total),
+        page,
+        perPage,
+      };
+    },
+
+    /**
+     * Org-scoped list. Replaces listByUser in multi-user controllers —
+     * returns every project visible to the active organization.
+     * Membership check is enforced at the middleware layer; this just
+     * scopes the rows.
+     */
+    async listByOrganization(
+      organizationId: string,
+      opts?: { page?: number; perPage?: number },
+    ) {
       const page = opts?.page ?? 1;
       const perPage = opts?.perPage ?? 20;
       const offset = (page - 1) * perPage;
 
       const rows = await db.query.project.findMany({
-        where: and(eq(project.userId, userId), isNull(project.deletedAt)),
+        where: and(eq(project.organizationId, organizationId), isNull(project.deletedAt)),
         orderBy: [desc(project.createdAt)],
         limit: perPage,
         offset,
@@ -91,39 +143,54 @@ export function createProjectRepo(db: Database) {
       const [{ value: total }] = await db
         .select({ value: sql<number>`count(*)` })
         .from(project)
-        .where(and(eq(project.userId, userId), isNull(project.deletedAt)));
+        .where(and(eq(project.organizationId, organizationId), isNull(project.deletedAt)));
 
       return { rows, total: Number(total), page, perPage };
     },
 
-    async listPrimaryByUser(userId: string, opts?: { page?: number; perPage?: number }) {
+    /** Org-scoped findById — verifies the project belongs to the org. */
+    async findByIdInOrganization(id: string, organizationId: string) {
+      return db.query.project.findFirst({
+        where: and(eq(project.id, id), eq(project.organizationId, organizationId)),
+      });
+    },
+
+    /**
+     * Same as listForUser but filtered to production environments only.
+     * Used for the "primary" view that hides preview branch deploys.
+     */
+    async listPrimaryForUser(userId: string, opts?: { page?: number; perPage?: number }) {
       const page = opts?.page ?? 1;
       const perPage = opts?.perPage ?? 20;
       const offset = (page - 1) * perPage;
 
-      const rows = await db.query.project.findMany({
-        where: and(
-          eq(project.userId, userId),
-          eq(project.environmentSlug, "production"),
-          isNull(project.deletedAt),
-        ),
-        orderBy: [desc(project.createdAt)],
-        limit: perPage,
-        offset,
-      });
+      const condition = and(
+        eq(member.userId, userId),
+        eq(project.environmentSlug, "production"),
+        isNull(project.deletedAt),
+      );
+
+      const rows = await db
+        .select({ project })
+        .from(project)
+        .innerJoin(member, eq(member.organizationId, project.organizationId))
+        .where(condition)
+        .orderBy(desc(project.createdAt))
+        .limit(perPage)
+        .offset(offset);
 
       const [{ value: total }] = await db
         .select({ value: sql<number>`count(*)` })
         .from(project)
-        .where(
-          and(
-            eq(project.userId, userId),
-            eq(project.environmentSlug, "production"),
-            isNull(project.deletedAt),
-          ),
-        );
+        .innerJoin(member, eq(member.organizationId, project.organizationId))
+        .where(condition);
 
-      return { rows, total: Number(total), page, perPage };
+      return {
+        rows: rows.map((r) => r.project),
+        total: Number(total),
+        page,
+        perPage,
+      };
     },
 
     async create(data: Omit<NewProject, "id">) {
@@ -188,6 +255,11 @@ export function createProjectRepo(db: Database) {
       return db.query.envVar.findMany({
         where: and(...envVarScope(projectId, environment, serviceId)),
       });
+    },
+
+    /** Lookup a single env var by id — needed by permission.resolveResourceOrg. */
+    async findEnvVarById(id: string) {
+      return db.query.envVar.findFirst({ where: eq(envVar.id, id) });
     },
 
     async setEnvVar(data: Omit<NewEnvVar, "id">) {

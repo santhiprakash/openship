@@ -2,6 +2,7 @@ import { eq, and, isNull, desc, sql } from "drizzle-orm";
 import { generateId } from "@repo/core";
 import type { Database } from "../client";
 import { projectApp } from "../schema";
+import { member } from "../schema/organization";
 
 export type ProjectApp = typeof projectApp.$inferSelect;
 export type NewProjectApp = typeof projectApp.$inferInsert;
@@ -14,23 +15,47 @@ export function createProjectAppRepo(db: Database) {
       });
     },
 
-    async findBySlug(userId: string, slug: string) {
+    /** Slug uniqueness scoped to one org. */
+    async findBySlugInOrg(organizationId: string, slug: string) {
       return db.query.projectApp.findFirst({
         where: and(
-          eq(projectApp.userId, userId),
+          eq(projectApp.organizationId, organizationId),
           eq(projectApp.slug, slug),
           isNull(projectApp.deletedAt),
         ),
       });
     },
 
-    async listByUser(userId: string, opts?: { page?: number; perPage?: number }) {
+    /**
+     * Find a project_app by slug without scoping to a user. Use ONLY for
+     * deterministic, globally-unique slugs (e.g. `webmail-<serverId>`),
+     * never for user-facing slugs where cross-user collisions are
+     * expected. Caller is responsible for verifying org membership after
+     * the lookup (via assertResourceInOrg).
+     */
+    async findFirstBySlug(slug: string) {
+      return db.query.projectApp.findFirst({
+        where: and(eq(projectApp.slug, slug), isNull(projectApp.deletedAt)),
+      });
+    },
+
+    // listByUser removed — use listByOrganization. project_app.user_id
+    // is gone; access is org-only.
+
+    /** Org-scoped list. */
+    async listByOrganization(
+      organizationId: string,
+      opts?: { page?: number; perPage?: number },
+    ) {
       const page = opts?.page ?? 1;
       const perPage = opts?.perPage ?? 20;
       const offset = (page - 1) * perPage;
 
       const rows = await db.query.projectApp.findMany({
-        where: and(eq(projectApp.userId, userId), isNull(projectApp.deletedAt)),
+        where: and(
+          eq(projectApp.organizationId, organizationId),
+          isNull(projectApp.deletedAt),
+        ),
         orderBy: [desc(projectApp.createdAt)],
         limit: perPage,
         offset,
@@ -39,7 +64,9 @@ export function createProjectAppRepo(db: Database) {
       const [{ value: total }] = await db
         .select({ value: sql<number>`count(*)` })
         .from(projectApp)
-        .where(and(eq(projectApp.userId, userId), isNull(projectApp.deletedAt)));
+        .where(
+          and(eq(projectApp.organizationId, organizationId), isNull(projectApp.deletedAt)),
+        );
 
       return { rows, total: Number(total), page, perPage };
     },

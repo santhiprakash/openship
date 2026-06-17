@@ -11,6 +11,7 @@ import {
 } from "../system/ssh-client";
 import type { SshConfig, CommandExecutor } from "../types";
 import type { DockerConnectionOptions } from "./docker-transport";
+import { safeErrorMessage } from "@repo/core";
 
 const DEFAULT_REMOTE_DOCKER_SOCKET_PATH = "/var/run/docker.sock";
 const resolvedDockerSocketPathCache = new WeakMap<DockerConnectionOptions, Promise<string>>();
@@ -141,7 +142,7 @@ async function resolveRemoteDockerSocketPath(
 }
 
 function shouldCollectSocketDiagnostics(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = safeErrorMessage(error);
   return /channel open failure|open failed/i.test(message);
 }
 
@@ -199,7 +200,7 @@ async function collectDockerSocketDiagnostics(
     return lines;
   } catch (error) {
     return [
-      `remote diagnostic failed: ${error instanceof Error ? error.message : String(error)}`,
+      `remote diagnostic failed: ${safeErrorMessage(error)}`,
     ];
   } finally {
     conn?.end();
@@ -251,7 +252,7 @@ export async function probeDockerSshBridge(opts: DockerConnectionOptions): Promi
           stream = await openSshUnixSocket(client, socketPath);
         } catch (error) {
           throw new Error(
-            `SSH session established, but opening a streamlocal channel to ${socketPath} failed: ${error instanceof Error ? error.message : String(error)}`,
+            `SSH session established, but opening a streamlocal channel to ${socketPath} failed: ${safeErrorMessage(error)}`,
           );
         }
 
@@ -283,7 +284,7 @@ export async function verifyDockerSshBridge(opts: DockerConnectionOptions): Prom
         : "";
 
       throw new Error(
-        `Cannot reach Docker daemon: ${error instanceof Error ? error.message : String(error)}. ` +
+        `Cannot reach Docker daemon: ${safeErrorMessage(error)}. ` +
           `Current failure: streamlocal tunnel could not be opened for ${socketPath}. ` +
           "Check that the remote Docker-compatible socket exists, the SSH server allows streamlocal forwarding, and the SSH user can access that socket." +
           diagnostics,
@@ -299,7 +300,7 @@ export async function verifyDockerSshBridge(opts: DockerConnectionOptions): Prom
       : "";
 
     throw new Error(
-      `Cannot reach Docker daemon: ${error instanceof Error ? error.message : String(error)}. ` +
+      `Cannot reach Docker daemon: ${safeErrorMessage(error)}. ` +
         `Preflight steps: SSH login -> resolve remote Docker socket path -> open streamlocal tunnel -> Docker API ping. ` +
         `Current failure: streamlocal tunnel could not be opened for ${socketPath}. ` +
         "Check that the remote Docker-compatible socket exists, the SSH server allows streamlocal forwarding, and the SSH user can access that socket." +

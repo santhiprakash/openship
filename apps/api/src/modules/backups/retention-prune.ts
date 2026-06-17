@@ -18,7 +18,7 @@ import { repos, type BackupPolicy, type BackupRun } from "@repo/db";
 import { resolveDestination } from "@repo/adapters";
 import { toAdapterRow } from "../backup-destinations/hydrate-server";
 import { getJobRunner } from "../../lib/job-runner";
-import { safeErrorMessage } from "../../lib/safe-error";
+import { safeErrorMessage } from "@repo/core";
 
 const RETENTION_JOB_ID = "retention-prune-daily";
 // 03:17 UTC — off the every-night-at-3am peak.
@@ -49,29 +49,47 @@ export async function runRetentionSweep(): Promise<{
   return stats;
 }
 
+const PRUNE_PAGE_SIZE = 500;
+
 async function prunePolicy(policy: BackupPolicy): Promise<number> {
   if (!policy.retainCount && !policy.retainDays) return 0;
 
   const destinationId = policy.destinationId;
-  const allRuns = await repos.backupRun.listByUser(
-    policy.createdBy ?? "system",
-    { projectId: policy.projectId, limit: 1000 },
-  );
-  const candidates = allRuns
-    .filter((r) => r.destinationId === destinationId)
-    .filter((r) => r.status === "succeeded")
-    .filter((r) => !r.deletedAt)
-    .filter((r) => {
-      if (r.retentionLockedUntil && r.retentionLockedUntil > new Date()) {
-        return false;
-      }
-      return true;
-    })
-    .sort((a, b) => {
-      const aT = a.finishedAt?.getTime() ?? 0;
-      const bT = b.finishedAt?.getTime() ?? 0;
-      return bT - aT;
+  const project = await repos.project.findById(policy.projectId);
+  if (!project) {
+    // Project soft-deleted — nothing to prune.
+    return 0;
+  }
+
+  // Page through every run for this project. The 1000-run cap was a
+  // silent data leak: projects past it never had older runs pruned and
+  // accumulated forever. The page-then-filter pattern below has the
+  // same memory footprint as the old code in practice (candidates are
+  // a subset of total) but never silently truncates.
+  const now = new Date();
+  const candidates: BackupRun[] = [];
+  for (let offset = 0; ; offset += PRUNE_PAGE_SIZE) {
+    const page = await repos.backupRun.listByOrganization(project.organizationId, {
+      projectId: policy.projectId,
+      limit: PRUNE_PAGE_SIZE,
+      offset,
     });
+    if (page.length === 0) break;
+    for (const r of page) {
+      if (r.destinationId !== destinationId) continue;
+      if (r.status !== "succeeded") continue;
+      if (r.deletedAt) continue;
+      if (r.retentionLockedUntil && r.retentionLockedUntil > now) continue;
+      candidates.push(r);
+    }
+    if (page.length < PRUNE_PAGE_SIZE) break;
+  }
+
+  candidates.sort((a, b) => {
+    const aT = a.finishedAt?.getTime() ?? 0;
+    const bT = b.finishedAt?.getTime() ?? 0;
+    return bT - aT;
+  });
 
   const cutoffDate = policy.retainDays
     ? new Date(Date.now() - policy.retainDays * 24 * 60 * 60 * 1000)

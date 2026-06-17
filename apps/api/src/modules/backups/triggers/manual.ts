@@ -3,17 +3,19 @@
  * trigger types: a user hits an HTTP endpoint, we build a
  * BackupTrigger value, and the orchestrator does the rest.
  *
- * Authorization: route layer guarantees the caller owns the project
- * AND the destination tied to the policy. Both checks happen in
- * `triggerManualBackup` before we enqueue.
+ * Authorization: route layer guarantees the caller belongs to the
+ * active organization. We re-verify org-scope on both the policy's
+ * project and the destination before enqueueing.
  */
 
 import { repos } from "@repo/db";
+import { assertResourceInOrg } from "../../../lib/controller-helpers";
 import { backupOrchestrator } from "../backup.orchestrator";
 
 export async function triggerManualBackup(opts: {
   policyId: string;
   userId: string;
+  organizationId: string;
   clientIp?: string;
 }): Promise<{ runId: string }> {
   const policy = await repos.backupPolicy.findById(opts.policyId);
@@ -21,11 +23,20 @@ export async function triggerManualBackup(opts: {
     throw new Error("Backup policy not found");
   }
   const project = await repos.project.findById(policy.projectId);
-  if (!project || project.userId !== opts.userId) {
+  try {
+    assertResourceInOrg(project, "Backup policy", opts.organizationId, opts.policyId);
+  } catch {
     throw new Error("Backup policy not found"); // hide existence
   }
   const destination = await repos.backupDestination.findById(policy.destinationId);
-  if (!destination || destination.userId !== opts.userId) {
+  try {
+    assertResourceInOrg(
+      destination,
+      "Backup destination",
+      opts.organizationId,
+      policy.destinationId,
+    );
+  } catch {
     throw new Error("Backup destination not accessible");
   }
 

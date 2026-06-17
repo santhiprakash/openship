@@ -30,7 +30,7 @@ import type {
 } from "../types";
 
 import { LocalExecutor, wrapLocalBuildCommand } from "../system/executor";
-import { STACKS, TRANSFER_EXCLUDES, type StackId, type StackDefinition } from "@repo/core";
+import { STACKS, TRANSFER_EXCLUDES, safeErrorMessage, type StackId, type StackDefinition } from "@repo/core";
 import { checkToolchainForStack, installTools } from "../toolchain";
 import type {
   RuntimeAdapter,
@@ -336,7 +336,7 @@ export class BareRuntime implements RuntimeAdapter {
         },
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = safeErrorMessage(err);
       log.log(`Failed to transfer local build output: ${msg}`, "error");
       return {
         sessionId: config.sessionId,

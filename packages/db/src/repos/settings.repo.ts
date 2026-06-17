@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 import type { Database } from "../client";
-import { userSettings } from "../schema";
+import { userSettings, member } from "../schema";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -48,6 +48,34 @@ export function createSettingsRepo(db: Database) {
         .where(eq(userSettings.userId, userId))
         .returning();
       return row;
+    },
+
+    /**
+     * Return the cloud-linked settings row for the org owner.
+     *
+     * Only the owner role can connect Openship Cloud — their token IS
+     * the org's cloud identity. Every org-scoped cloud operation
+     * (edge proxy, analytics, pages, GitHub App tokens) flows through
+     * this single bearer. Returns undefined if the owner hasn't linked
+     * yet, or if the org has no owner.
+     */
+    async findOrgOwnerCloudLink(
+      organizationId: string,
+    ): Promise<UserSettings | undefined> {
+      const rows = await db
+        .select({ settings: userSettings })
+        .from(userSettings)
+        .innerJoin(member, eq(member.userId, userSettings.userId))
+        .where(
+          and(
+            eq(member.organizationId, organizationId),
+            eq(member.role, "owner"),
+            isNotNull(userSettings.cloudSessionToken),
+            sql`length(${userSettings.cloudSessionToken}) > 0`,
+          ),
+        )
+        .limit(1);
+      return rows[0]?.settings;
     },
   };
 }

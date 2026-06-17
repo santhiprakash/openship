@@ -20,10 +20,8 @@ import { SettingsSection } from "./SettingsSection";
 export function GitHubConnection() {
   const {
     state,
-    connected,
     connecting,
     loading,
-    userLogin,
     accounts,
     connect,
     disconnect,
@@ -60,7 +58,29 @@ export function GitHubConnection() {
     });
   };
 
-  const hasInstallations = accounts.length > 0;
+  // STRICT source-of-truth for the GitHub App card. Read ONLY from
+  // state.sources.openshipApp (which the backend computes from the SaaS
+  // /api/cloud/github/user-status response in cloud-app mode, or from
+  // local OAuth in app mode). NEVER use `connected` from useGitHub() —
+  // that's derived from state.primary, which can be "gh-cli" when only
+  // the CLI is logged in. In that case `accounts` is a list of CLI org
+  // memberships from /user/orgs, NOT App installations — rendering them
+  // here would lie about which orgs the App can actually deploy from
+  // (they could be completely different sets, and the user would think
+  // the App is installed where it isn't).
+  const appConnected = state.sources.openshipApp.connected;
+  const appLogin = state.sources.openshipApp.login;
+  // accounts is only meaningful when the App itself is connected. When
+  // primary is "gh-cli" the backend returns CLI orgs in this field
+  // (tagged source: "cli") — gate on appConnected AND filter to
+  // source: "app" so the App card never surfaces them under any
+  // future regression. Backend without the source tag (older response)
+  // falls through the `?? true` so we don't black-hole the list when
+  // appConnected is genuinely true.
+  const appAccounts = appConnected
+    ? accounts.filter((acct) => (acct.source ?? "app") === "app")
+    : [];
+  const hasInstallations = appAccounts.length > 0;
 
   return (
     <>
@@ -71,11 +91,11 @@ export function GitHubConnection() {
           without cloud minting tokens for the local instance.            */}
       <SettingsSection
         icon={Github}
-        title={connected && userLogin ? `GitHub · @${userLogin}` : "GitHub"}
+        title={appConnected && appLogin ? `GitHub · @${appLogin}` : "GitHub"}
         description={
-          connected
+          appConnected
             ? hasInstallations
-              ? `Connected · ${accounts.length} account${accounts.length > 1 ? "s" : ""}`
+              ? `Connected · ${appAccounts.length} installation${appAccounts.length > 1 ? "s" : ""}`
               : "Connected · No installations yet"
             : isSelfHosted && !cloudConnected
               ? "Requires Openship Cloud — the App is owned by openship.io"
@@ -89,11 +109,11 @@ export function GitHubConnection() {
             <div className="size-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
             Checking connection…
           </div>
-        ) : connected ? (
+        ) : appConnected ? (
           <div className="space-y-4">
             {hasInstallations && (
               <div className="space-y-2">
-                {accounts.map((acct) => (
+                {appAccounts.map((acct) => (
                   <div
                     key={acct.login}
                     className="flex items-center gap-3 px-3 py-2 bg-muted/30 rounded-lg border border-border/40"

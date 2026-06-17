@@ -231,7 +231,7 @@ interface ServiceRouteContext {
   routing: RoutingProvider;
   trackedSsl: SslProvider;
   usesManagedRouting: boolean;
-  userId: string;
+  organizationId: string;
   serverId?: string;
   routeOptions?: RouteRegistrationOptions;
   domainByHostname: Map<string, Domain>;
@@ -361,7 +361,7 @@ export async function deployComposeServices(
       routing: opts.routing,
       trackedSsl: createTrackedSslProvider(opts.ssl, domainByHostname),
       usesManagedRouting: opts.usesManagedRouting,
-      userId: opts.userId ?? dep.userId,
+      organizationId: dep.organizationId,
       serverId: opts.serverId,
       routeOptions: opts.routeOptions,
       domainByHostname,
@@ -669,7 +669,7 @@ export async function deployComposeServices(
         logger.log(`Syncing managed edge proxy for ${proxyRoute.hostname}...\n`, "info", {
           serviceName: svc.name,
         });
-        await ensureManagedEdgeProxy(routeContext.userId, proxyRoute.managedSubdomain, {
+        await ensureManagedEdgeProxy(routeContext.organizationId, proxyRoute.managedSubdomain, {
           serverId: routeContext.serverId,
         });
       }

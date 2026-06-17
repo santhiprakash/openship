@@ -446,8 +446,8 @@ function toProjectInfo(
 
   // Monorepo wins over the single-root projectType: when the root has a workspace
   // manifest AND we found 2+ deployable apps, expose the multi-app flow. The
-  // `selected` root is kept for backwards compatibility (single-app fallback if
-  // the user chooses to deploy just one).
+  // `selected` root provides a single-app fallback if the user chooses to deploy
+  // just one.
   const isMonorepo = !services && monorepo && monorepo.apps.length >= 2;
   const projectType: ProjectType = isMonorepo ? "monorepo" : stack.projectType;
 

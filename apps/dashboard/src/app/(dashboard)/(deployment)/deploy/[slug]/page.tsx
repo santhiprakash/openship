@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import ProjectSettings from "@/components/import-project/ProjectSettings";
 import BuildSettings from "@/components/import-project/BuildSettings";
@@ -100,14 +100,18 @@ const DeployRepository: React.FC = () => {
         return lastPickStore.read() ? "config" : "target";
     });
 
-    // Apply the soft last-pick to config BEFORE first paint so step="config"
-    // renders with the correct target/serverId. Without this, config falls
-    // back to DEFAULT_CONFIG.deployTarget="cloud" and the user briefly sees
-    // the wrong summary bar. useLayoutEffect runs synchronously after DOM
-    // mutation but before the browser paints, so the user never sees the
-    // intermediate state.
+    // Apply the soft last-pick to config so step="config" renders with the
+    // correct target/serverId. Runs TWICE:
+    //   Pass 1: pre-paint (useLayoutEffect) so the summary bar doesn't
+    //           flash with DEFAULT_CONFIG.deployTarget="cloud".
+    //   Pass 2: AFTER initializeFromRepo's setConfig settles — that path
+    //           goes through buildPreparedConfig which overwrites
+    //           buildStrategy / runtimeMode based on stack defaults,
+    //           clobbering the user's last pick. The applied flag is
+    //           reset right before pass 2 so it fires once more.
     const appliedLastPickRef = useRef(false);
-    useLayoutEffect(() => {
+
+    const applyLastPick = useCallback(() => {
         if (!isDesktop || appliedLastPickRef.current) return;
         const last = typeof window !== "undefined" ? lastPickStore.read() : null;
         if (!last) return;
@@ -120,6 +124,10 @@ const DeployRepository: React.FC = () => {
             updateConfig({ deployTarget: "local", serverId: undefined });
         }
     }, [isDesktop, updateConfig]);
+
+    useLayoutEffect(() => {
+        applyLastPick();
+    }, [applyLastPick]);
 
     // Track whether the user explicitly came back to step 1 via the edit
     // affordance. If they did, we must NOT auto-skip past it again - they
@@ -151,6 +159,16 @@ const DeployRepository: React.FC = () => {
                     branch: branch ?? decoded.branch,
                     projectId: projectId ?? decoded.projectId,
                 });
+            }
+
+            // Re-apply last-pick: initializeFromRepo's buildPreparedConfig
+            // overwrites buildStrategy + runtimeMode from the detected stack's
+            // defaults, which clobbers what useLayoutEffect set above. Reset
+            // the guard and re-apply so the summary bar (and the rest of the
+            // page) reflects the user's actual saved preference.
+            if (result.success) {
+                appliedLastPickRef.current = false;
+                applyLastPick();
             }
 
             if (!result.success) {

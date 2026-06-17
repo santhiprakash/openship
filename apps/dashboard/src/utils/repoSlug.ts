@@ -80,16 +80,6 @@ export function decodeSlug(slug: string): DecodedSlug | null {
 }
 
 /**
- * Decodes a repository slug back to owner and repo
- * @deprecated Use decodeSlug() instead
- */
-export function decodeRepoSlug(slug: string): { owner: string; repo: string } | null {
-  const result = decodeSlug(slug);
-  if (!result || result.kind !== "repo") return null;
-  return { owner: result.owner, repo: result.repo };
-}
-
-/**
  * Extracts owner and repo from a GitHub URL
  * @param url - GitHub repository URL
  * @returns Object with owner and repo, or null if invalid

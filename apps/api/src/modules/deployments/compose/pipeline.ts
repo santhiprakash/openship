@@ -35,6 +35,7 @@ import { internalApiUrl } from "../../../config";
 
 import { buildComposeImages } from "./build.service";
 import { deployComposeServices } from "./deploy.service";
+import { safeErrorMessage } from "@repo/core";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -117,7 +118,6 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     routing,
     ssl,
     usesManagedRouting,
-    userId: dep.userId,
     serverId: snapshot.serverId,
     routeOptions: project.webhookDomain
       ? {
@@ -131,7 +131,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
   if (composeResult.status === "failed") {
     for (const [serviceId, imageRef] of composeBuild.builtImageRefs) {
       await cleanupBuildArtifact(runtime, imageRef).catch((err) => {
-        const detail = err instanceof Error ? err.message : String(err);
+        const detail = safeErrorMessage(err);
         logger.log(`Warning: failed to clean up built service image ${serviceId}: ${detail}\n`, "warn");
       });
     }
@@ -147,7 +147,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
   for (const [serviceId, imageRef] of composeBuild.builtImageRefs) {
     if (deployedServiceIds.has(serviceId)) continue;
     await cleanupBuildArtifact(runtime, imageRef).catch((err) => {
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = safeErrorMessage(err);
       logger.log(`Warning: failed to clean up unused service image ${serviceId}: ${detail}\n`, "warn");
     });
   }
@@ -169,3 +169,5 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     },
   });
 }
+
+

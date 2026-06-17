@@ -54,7 +54,12 @@ import { repos } from "@repo/db";
 import { AppError } from "@repo/core";
 import { env } from "../../config/env";
 import { decrypt } from "../../lib/encryption";
-import { getInstallationId, getInstallationToken, getUserToken } from "./github.auth";
+import {
+  getInstallationId,
+  getInstallationIdByOrg,
+  getInstallationToken,
+  getUserToken,
+} from "./github.auth";
 import { getLocalGhToken } from "./github.local-auth";
 
 // ─── Public types ───────────────────────────────────────────────────────────
@@ -80,6 +85,16 @@ export interface TokenContext {
   installationId?: number;
   /** Project id — for per-project clone token lookup. */
   projectId?: string;
+  /**
+   * Active organization id — when set, App installation resolution prefers
+   * `(organizationId, owner)` over the `(userId, owner)` lookup.
+   *
+   * Multi-user safety: a teammate's clone shouldn't depend on whichever
+   * org member happened to install the App. Pass this whenever a request
+   * has an active organization in context (every authed dashboard call,
+   * every build kicked off by a project owned by an org).
+   */
+  organizationId?: string;
 }
 
 // ─── The dispatcher ─────────────────────────────────────────────────────────
@@ -105,14 +120,25 @@ export async function tokenFor(
   const userPat = await readUserGlobalToken(userId);
   if (userPat) return { token: userPat, source: "user-pat" };
 
+  // ── Permission gate: restricted members can't transitively use the
+  //    org's GitHub App installation unless they hold an explicit
+  //    `github` resource grant. Without it, deploy/build flows fall
+  //    through to the calling user's OWN OAuth token — they must
+  //    connect their GitHub before they can do anything that needs it.
+  //    Members/Admins/Owners always pass through.
+  const installationAllowed = await canUseOrgInstallation(userId, ctx.organizationId);
+
   // ── Backend-resolved priority ─────────────────────────────────────
   // CLOUD_MODE = SaaS = no gh CLI on this machine ever; the App is
   // the only auto-resolved source.
   if (env.CLOUD_MODE) {
-    if (ctx.owner) {
-      const t = await getInstallationToken(userId, ctx.owner, ctx.installationId).catch(
-        () => null,
-      );
+    if (ctx.owner && installationAllowed) {
+      const t = await getInstallationToken(
+        userId,
+        ctx.owner,
+        ctx.installationId,
+        ctx.organizationId,
+      ).catch(() => null);
       if (t) return { token: t, source: "app-installation" };
     }
     // For non-owner-scoped calls (e.g. /user/repos in OAuth fallback)
@@ -125,12 +151,39 @@ export async function tokenFor(
   if (purpose === "local") {
     // Per user's rule: gh CLI is the source of truth in self-hosted.
     // If logged in, it wins over App. App + OAuth are fallbacks.
-    const cli = await getLocalGhToken();
-    if (cli) return { token: cli, source: "gh-cli" };
-    if (ctx.owner) {
-      const t = await getInstallationToken(userId, ctx.owner, ctx.installationId).catch(
-        () => null,
-      );
+    //
+    // BUT: gh CLI is the OPERATOR's credential (a long-lived, broad-scope
+    // PAT bound to whoever ran `gh auth login` on this host). Handing it
+    // to every authed user is a privilege escalation — a member/admin/
+    // restricted user could use it to act against any repo the operator's
+    // GitHub account can reach, well outside this org.
+    //
+    // Only return it when the caller is the operator: in zero-auth desktop
+    // (no organizationId in context) the auto-provisioned local user IS
+    // the operator. On a multi-user self-hosted install, restrict to
+    // `owner` role in the active org.
+    if (ctx.organizationId) {
+      const m = await repos.member
+        .find(ctx.organizationId, userId)
+        .catch(() => null);
+      if (m?.role === "owner") {
+        const cli = await getLocalGhToken();
+        if (cli) return { token: cli, source: "gh-cli" };
+      }
+      // Non-owners fall through to App / OAuth.
+    } else {
+      // No org context (desktop zero-auth, internal job) — the caller is
+      // the operator, so gh CLI is safe to use.
+      const cli = await getLocalGhToken();
+      if (cli) return { token: cli, source: "gh-cli" };
+    }
+    if (ctx.owner && installationAllowed) {
+      const t = await getInstallationToken(
+        userId,
+        ctx.owner,
+        ctx.installationId,
+        ctx.organizationId,
+      ).catch(() => null);
       if (t) return { token: t, source: "app-installation" };
     }
     const oauth = await getUserToken(userId);
@@ -141,10 +194,13 @@ export async function tokenFor(
   // purpose === "remote" in self-hosted
   // gh CLI is REFUSED. App installation is the only auto-resolved token
   // that's safe to ship to a remote worker (short-lived, repo-scoped).
-  if (ctx.owner) {
-    const t = await getInstallationToken(userId, ctx.owner, ctx.installationId).catch(
-      () => null,
-    );
+  if (ctx.owner && installationAllowed) {
+    const t = await getInstallationToken(
+      userId,
+      ctx.owner,
+      ctx.installationId,
+      ctx.organizationId,
+    ).catch(() => null);
     if (t) return { token: t, source: "app-installation" };
   }
   return null;
@@ -180,15 +236,42 @@ export async function canResolveTokenFor(
 
   // 3. Self-hosted "local" purpose — gh CLI wins over App when present.
   //    getLocalGhToken does shell out (~50–150ms) but no GitHub API.
+  //
+  //    Same operator-only guard as `tokenFor`: only surface gh-cli
+  //    existence when the caller is the org owner, or when there's no
+  //    org context (desktop zero-auth / internal job). Without this, a
+  //    member would see gh-cli as "available" and the dashboard would
+  //    offer flows that ultimately fail or, worse, succeed via another
+  //    credential while logging gh-cli as the resolved source.
   if (!env.CLOUD_MODE && purpose === "local") {
-    const cli = await getLocalGhToken();
-    if (cli) return "gh-cli";
+    let canUseCli = false;
+    if (ctx.organizationId) {
+      const m = await repos.member
+        .find(ctx.organizationId, userId)
+        .catch(() => null);
+      canUseCli = m?.role === "owner";
+    } else {
+      canUseCli = true;
+    }
+    if (canUseCli) {
+      const cli = await getLocalGhToken();
+      if (cli) return "gh-cli";
+    }
   }
 
   // 4. App installation — existence check only (DB row + small cache).
-  //    Both SaaS and self-hosted, both purposes.
+  //    Both SaaS and self-hosted, both purposes. Mirrors the resolution
+  //    order in `tokenFor`: org-scoped row first, then user-scoped.
   if (ctx.owner) {
-    const installId = await getInstallationId(userId, ctx.owner).catch(() => null);
+    let installId: number | null = null;
+    if (ctx.organizationId) {
+      installId = await getInstallationIdByOrg(ctx.organizationId, ctx.owner).catch(
+        () => null,
+      );
+    }
+    if (!installId) {
+      installId = await getInstallationId(userId, ctx.owner).catch(() => null);
+    }
     if (installId) return "app-installation";
   }
 
@@ -229,6 +312,49 @@ export async function requireTokenFor(
 }
 
 // ─── Internal helpers ──────────────────────────────────────────────────────
+
+/**
+ * Permission gate: should `userId` be allowed to mint tokens via the
+ * org's GitHub App installation?
+ *
+ * Rules:
+ *   - No org context (background jobs, zero-auth desktop) → allow.
+ *     The caller is either the operator or a system path.
+ *   - Owner / admin / member → allow. The installation is part of the
+ *     org's normal toolset and these roles get unrestricted org-resource
+ *     access by design.
+ *   - Restricted → allow ONLY if they hold a `github` resource_grant
+ *     (specific resourceId="*" or any non-empty grant on resourceType
+ *     "github"). Without it, deploy/build flows transparently fall
+ *     through to the calling user's OWN OAuth — they must connect
+ *     their GitHub before they can use anything that needs an
+ *     installation token.
+ *
+ * Returns false on lookup failure (fail closed).
+ */
+async function canUseOrgInstallation(
+  userId: string,
+  organizationId: string | undefined,
+): Promise<boolean> {
+  if (!organizationId) return true;
+  try {
+    const m = await repos.member.find(organizationId, userId);
+    if (!m) return false;
+    if (m.role !== "restricted") return true;
+    const grant = await repos.resourceGrant.findForResource(
+      organizationId,
+      userId,
+      "github",
+      "*",
+    );
+    if (!grant) return false;
+    return grant.permissions.some(
+      (p) => p === "read" || p === "write" || p === "admin",
+    );
+  } catch {
+    return false;
+  }
+}
 
 async function readProjectToken(projectId: string): Promise<string | null> {
   const project = await repos.project.findById(projectId).catch(() => null);

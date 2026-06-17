@@ -17,6 +17,7 @@ import { toolchainCatalog } from "./catalog";
 import { checkTool } from "./checks";
 import { resolveEnvironment } from "../system/environment";
 import { systemDebug, formatDuration } from "../system/debug";
+import { safeErrorMessage } from "@repo/core";
 
 // ─── Single tool install ────────────────────────────────────────────────────
 
@@ -123,7 +124,7 @@ export async function installTool(
 
     return { tool: name, success: true, version };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = safeErrorMessage(err);
     systemDebug("toolchain", `install:fail ${name} (${formatDuration(startedAt)}) ${msg}`);
 
     onLog?.({

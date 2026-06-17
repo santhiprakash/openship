@@ -33,6 +33,7 @@
 import nodemailer, { type Transporter } from "nodemailer";
 import { sshManager } from "../../../lib/ssh-manager";
 import { readState } from "../mail-state";
+import { safeErrorMessage } from "@repo/core";
 
 const EMAIL_RE = /^[a-z0-9._+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
 const DOMAIN_RE = /^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$/i;
@@ -204,7 +205,7 @@ export async function sendTestEmail(
 // ─── Error helpers ──────────────────────────────────────────────────────────
 
 function wrapSmtpError(err: unknown, prefix: string): Error {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = safeErrorMessage(err);
   const wrapped = new Error(`${prefix}: ${message}`);
   if (err instanceof Error) {
     (wrapped as Error & { cause?: unknown }).cause = err;

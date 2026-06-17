@@ -73,7 +73,15 @@ export async function setup(c: Context) {
       });
       serverId = existing.id;
     } else {
+      // Setup runs through internalAuth / onboarding (no user session), so
+      // there's no active org in context. Use whatever the middleware may
+      // have set, otherwise leave NULL — these are instance-global servers
+      // per the schema comment. Operators assign org post-onboarding.
+      const ctxOrgId = c.get("activeOrganizationId");
+      const organizationId =
+        typeof ctxOrgId === "string" && ctxOrgId.length > 0 ? ctxOrgId : null;
       const created = await repos.server.create({
+        organizationId,
         name: body.serverName || null,
         sshHost: body.sshHost,
         sshPort: body.sshPort || 22,
@@ -145,9 +153,23 @@ export async function deleteSettings(c: Context) {
 
   await repos.instanceSettings.delete();
 
-  // Also clear all servers since SSH config lives in the servers table
+  // Also clear all servers since SSH config lives in the servers table.
+  // Purge per-server grants alongside each server so we don't leave
+  // orphan resource_grant rows pointing at deleted resources.
   const serverList = await repos.server.list();
   for (const s of serverList) {
+    if (s.organizationId) {
+      await repos.resourceGrant
+        .deleteForResource(s.organizationId, "server", s.id)
+        .catch((err: unknown) =>
+          console.error("[deleteSettings] server grant cleanup failed:", err),
+        );
+      await repos.resourceGrant
+        .deleteForResource(s.organizationId, "mail_server", s.id)
+        .catch((err: unknown) =>
+          console.error("[deleteSettings] mail_server grant cleanup failed:", err),
+        );
+    }
     await repos.server.delete(s.id);
   }
 

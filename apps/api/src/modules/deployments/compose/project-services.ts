@@ -16,7 +16,7 @@ import { getProjectType, type StackId } from "@repo/core";
 import { serviceKind, type DeployableService } from "../../../lib/deployable-service";
 export { serviceKind } from "../../../lib/deployable-service";
 
-export function isLegacyComposeProject(project: Pick<Project, "framework">): boolean {
+export function isMultiServiceProject(project: Pick<Project, "framework">): boolean {
   const framework = project.framework as StackId | undefined;
   if (!framework) return false;
 
@@ -29,9 +29,7 @@ export function isLegacyComposeProject(project: Pick<Project, "framework">): boo
 
 /** Deployable rows - both compose services AND monorepo sub-apps.
  *  Both kinds travel through the same compose pipeline (kind-discriminated
- *  build/deploy translators). Previously this filter excluded monorepo
- *  rows so they fell back to the single-app single-primary path; now they
- *  fan out via the unified pipeline. */
+ *  build/deploy translators) and fan out via the unified pipeline. */
 export async function listProjectComposeServices(projectId: string): Promise<Service[]> {
   const all = await repos.service.listByProject(projectId);
   return all.filter((s) => s.kind === "compose" || s.kind === "monorepo");
@@ -97,11 +95,10 @@ export async function shouldUseProjectServicePipeline(
   requestServices?: DeployableService[] | null,
 ): Promise<boolean> {
   if (requestServices?.length) return true;
-  // Both compose AND monorepo rows now trigger the unified pipeline.
+  // Both compose AND monorepo rows trigger the unified pipeline.
   if ((await listProjectComposeServices(project.id)).length > 0) return true;
 
-  // Compatibility for existing compose projects that may not have synced
-  // service rows yet. New behavior should be driven by project services.
-  return isLegacyComposeProject(project);
+  // Fallback for compose projects that don't have synced service rows.
+  return isMultiServiceProject(project);
 }
 

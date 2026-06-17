@@ -64,7 +64,7 @@ import { runLocalBuild } from "./local-build";
 import { transferLocalDirectory } from "./transfer";
 import { checkGit } from "../system/checks";
 import { installGit } from "../system/installer";
-import { STACKS, TRANSFER_EXCLUDES, type StackId, type StackDefinition } from "@repo/core";
+import { STACKS, TRANSFER_EXCLUDES, safeErrorMessage, type StackId, type StackDefinition } from "@repo/core";
 
 type CloudWorkspaceRuntime = Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
 const DOCKERFILE_SOURCE_IMAGE = "node:22";
@@ -138,10 +138,6 @@ function fallbackRuntimeName(config: Pick<DeployConfig, "runtimeName" | "project
     .slice(0, 60);
 
   return normalized || `deploy-${config.deploymentId.slice(0, 8)}`;
-}
-
-function errorMessage(err: unknown) {
-  return err instanceof Error ? err.message : String(err);
 }
 
 function toEnvArray(env: Record<string, string>): string[] {
@@ -383,7 +379,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         rt = provisioned.runtime;
         this.trackActiveBuildWorkspace(config.sessionId, wsId);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = safeErrorMessage(err);
         log.log(`Failed to provision build environment: ${msg}`, "error");
         return {
           sessionId: config.sessionId,
@@ -443,7 +439,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
             },
           });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = safeErrorMessage(err);
           log.log(`Failed to upload local build output: ${msg}`, "error");
           return {
             sessionId: config.sessionId,
@@ -593,7 +589,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         this.untrackActiveBuildWorkspace(config.sessionId, workspaceId);
       }
 
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       log.log(`Dockerfile build failed: ${message}\n`, "error");
       return {
         sessionId: config.sessionId,
@@ -1113,7 +1109,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       logger.log(`Failed to create workspace from image "${config.image}": ${message}\n`, "error");
       throw err;
     }
@@ -1153,7 +1149,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
       return { workspaceId: wsData.id, runtime: rt };
     } catch (err) {
       await ws.delete().catch(() => {});
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       logger.log(`Failed to prepare workspace "${wsData.id}": ${message}\n`, "error");
       throw err;
     }
@@ -1183,7 +1179,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       logger.log(
         `Failed to create build workspace from image "${config.buildImage}": ${message}\n`,
         "error",
@@ -1228,7 +1224,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
     } catch (err) {
       // Workspace was created but setup failed - clean it up
       await ws.delete().catch(() => {});
-      const message = err instanceof Error ? err.message : String(err);
+      const message = safeErrorMessage(err);
       logger.log(`Failed to prepare build workspace "${wsData.id}": ${message}\n`, "error");
       throw err;
     }
@@ -1413,7 +1409,7 @@ fi`;
         url = `https://${primaryCustomDomain}`;
       } catch (err) {
         throw new Error(
-          `Failed to connect custom domain ${primaryCustomDomain}: ${errorMessage(err)}`,
+          `Failed to connect custom domain ${primaryCustomDomain}: ${safeErrorMessage(err)}`,
         );
       }
     } else if (primarySlug) {
@@ -1431,7 +1427,7 @@ fi`;
         url = exposeResult.url as string | undefined;
       } catch (err) {
         throw new Error(
-          `Failed to expose ${exposeTarget(primaryPort, primarySlug)}: ${errorMessage(err)}`,
+          `Failed to expose ${exposeTarget(primaryPort, primarySlug)}: ${safeErrorMessage(err)}`,
         );
       }
     } else {
@@ -1497,7 +1493,7 @@ fi`;
         pg = result.page;
       } catch (err) {
         throw new Error(
-          `Failed to create static page for slug "${pageSlug}" with custom domain "${primaryCustomDomain}": ${errorMessage(err)}`,
+          `Failed to create static page for slug "${pageSlug}" with custom domain "${primaryCustomDomain}": ${safeErrorMessage(err)}`,
         );
       }
 
@@ -1531,7 +1527,7 @@ fi`;
         pg = result.page;
       } catch (err) {
         throw new Error(
-          `Failed to create static page for slug "${pageSlug}" (${pageSlug}.opsh.io): ${errorMessage(err)}`,
+          `Failed to create static page for slug "${pageSlug}" (${pageSlug}.opsh.io): ${safeErrorMessage(err)}`,
         );
       }
 
@@ -1548,7 +1544,7 @@ fi`;
         pg = result.page;
       } catch (err) {
         throw new Error(
-          `Failed to create static page for slug "${pageSlug}": ${errorMessage(err)}`,
+          `Failed to create static page for slug "${pageSlug}": ${safeErrorMessage(err)}`,
         );
       }
 
@@ -2071,7 +2067,6 @@ fi`;
    */
   async checkSlug(slug: string, domain = "opsh.io"): Promise<{ available: boolean; url: string }> {
     const result = await this.client.domain.checkSlug({ slug, domain });
-    console.log("Slug check result:", result);
     return { available: result.available, url: result.url };
   }
 
@@ -2128,7 +2123,7 @@ fi`;
         );
         return { code: 0, output };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = safeErrorMessage(err);
         return { code: 1, output: output || message };
       }
     };

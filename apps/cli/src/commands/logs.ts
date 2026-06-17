@@ -1,9 +1,12 @@
 import { Command } from "commander";
 
 export const logsCommand = new Command("logs")
-  .description("Stream deployment logs")
+  .description("Stream deployment logs (coming soon)")
   .argument("[deploymentId]", "Deployment ID (defaults to latest)")
-  .action(async (deploymentId?: string) => {
-    // TODO: Connect to API and stream logs
-    console.log(`Streaming logs for ${deploymentId || "latest deployment"}...`);
+  .action(() => {
+    console.error(
+      "openship logs is not yet implemented. " +
+        "View deployment logs in the dashboard for now.",
+    );
+    process.exit(1);
   });

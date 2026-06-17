@@ -26,6 +26,7 @@
 
 import type { CommandExecutor } from "@repo/adapters";
 import { sshManager } from "../../../lib/ssh-manager";
+import { safeErrorMessage } from "@repo/core";
 
 /**
  * Quote a value as a PostgreSQL string literal. Escapes embedded single
@@ -107,7 +108,7 @@ export async function queryRows<T>(
   } catch (err) {
     throw new Error(
       `Failed to parse psql output as JSON: ${
-        err instanceof Error ? err.message : String(err)
+        safeErrorMessage(err)
       }\nOutput head: ${trimmed.slice(0, 200)}`,
     );
   }

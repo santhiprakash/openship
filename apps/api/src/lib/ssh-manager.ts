@@ -37,6 +37,7 @@ import {
 import { formatDuration, systemDebug } from "@/lib/system-debug";
 import { decryptSecretField } from "@/lib/credential-encryption";
 import { resolveSafeSshKeyPath } from "@/lib/ssh-key-path";
+import { safeErrorMessage } from "@repo/core";
 
 // ─── Shared SSH config builder ───────────────────────────────────────────────
 
@@ -70,8 +71,7 @@ export async function buildSshConfig(
 
   if (settings.sshAuthMethod === "password" && settings.sshPassword) {
     // Stored encrypted on insert; decrypted only here at the moment we
-    // hand it to the ssh2 client. Backwards-compatible: tolerates plaintext
-    // legacy rows so existing installs keep working through one restart.
+    // hand it to the ssh2 client.
     config.password = decryptSecretField(settings.sshPassword);
   } else if (settings.sshAuthMethod === "key" && settings.sshKeyPath) {
     // Centralised allowlist + traversal check — see lib/ssh-key-path.ts.
@@ -172,7 +172,7 @@ export class SshConnectionManager {
       debugSsh(`acquire:executor-ready server=${serverId} (${formatDuration(startedAt)})`);
       return exec;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = safeErrorMessage(err);
       debugSsh(`acquire:failed server=${serverId} (${formatDuration(startedAt)}) ${msg}`);
       throw err;
     } finally {
@@ -199,7 +199,7 @@ export class SshConnectionManager {
       return result;
     } catch (err) {
       if (isRetryableRemoteConnectionError(err)) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = safeErrorMessage(err);
         debugSsh(`withExecutor:retry-after-connection-error server=${serverId} ${msg}`);
         this.dropServer(serverId);
         const freshExecutor = await this.acquire(serverId);
@@ -207,7 +207,7 @@ export class SshConnectionManager {
         debugSsh(`withExecutor:retry-done server=${serverId} (${formatDuration(startedAt)})`);
         return result;
       }
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = safeErrorMessage(err);
       debugSsh(`withExecutor:failed server=${serverId} (${formatDuration(startedAt)}) ${msg}`);
       throw err;
     }

@@ -25,7 +25,7 @@ export const ProjectIdentity: React.FC = () => {
 
   const handleSaveName = async () => {
     setLoading({ ...loading, name: true });
-    const response = await projectsApi.update(projectData.id, 'name', tempData.name);
+    const response = await projectsApi.update(projectData.id, { name: tempData.name });
     if (response.success) {
       updateProjectData({ name: tempData.name });
       setIsEditingName(false);
@@ -36,7 +36,7 @@ export const ProjectIdentity: React.FC = () => {
   };
 
   const handleSaveDescription = async () => {
-    const response = await projectsApi.update(projectData.id, 'description', tempData.description);
+    const response = await projectsApi.update(projectData.id, { description: tempData.description });
     if (response.success) {
       updateProjectData({ description: tempData.description });
       setIsEditingDescription(false);

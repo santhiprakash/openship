@@ -6,9 +6,11 @@ import {
   integer,
   jsonb,
   uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import { user } from "./auth";
+import { organization } from "./organization";
+import { service } from "./service";
 
 // ─── Project apps ────────────────────────────────────────────────────────────
 
@@ -21,9 +23,11 @@ import { user } from "./auth";
  */
 export const projectApp = pgTable("project_app", {
   id: text("id").primaryKey(), // "app_..."
-  userId: text("user_id")
+  /** Org that owns this app — THE access primitive. Creator info lives
+   *  in audit_event (event_type='project.create'). */
+  organizationId: text("organization_id")
     .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
+    .references(() => organization.id, { onDelete: "cascade" }),
 
   /** Display name shared by all environments */
   name: text("name").notNull(),
@@ -57,9 +61,11 @@ export const project = pgTable(
   "project",
   {
     id: text("id").primaryKey(), // "proj_..."
-    userId: text("user_id")
+    /** Org that owns this project — THE access primitive. Creator info
+     *  lives in audit_event (event_type='project.create'). */
+    organizationId: text("organization_id")
       .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
+      .references(() => organization.id, { onDelete: "cascade" }),
     appId: text("app_id")
       .notNull()
       .references(() => projectApp.id, { onDelete: "cascade" }),
@@ -205,7 +211,7 @@ export const envVar = pgTable("env_var", {
     .notNull()
     .references(() => project.id, { onDelete: "cascade" }),
   /** Service ID for service-scoped env vars (null = project-level / all services) */
-  serviceId: text("service_id"),
+  serviceId: text("service_id").references(() => service.id, { onDelete: "cascade" }),
 
   /** Variable key (e.g. "DATABASE_URL") */
   key: text("key").notNull(),
@@ -219,4 +225,10 @@ export const envVar = pgTable("env_var", {
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (t) => [
+  // Env resolution runs on every build — covers project + service +
+  // environment filtering used by buildPipelineEnv.
+  index("idx_env_var_project_env_service").on(t.projectId, t.environment, t.serviceId),
+  // Backup / restore reads all vars for a project.
+  index("idx_env_var_project").on(t.projectId),
+]);

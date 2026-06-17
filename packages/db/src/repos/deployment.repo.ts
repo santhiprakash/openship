@@ -1,4 +1,4 @@
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { generateId } from "@repo/core";
 import type { Database } from "../client";
 import { deployment, buildSession } from "../schema";
@@ -50,8 +50,12 @@ export function createDeploymentRepo(db: Database) {
       return { rows, total: Number(total), page, perPage };
     },
 
-    async listByUser(
-      userId: string,
+    // listByUser removed — use listByOrganization. deployment.user_id
+    // is gone; access is org-only.
+
+    /** Org-scoped list — every deployment for the active org. */
+    async listByOrganization(
+      organizationId: string,
       opts?: { page?: number; perPage?: number },
     ) {
       const page = opts?.page ?? 1;
@@ -59,7 +63,7 @@ export function createDeploymentRepo(db: Database) {
       const offset = (page - 1) * perPage;
 
       const rows = await db.query.deployment.findMany({
-        where: eq(deployment.userId, userId),
+        where: eq(deployment.organizationId, organizationId),
         orderBy: [desc(deployment.createdAt)],
         limit: perPage,
         offset,
@@ -68,7 +72,7 @@ export function createDeploymentRepo(db: Database) {
       const [{ value: total }] = await db
         .select({ value: sql<number>`count(*)` })
         .from(deployment)
-        .where(eq(deployment.userId, userId));
+        .where(eq(deployment.organizationId, organizationId));
 
       return { rows, total: Number(total), page, perPage };
     },
@@ -100,6 +104,40 @@ export function createDeploymentRepo(db: Database) {
         where: eq(deployment.projectId, projectId),
         orderBy: [desc(deployment.createdAt)],
       });
+    },
+
+    /**
+     * Batch variant of findLatestByProject — one SQL round trip for
+     * N projects. Used by getHome to eliminate the N+1.
+     *
+     * Strategy: fetch all rows for the project set, then pick the
+     * newest per project in JS. Simpler than DISTINCT ON across
+     * drivers (pg, pglite) and correct because the project filter
+     * keeps the set small.
+     */
+    async findLatestByProjects(projectIds: string[]): Promise<Map<string, Deployment>> {
+      if (projectIds.length === 0) return new Map();
+      const rows = await db.query.deployment.findMany({
+        where: inArray(deployment.projectId, projectIds),
+        orderBy: [desc(deployment.createdAt)],
+      });
+      const out = new Map<string, Deployment>();
+      for (const row of rows) {
+        if (!out.has(row.projectId)) out.set(row.projectId, row);
+      }
+      return out;
+    },
+
+    /** Bulk lookup by id — used by enrichProject batching. */
+    async findManyById(ids: string[]): Promise<Map<string, Deployment>> {
+      if (ids.length === 0) return new Map();
+      const rows = await db
+        .select()
+        .from(deployment)
+        .where(inArray(deployment.id, ids));
+      const out = new Map<string, Deployment>();
+      for (const row of rows) out.set(row.id, row);
+      return out;
     },
 
     /** Find the most recent successful deployment for rollback */

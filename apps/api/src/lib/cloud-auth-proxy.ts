@@ -13,7 +13,9 @@
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { db, schema, repos, eq } from "@repo/db";
 import { encrypt } from "./encryption";
+import { provisionUser } from "./provision-user";
 import { cloudRuntimeTarget, env } from "../config/env";
+import { safeErrorMessage } from "@repo/core";
 
 export interface CloudUser {
   id: string;
@@ -34,7 +36,7 @@ async function mirrorCloudUser(cloudUser: CloudUser): Promise<string> {
   const existing = await repos.user.findByEmail(cloudUser.email);
 
   if (existing) {
-    // Update name/image if changed
+    // Keep the mirror in sync with cloud-side identity changes.
     await db
       .update(schema.user)
       .set({
@@ -43,18 +45,20 @@ async function mirrorCloudUser(cloudUser: CloudUser): Promise<string> {
         emailVerified: true,
       })
       .where(eq(schema.user.email, cloudUser.email));
-    return existing.id;
   }
 
-  // Create new local user - use a deterministic ID so cloud user maps 1:1
-  const id = cloudUser.id;
-  await db.insert(schema.user).values({
+  // Provision (idempotent) handles user insert + personal org + owner
+  // membership atomically. For existing users it's a no-op on the
+  // identity row; for new users it inserts everything in one
+  // transaction.
+  const id = existing?.id ?? cloudUser.id;
+  await provisionUser({
     id,
     name: cloudUser.name,
     email: cloudUser.email,
     emailVerified: true,
     role: "admin",
-    autoProvisioned: false,
+    image: cloudUser.image,
   });
 
   return id;
@@ -228,7 +232,7 @@ async function exchangeCodeWithCloud(
     // connect popup says "Connection Failed".
     console.error(
       `[cloud-auth] exchange-code fetch failed: ${url} — ${
-        err instanceof Error ? err.message : String(err)
+        safeErrorMessage(err)
       }`,
     );
     return null;
@@ -257,7 +261,7 @@ async function exchangeCodeWithCloud(
   } catch (err) {
     console.error(
       `[cloud-auth] exchange-code JSON parse failed: ${
-        err instanceof Error ? err.message : String(err)
+        safeErrorMessage(err)
       }`,
     );
     return null;

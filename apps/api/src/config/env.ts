@@ -47,6 +47,22 @@ const envSchema = z.object({
   /* ---------- Auth (Better Auth) ---------- */
   BETTER_AUTH_SECRET: z.string().min(1).default(DEFAULT_BETTER_AUTH_SECRET),
   BETTER_AUTH_COOKIE_DOMAIN: z.string().optional(),
+  /**
+   * Cloud-session IP/UA pinning policy. Applied by cloudSessionAuth
+   * middleware when a local instance presents a cloud_session_token.
+   *
+   *   - "off"  (default) → log mismatches as warnings, allow the request.
+   *                        Friendly to mobile carriers/VPN switches.
+   *   - "warn"           → same as "off" but also emits an audit log
+   *                        entry per mismatch (for SOC review).
+   *   - "strict"         → 401 on IP OR User-Agent mismatch with the
+   *                        IP/UA stored when the session was created.
+   *                        Higher security, may break legit users that
+   *                        change network/device.
+   */
+  CLOUD_SESSION_PINNING: z
+    .enum(["off", "warn", "strict"])
+    .default("warn"),
 
   /* ---------- OAuth Providers ---------- */
   GITHUB_CLIENT_ID: z.string().optional(),
@@ -76,7 +92,7 @@ const envSchema = z.object({
 
   /* ---------- GitHub App ---------- */
   GITHUB_APP_ID: z.string().optional(),
-  GITHUB_APP_SLUG: z.string().optional(),
+  GITHUB_APP_SLUG: z.string().default("openship-io"),
   /** PEM private key - raw multi-line string */
   GITHUB_PRIVATE_KEY: z.string().optional(),
   /** PEM private key - base64-encoded (single-line, for env vars) */
@@ -289,11 +305,14 @@ validateProductionConfig(env, runtimeTarget);
 // effect but suggests the operator hasn't seen the new flow — warn so they
 // know they can clean up their .env.
 if (!env.CLOUD_MODE) {
+  // GITHUB_APP_SLUG is intentionally NOT in this list — it IS consumed
+  // on self-hosted (by getInstallUrl in github.auth.ts to build the
+  // install link the dashboard shows). The other vars are App-private
+  // credentials that have moved to api.openship.io exclusively.
   const stale = [
     env.GITHUB_APP_ID && "GITHUB_APP_ID",
     (env.GITHUB_PRIVATE_KEY || env.GITHUB_PRIVATE_KEY_BASE64) && "GITHUB_PRIVATE_KEY",
     env.GITHUB_WEBHOOK_SECRET && "GITHUB_WEBHOOK_SECRET",
-    env.GITHUB_APP_SLUG && "GITHUB_APP_SLUG",
   ].filter(Boolean);
   if (stale.length > 0) {
     console.warn(
