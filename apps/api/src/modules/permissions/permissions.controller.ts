@@ -595,26 +595,13 @@ export async function listInvitations(c: Context) {
  * affect access (the permission resolver short-circuits non-restricted
  * roles before consulting grants). Kept for forward-compat.
  *
- * Gated on org.isTeam=true: personal workspaces refuse invites
- * entirely. The dashboard hides the invite button on personal orgs,
- * but the server enforces the rule too.
+ * Any organization may invite — personal AND team. `is_team` now only labels
+ * the workspace; it no longer gates invites (creating a team org is optional).
  */
 export async function inviteWithGrants(c: Context) {
   const ctx = getRequestContext(c);
   const organizationId = ctx.organizationId;
   const actorUserId = ctx.userId;
-
-  const isTeam = await repos.organization.isTeam(organizationId);
-  if (!isTeam) {
-    return c.json(
-      {
-        error:
-          "This is a personal workspace. Create a team organization first to invite members.",
-        code: "PERSONAL_ORG_NO_INVITE",
-      },
-      403,
-    );
-  }
 
   type InviteGrant = {
     resourceType: ResourceType;

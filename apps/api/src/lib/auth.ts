@@ -367,25 +367,17 @@ export const auth = betterAuth({
        */
       organizationHooks: {
         beforeCreateInvitation: async ({ invitation, inviter }) => {
-          // Team-org gate. Personal workspaces (is_team=false) cannot
-          // invite anyone, regardless of whether the request came via
-          // /invite-with-grants or the raw Better Auth inviteMember
-          // endpoint. Hard-fail on missing orgId so a future code path
-          // calling the plugin without organization context can't
-          // silently bypass the gate.
+          // Any organization — personal OR team — may invite members. The
+          // is_team flag now only LABELS the workspace (a user's auto-created
+          // personal workspace vs a separately-created team org); it no longer
+          // gates invites. A user can share their personal workspace directly,
+          // and creating a team org stays an optional, separate path. We still
+          // require an orgId so every invitation is org-scoped.
           const orgId = invitation.organizationId;
           if (!orgId) {
             throw new APIError("BAD_REQUEST", {
               message: "organizationId is required to create an invitation",
               code: "INVITE_MISSING_ORG",
-            });
-          }
-          const isTeam = await repos.organization.isTeam(orgId);
-          if (!isTeam) {
-            throw new APIError("FORBIDDEN", {
-              message:
-                "This is a personal workspace. Create a team organization first to invite members.",
-              code: "PERSONAL_ORG_NO_INVITE",
             });
           }
 

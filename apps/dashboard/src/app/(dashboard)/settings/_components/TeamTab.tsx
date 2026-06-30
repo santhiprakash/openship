@@ -418,7 +418,6 @@ export function TeamTab() {
   // server would reject with "you are not allowed to invite".
   const orgKind: "loading" | "personal" | "team" =
     orgMeta === null ? "loading" : orgMeta.isTeam ? "team" : "personal";
-  const isTeamOrg = orgKind === "team";
   const isPersonalOrg = orgKind === "personal";
 
   // Team-workspace migration card: surfaced ONLY to the owner on
@@ -438,11 +437,11 @@ export function TeamTab() {
           </h2>
           <p className="text-sm text-muted-foreground mt-1">
             {isPersonalOrg
-              ? "This is your personal workspace. Create a team organization to invite collaborators."
+              ? "People with access to your personal workspace. Invite collaborators directly, or create a separate team organization."
               : "People with access to this organization's projects, deployments, and servers."}
           </p>
         </div>
-        {isAdminOrOwner && isTeamOrg && (
+        {isAdminOrOwner && (
           <button
             type="button"
             onClick={() => setInviteOpen(true)}
@@ -468,9 +467,9 @@ export function TeamTab() {
               <Sparkles className="size-3.5 text-primary" />
             </h3>
             <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-              Personal workspaces are for solo use. To invite teammates,
-              create a separate team organization — your personal projects
-              and team projects stay isolated.
+              You can invite collaborators to this workspace directly. Prefer a
+              separate shared space instead? Create a team organization — it
+              stays isolated from your personal projects.
             </p>
           </div>
           <button
