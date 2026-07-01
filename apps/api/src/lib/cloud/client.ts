@@ -349,6 +349,14 @@ export function cloudClient(scope: CloudClientScope): CloudClient {
       });
     },
 
+    async teardownProject(input) {
+      return postCloud<Record<string, never>>({
+        path: "/api/cloud/teardown-project",
+        body: input,
+        errorLabel: "Cloud project teardown",
+      });
+    },
+
     async token() {
       const userId = await resolveUserId();
       if (!userId) return null;

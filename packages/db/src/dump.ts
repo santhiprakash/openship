@@ -24,7 +24,7 @@
  * NOT a backup tool. Use the existing backup module for that.
  */
 
-import { sql, eq, inArray } from "drizzle-orm";
+import { sql, eq, inArray, getTableColumns } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { db, getDriver } from "./client";
 import * as schema from "./schema";
@@ -57,11 +57,11 @@ export interface DatabaseDump {
 }
 
 /**
- * Thrown by restoreSubgraph when an INSERT hits a duplicate-key
- * constraint (Postgres unique_violation, code 23505). Callers
- * map this to a friendly 409 — typically "this row already exists
- * on the target" (the operator already transferred this project,
- * or a slug collides).
+ * Thrown by restoreSubgraph when an INSERT hits a unique-constraint
+ * violation (Postgres unique_violation, code 23505 — a duplicate PK OR
+ * a duplicate unique column such as domain.hostname). Callers map this
+ * to a friendly 409 — "this row already exists on the target" (the
+ * operator already transferred this project, or a hostname collides).
  */
 export class PkCollisionError extends Error {
   readonly code = "PK_COLLISION" as const;
@@ -71,10 +71,28 @@ export class PkCollisionError extends Error {
   ) {
     const causeMessage = cause instanceof Error ? cause.message : String(cause);
     super(
-      `Duplicate primary key on ${table} during restore — this subgraph appears to already exist on the target. (${causeMessage})`,
+      `Duplicate key on ${table} during restore — this subgraph appears to already exist on the target. (${causeMessage})`,
     );
     this.name = "PkCollisionError";
   }
+}
+
+/**
+ * Extract the underlying Postgres driver error (with its `.code`) from a
+ * thrown error. Drizzle wraps the driver error in a `DrizzleQueryError`, so
+ * the pg code (e.g. 23505 = unique_violation) lives on `.cause`, not the
+ * top level. Walk the cause chain (bounded) and return the first link that
+ * carries a string `code`.
+ */
+function resolvePgError(err: unknown): (Error & { code?: string }) | null {
+  let e: unknown = err;
+  for (let i = 0; i < 6 && e && typeof e === "object"; i++) {
+    if (typeof (e as { code?: unknown }).code === "string") {
+      return e as Error & { code?: string };
+    }
+    e = (e as { cause?: unknown }).cause;
+  }
+  return null;
 }
 
 // ─── Table catalogue ─────────────────────────────────────────────────────────
@@ -548,6 +566,17 @@ export async function restoreSubgraph(
       // clone needs to deepen — otherwise the redaction would mutate the
       // caller's input object.
       const encryptedCols = encryptedByTable.get(spec.sqlName);
+
+      // Timestamp/date columns arrive as ISO strings whenever the dump crossed
+      // the wire as JSON (cloud ingest, project transfer) — JSON.stringify turns
+      // a Date into a string, and Drizzle's timestamp mapToDriverValue then calls
+      // `.toISOString()` on it and throws. Revive them to Date before insert.
+      // (In-process restores keep real Dates and skip the `typeof === string`
+      // branch, so this is a no-op there.)
+      const dateCols = Object.entries(getTableColumns(spec.table))
+        .filter(([, col]) => (col as { dataType?: string }).dataType === "date")
+        .map(([name]) => name);
+
       const prepared = rows.map((r) => {
         const next: Record<string, unknown> = { ...r };
         if (opts.remapOrgId && spec.hasOrganizationId) {
@@ -556,27 +585,79 @@ export async function restoreSubgraph(
         if (encryptedCols) {
           for (const col of encryptedCols) next[col] = null;
         }
+        for (const col of dateCols) {
+          if (typeof next[col] === "string") next[col] = new Date(next[col] as string);
+        }
         return next;
       });
 
+      // Shared parents (e.g. project_app, which owns many project environments
+      // via the `from-root-project` resolver) may already exist on the target
+      // — a re-promote re-supplies the same row, and inserting it again is a
+      // no-op, not a conflict. Skip on conflict for those; every other table
+      // keeps strict insert so a real collision still surfaces as PkCollision.
+      const isSharedParent = spec.scopes.some((s) => s.via === "from-root-project");
+
       try {
-        await tx.insert(spec.table).values(prepared as never);
+        if (isSharedParent) {
+          await tx.insert(spec.table).values(prepared as never).onConflictDoNothing();
+        } else {
+          await tx.insert(spec.table).values(prepared as never);
+        }
       } catch (err) {
         // PostgreSQL unique_violation = 23505 (PGlite mirrors this).
         // Surface as a typed error so callers (project transfer wizard,
         // cloud ingest) can distinguish "this row already exists on the
-        // target" from a real server fault.
-        if (
-          err &&
-          typeof err === "object" &&
-          "code" in err &&
-          (err as { code?: unknown }).code === "23505"
-        ) {
-          throw new PkCollisionError(spec.sqlName, err);
+        // target" from a real server fault. The code lives on the driver
+        // error, which Drizzle wraps — resolve it through the cause chain.
+        const pg = resolvePgError(err);
+        if (pg?.code === "23505") {
+          throw new PkCollisionError(spec.sqlName, pg);
         }
         throw err;
       }
     }
+  });
+}
+
+/**
+ * Delete a project's rows in child→parent FK order, inside one transaction.
+ *
+ * Scope note: this deletes every project-owned table INCLUDING `backup_policy`,
+ * which a project-scope *dump* deliberately does NOT carry (backup tables FK to
+ * the org-shared `backup_destination`). So on a bring-home wipe→restore cycle
+ * the project's backup schedules are dropped and NOT re-created — the operator
+ * re-binds a destination + re-creates schedules on the new host. This matches
+ * the original inline bring-home wipe (behaviour preserved by the extraction).
+ *
+ * Deliberately does NOT touch `project_app`: that parent is shared across a
+ * project's environments (many `project` rows → one app), so a project delete
+ * must leave it, and `restoreSubgraph` re-inserts it idempotently.
+ *
+ * Single source of truth for "wipe one project's rows", used by the local
+ * bring-home transfer AND the SaaS-side cloud teardown.
+ */
+export async function deleteProjectSubgraph(projectId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    // Resolve deployment ids first so service_deployment (FK → deployment) goes first.
+    const deploymentRows = await tx
+      .select({ id: schema.deployment.id })
+      .from(schema.deployment)
+      .where(eq(schema.deployment.projectId, projectId));
+    const deploymentIds = deploymentRows.map((r) => r.id);
+    if (deploymentIds.length > 0) {
+      await tx
+        .delete(schema.serviceDeployment)
+        .where(inArray(schema.serviceDeployment.deploymentId, deploymentIds));
+    }
+
+    // Children before parents.
+    await tx.delete(schema.service).where(eq(schema.service.projectId, projectId));
+    await tx.delete(schema.domain).where(eq(schema.domain.projectId, projectId));
+    await tx.delete(schema.envVar).where(eq(schema.envVar.projectId, projectId));
+    await tx.delete(schema.backupPolicy).where(eq(schema.backupPolicy.projectId, projectId));
+    await tx.delete(schema.deployment).where(eq(schema.deployment.projectId, projectId));
+    await tx.delete(schema.project).where(eq(schema.project.id, projectId));
   });
 }
 

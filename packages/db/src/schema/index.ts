@@ -18,6 +18,7 @@ export { serverAnalytics, serverAnalyticsGeo } from "./analytics";
 export { terminalSessions } from "./terminal-sessions";
 export { serviceTerminalSessions } from "./service-terminal-sessions";
 export { cloudHandoffCode } from "./cloud-handoff-code";
+export { personalAccessToken } from "./personal-access-token";
 export {
   backupDestination,
   backupPolicy,

@@ -19,15 +19,19 @@ const BuildSummary: React.FC = () => {
 
   const services = config.services || [];
   const exposedServices = services.filter((s) => s.exposed);
-  const buildLocation = config.deployTarget === "cloud"
+  // Build location follows buildStrategy FIRST: a "local" build runs on this
+  // machine even when the deploy target is Openship Cloud (local-orchestrated
+  // cloud — build here, upload the output to the cloud workspace). Only a
+  // SERVER build takes the target's name ("Openship Cloud" vs generic "Server").
+  const buildLocation = config.buildStrategy === "local"
     ? {
-        label: "Openship Cloud",
-        icon: <Cloud className="size-3.5 text-muted-foreground" />,
+        label: "Local Machine",
+        icon: <Monitor className="size-3.5 text-muted-foreground" />,
       }
-    : config.buildStrategy === "local"
+    : config.deployTarget === "cloud"
       ? {
-          label: "Local Machine",
-          icon: <Monitor className="size-3.5 text-muted-foreground" />,
+          label: "Openship Cloud",
+          icon: <Cloud className="size-3.5 text-muted-foreground" />,
         }
       : {
           label: "Server",

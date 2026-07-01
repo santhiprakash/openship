@@ -1,69 +1,42 @@
-import { docsSource, type DocFrontmatter } from "@/lib/source";
-import { DocsPage, DocsBody } from "fumadocs-ui/page";
+import { docsSource } from "@/lib/source";
+import { getMDXComponents } from "@/mdx-components";
+import {
+  DocsPage,
+  DocsBody,
+  DocsTitle,
+  DocsDescription,
+} from "fumadocs-ui/page";
 import { notFound } from "next/navigation";
+import type { ComponentType } from "react";
+import type { MDXComponents } from "mdx/types";
 import type { Metadata } from "next";
 
-type Params = Promise<{ slug?: string[] }>;
-type DPage = { url: string; data: DocFrontmatter };
+type PageProps = { params: Promise<{ slug?: string[] }> };
 
-export async function generateMetadata({
-  params,
-}: {
-  params: Params;
-}): Promise<Metadata> {
+// The loader's base PageData type doesn't statically expose the MDX body/toc,
+// so narrow it to the doc shape (toc type derived from DocsPage itself).
+type DocData = {
+  title: string;
+  description?: string;
+  full?: boolean;
+  body: ComponentType<{ components?: MDXComponents }>;
+  toc: Parameters<typeof DocsPage>[0]["toc"];
+};
+
+export default async function Page({ params }: PageProps) {
   const { slug } = await params;
-  const rawPage = docsSource.getPage(slug);
-  if (!rawPage) return {};
-  const page = rawPage as unknown as DPage;
+  const page = docsSource.getPage(slug);
+  if (!page) notFound();
 
-  const title = `${page.data.title} – Openship Docs`;
-  const description = page.data.description ?? "Openship documentation";
-
-  return {
-    title,
-    description,
-    openGraph: {
-      title,
-      description,
-      url: page.url,
-      siteName: "Openship",
-      type: "article",
-    },
-    twitter: {
-      card: "summary_large_image",
-      title,
-      description,
-    },
-    alternates: {
-      canonical: page.url,
-    },
-  };
-}
-
-export default async function Page({ params }: { params: Params }) {
-  const { slug } = await params;
-  const rawPage = docsSource.getPage(slug);
-  if (!rawPage) notFound();
-  const page = rawPage as unknown as DPage;
-
-  const MDXContent = page.data.body;
+  const data = page.data as DocData;
+  const MDX = data.body;
 
   return (
-    <DocsPage
-      toc={page.data.toc as never}
-      tableOfContent={{
-        style: "clerk",
-        single: false,
-      }}
-    >
+    <DocsPage toc={data.toc} full={data.full}>
+      <DocsTitle>{data.title}</DocsTitle>
+      <DocsDescription>{data.description}</DocsDescription>
       <DocsBody>
-        <h1 className="text-3xl font-bold tracking-tight">{page.data.title}</h1>
-        {page.data.description && (
-          <p className="mt-2 text-lg text-fd-muted-foreground">
-            {page.data.description}
-          </p>
-        )}
-        <MDXContent />
+        <MDX components={getMDXComponents()} />
       </DocsBody>
     </DocsPage>
   );
@@ -71,4 +44,22 @@ export default async function Page({ params }: { params: Params }) {
 
 export function generateStaticParams() {
   return docsSource.generateParams();
+}
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { slug } = await params;
+  const page = docsSource.getPage(slug);
+  if (!page) notFound();
+
+  const data = page.data as DocData;
+  const title = `${data.title} – Openship Docs`;
+  const description = data.description;
+
+  return {
+    title,
+    description,
+    openGraph: { title, description, url: page.url, siteName: "Openship", type: "article" },
+    twitter: { card: "summary_large_image", title, description },
+    alternates: { canonical: page.url },
+  };
 }

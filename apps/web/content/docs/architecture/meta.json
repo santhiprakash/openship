@@ -1,0 +1,4 @@
+{
+  "title": "Architecture",
+  "pages": ["overview", "cloud-as-source", "runtime-model", "data-ownership"]
+}

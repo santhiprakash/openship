@@ -1,0 +1,23 @@
+---
+title: Permission model
+description: Roles, resource grants, and the single permission plane every request passes through.
+---
+
+Access in Openship is decided by one resolver — the permission plane — that every API route runs through. There is no bypass: routes declare a permission tag, and a boot-time scanner refuses to start if any route lacks one.
+
+## Roles
+
+Membership is per-organization, with four roles:
+
+- **owner** — full access, including billing.
+- **admin** — everything except billing.
+- **member** — read/write on org resources; never billing or audit.
+- **restricted** — zero access by default; only the specific resources granted to them.
+
+## Resource grants
+
+A `restricted` member is given explicit grants (read / write / admin) on specific projects. Grants inherit down a resource's tree — a project grant covers its deployments, domains, and environment variables.
+
+## IDOR-safe by default
+
+Denied access returns **404, not 403**, so the platform never confirms the existence of a resource you aren't allowed to see.

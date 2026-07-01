@@ -1,0 +1,21 @@
+---
+title: Data ownership
+description: Exactly what lives where — self-hosted database vs. Openship Cloud — and how projects move between them.
+---
+
+Openship is explicit about where each piece of data lives, because that's what makes both self-hosting and the cloud trustworthy.
+
+## Self-hosted is sovereign
+
+Local and server projects — and all of their deployments, domains, environment variables, and logs — live only in your instance's database. Nothing is sent to Openship Cloud for these projects. If you never connect a cloud account, your instance is fully standalone.
+
+## Cloud projects live on the cloud
+
+Cloud projects are canonical on Openship Cloud. Your instance holds no shadow copy; it reads and writes them through the gateway. See [Cloud-as-source](/docs/architecture/cloud-as-source).
+
+## Moving a project
+
+- **Promote** (local → cloud): the project's data is copied to the cloud, then the local rows are removed.
+- **Bring home** (cloud → local): the reverse.
+
+A project is always in exactly one place, so there is never a divergent copy to reconcile.

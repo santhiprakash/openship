@@ -1,0 +1,18 @@
+---
+title: The local ↔ cloud boundary
+description: How self-hosted instances talk to Openship Cloud without leaking data across the boundary.
+---
+
+When a self-hosted instance is connected to Openship Cloud, the two are kept cleanly separated: the local instance is the single control/permission plane, and the cloud is the upstream authority for cloud-owned projects.
+
+## One gateway, one identity
+
+All cloud-project traffic flows through one gateway module and travels as the organization **owner's** cloud session. Only requests that pass the local permission plane reach the cloud — there is no path to the cloud backend that bypasses local access control.
+
+## No identity leaks
+
+Proxied requests forward only the method, path, and body — never local session cookies or the local organization id. The cloud resolves the organization from the owner's bearer token, so a local identifier can't be smuggled upstream.
+
+## No hybrids
+
+A cloud project has no local row and a local project never runs on cloud compute, so a local bug or flow cannot reach into cloud-owned data. Cloud sessions are encrypted at rest on the instance and never exposed to the browser.

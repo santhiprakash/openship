@@ -1,0 +1,24 @@
+---
+title: Runtime model
+description: How a deployment actually runs — Docker, bare process, or cloud — and how the target is chosen.
+---
+
+Every deployment resolves to a concrete runtime through a single authority, so preflight and the build pipeline always agree.
+
+## Isolation modes
+
+Self-hosted deployments run in one of two isolation modes:
+
+- **Docker** — the app runs in a container (default for servers with enough memory).
+- **Bare** — the app runs as a direct process (lighter, for small machines / desktop).
+
+The mode is a per-project default, overridable per deploy.
+
+## Routing & SSL
+
+- **Self-hosted** uses OpenResty (nginx) for routing and certbot for Let's Encrypt certificates.
+- **Cloud** delegates routing, TLS, and static hosting to Openship Cloud's edge.
+
+## Cloud compute
+
+A `cloud` deployment runs entirely on Openship Cloud. A self-hosted instance never runs the cloud pipeline locally — cloud deploys are proxied to the SaaS. The only local participation is the optional "build locally, upload the artifact" path.

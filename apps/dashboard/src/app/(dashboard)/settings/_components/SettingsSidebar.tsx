@@ -16,11 +16,11 @@
  */
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { Settings as SettingsIcon, Users, ClipboardList, Cloud, Server, Bell } from "lucide-react";
+import { Settings as SettingsIcon, Users, ClipboardList, Cloud, Server, Bell, KeyRound, Boxes } from "lucide-react";
 import { usePlatform } from "@/context/PlatformContext";
 import { useSession, authClient } from "@/lib/auth-client";
 
-export type SettingsTabId = "general" | "team" | "notifications" | "audit" | "cloud" | "instance";
+export type SettingsTabId = "general" | "tokens" | "mcp" | "team" | "notifications" | "audit" | "cloud" | "instance";
 
 export interface SettingsTab {
   id: SettingsTabId;
@@ -36,11 +36,13 @@ export function useSettingsTabs(): { tabs: SettingsTab[]; activeTab: SettingsTab
   const { selfHosted } = usePlatform();
   const searchParams = useSearchParams();
   const raw = (searchParams.get("tab") ?? "general") as SettingsTabId;
-  const allowedTabs: SettingsTabId[] = ["general", "team", "notifications", "audit", "cloud", "instance"];
+  const allowedTabs: SettingsTabId[] = ["general", "tokens", "mcp", "team", "notifications", "audit", "cloud", "instance"];
   const activeTab: SettingsTabId = allowedTabs.includes(raw) ? raw : "general";
 
   const tabs: SettingsTab[] = [
     { id: "general", label: "General", icon: SettingsIcon, visible: true },
+    { id: "tokens", label: "Tokens", icon: KeyRound, visible: true },
+    { id: "mcp", label: "MCP", icon: Boxes, visible: true },
     { id: "team", label: "Team", icon: Users, visible: true },
     { id: "notifications", label: "Notifications", icon: Bell, visible: true },
     { id: "audit", label: "Audit log", icon: ClipboardList, visible: true, requiresRole: "admin" },

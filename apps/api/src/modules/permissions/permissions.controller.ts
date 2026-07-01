@@ -21,6 +21,9 @@ import { audit, auditContextFrom } from "../../lib/audit";
 import { auth } from "../../lib/auth";
 import { resolveOrgOwner } from "../../lib/org-actor";
 import { createGitHubSource } from "../github/sources";
+import { fetchOrgCloudProjects } from "../../lib/cloud/projects";
+import { resolveOrgCloudUserId } from "../../lib/cloud/transport";
+import { env } from "../../config";
 
 // ─── Constants + helpers ────────────────────────────────────────────────────
 
@@ -64,7 +67,14 @@ async function resourceBelongsToOrg(
     switch (type) {
       case "project": {
         const row = await repos.project.findById(id);
-        return row?.organizationId === organizationId;
+        if (row) return row.organizationId === organizationId;
+        // No local row → may be a CLOUD project (canonical on the SaaS).
+        // Accept when NOT on the SaaS and the org is cloud-linked; the SaaS /
+        // proxy stays the authoritative existence gate. Mirrors the permission
+        // resolver's cloud fallback.
+        if (env.CLOUD_MODE) return false;
+        const linked = await resolveOrgCloudUserId(organizationId).catch(() => null);
+        return !!linked;
       }
       case "server":
       case "mail_server": {
@@ -133,16 +143,36 @@ export async function listResources(c: Context) {
   }
 
   if (type === "project") {
-    const rows = await repos.project
+    const localRes = await repos.project
       .listByOrganization(organizationId, { page: 1, perPage: 200 })
       .catch(() => ({ rows: [] as Array<{ id: string; name: string; slug?: string | null }> }));
-    return c.json({
-      data: (rows.rows ?? []).map((p) => ({
+    const localRows = localRes.rows ?? [];
+    const localIds = new Set(localRows.map((p) => p.id));
+    const data: Array<{ id: string; label: string; meta?: Record<string, unknown> }> =
+      localRows.map((p) => ({
         id: p.id,
         label: p.name || p.slug || p.id,
         meta: p.slug ? { slug: p.slug } : undefined,
-      })),
-    });
+      }));
+
+    // Cloud projects (proxied as the org owner) are grantable too — a
+    // restricted member can be scoped to a specific cloud project from local.
+    const cloud = await fetchOrgCloudProjects(organizationId);
+    if (cloud.state === "merged") {
+      for (const p of cloud.projects) {
+        const id = typeof p.id === "string" ? p.id : "";
+        if (!id || localIds.has(id)) continue;
+        const name = typeof p.name === "string" ? p.name : "";
+        const slug = typeof p.slug === "string" ? p.slug : "";
+        data.push({
+          id,
+          label: name || slug || id,
+          meta: { source: "cloud", ...(slug ? { slug } : {}) },
+        });
+      }
+    }
+
+    return c.json({ data });
   }
 
   if (type === "server") {

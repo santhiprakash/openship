@@ -171,9 +171,17 @@ export const DeployTargetSummary: React.FC<CompactSummaryProps> = ({
   onEdit,
 }) => {
   const target = targetLabels[deployTarget];
-  const build = deployTarget === "cloud"
-    ? { label: "Openship Cloud", icon: <Cloud className="size-3.5" /> }
-    : buildLabels[buildStrategy];
+  // Build label is driven by buildStrategy FIRST — a "local" build always runs
+  // on this machine, even when the deploy target is Openship Cloud
+  // (local-orchestrated cloud: build here, upload the output to the cloud
+  // workspace). Only a SERVER build inherits the target's name ("Openship
+  // Cloud" when the workspace builds it, else the generic remote label).
+  const build =
+    buildStrategy === "local"
+      ? buildLabels.local
+      : deployTarget === "cloud"
+        ? { label: "Openship Cloud", icon: <Cloud className="size-3.5" /> }
+        : buildLabels.server;
   const deployLabel = deployTarget === "server" && serverName
     ? serverName
     : target.label;
@@ -681,6 +689,12 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
   // because the build strategy is correctly seeded from the user's saved
   // default — most operators never need to touch it on a per-deploy basis.
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  // True once the user has EXPLICITLY picked a build location from the picker.
+  // The auto-match effects below (first-deploy match, cloud-switch default)
+  // must never overwrite an explicit choice — otherwise "Build on this machine"
+  // silently snaps back to the cloud default. Reset when the deploy target
+  // changes so the sensible default applies to the new target.
+  const buildStrategyTouchedRef = useRef(false);
 
   // Add server inline via modal. On create, refresh the server list and
   // auto-select the new one so the user lands on it immediately - no extra
@@ -719,7 +733,9 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
   // to pick manually via the hint's "Choose build location", `revealBuildPicker`
   // flips and we stop forcing the match.
   useEffect(() => {
-    if (!isFirstBuildHint || revealBuildPicker) return;
+    // Never override an explicit user pick — only auto-match on the untouched
+    // first-deploy default.
+    if (!isFirstBuildHint || revealBuildPicker || buildStrategyTouchedRef.current) return;
     const want: BuildStrategy = config.deployTarget === "local" ? "local" : "server";
     if (config.buildStrategy !== want) {
       updateConfig({ buildStrategy: want });
@@ -858,6 +874,9 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
   }, [config.deployTarget, config.serverId]);
 
   const handleDeployTargetChange = (target: DeployTarget) => {
+    // Changing the deploy target re-applies the sensible build default for the
+    // new target; the user's previous explicit pick no longer applies.
+    buildStrategyTouchedRef.current = false;
     const updates: Partial<typeof config> = { deployTarget: target };
     if (target === "cloud") {
       updates.serverId = undefined;
@@ -1303,7 +1322,10 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
                     key={opt.value}
                     value={opt.value}
                     selected={config.buildStrategy === opt.value}
-                    onSelect={() => updateConfig({ buildStrategy: opt.value })}
+                    onSelect={() => {
+                      buildStrategyTouchedRef.current = true;
+                      updateConfig({ buildStrategy: opt.value });
+                    }}
                     icon={opt.icon}
                     label={opt.label}
                     description={opt.description}

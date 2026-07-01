@@ -47,16 +47,15 @@ import { sendCloudInvitation } from "./cloud-invitations.service";
 import {
   ingestSubgraph,
   exportSubgraph,
+  teardownProjectSubgraph,
+  projectExistsInOrg,
   IngestValidationError,
   IngestTargetNotEmptyError,
+  TeardownProjectNotFoundError,
 } from "./cloud-ingest.service";
 import {
   DUMP_FORMAT_VERSION,
   PkCollisionError,
-  db,
-  schema,
-  and,
-  eq,
   type DatabaseDump,
   type SubgraphScope,
 } from "@repo/db";
@@ -81,6 +80,12 @@ function oblienErrorResponse(c: Context, err: unknown, fallback: string) {
     typeof err === "object" && err !== null && "code" in err
       ? (err as { code?: unknown }).code
       : undefined;
+  // Server faults must be diagnosable — the message alone (returned in the body)
+  // is not enough for a DB error (we need the pg code + stack). 4xx are expected
+  // control-flow (validation, conflicts) and stay quiet.
+  if (status >= 500) {
+    console.error(`[cloud] ${fallback}:`, err);
+  }
   c.status(status as 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500);
   return c.json({ error: message, code });
 }
@@ -605,6 +610,36 @@ export async function ingestSubgraphHandler(c: Context) {
 }
 
 /**
+ * POST /api/cloud/teardown-project  { projectId }
+ *
+ * Delete a project's rows on the SaaS for the caller's org. Used by the
+ * bring-home flow (drop the cloud copy after demote) and by force-reconcile
+ * (a local promote found a leftover cloud copy and cleans it before retrying).
+ * Ownership-scoped inside the service — refuses projects outside the org.
+ */
+export async function teardownProjectHandler(c: Context) {
+  const ctx = getRequestContext(c);
+  const body = await c.req
+    .json<{ projectId?: string }>()
+    .catch(() => ({} as { projectId?: string }));
+  if (!body.projectId) {
+    return c.json({ error: "projectId is required" }, 400);
+  }
+  try {
+    await teardownProjectSubgraph({
+      organizationId: ctx.organizationId,
+      projectId: body.projectId,
+    });
+    return c.json({ ok: true });
+  } catch (err) {
+    if (err instanceof TeardownProjectNotFoundError) {
+      return c.json({ error: err.message, code: err.code }, 404);
+    }
+    return oblienErrorResponse(c, err, "Project teardown failed");
+  }
+}
+
+/**
  * POST /api/cloud/export-subgraph  { scope }
  *
  * Caller picks the scope shape (organization == team-mode switch-back,
@@ -630,16 +665,7 @@ export async function exportSubgraphHandler(c: Context) {
     );
   }
   if (scope.kind === "project") {
-    const owned = await db
-      .select({ id: schema.project.id })
-      .from(schema.project)
-      .where(
-        and(
-          eq(schema.project.id, scope.projectId),
-          eq(schema.project.organizationId, ctx.organizationId),
-        ),
-      );
-    if (owned.length === 0) {
+    if (!(await projectExistsInOrg(scope.projectId, ctx.organizationId))) {
       return c.json(
         { error: "Project not found in caller's organization.", code: "EXPORT_SCOPE_DENIED" },
         404,

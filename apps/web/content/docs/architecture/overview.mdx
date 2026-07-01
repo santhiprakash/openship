@@ -1,0 +1,24 @@
+---
+title: Architecture overview
+description: How Openship is put together — the control plane, deploy targets, and where your data lives.
+---
+
+Openship runs either **self-hosted** or as **Openship Cloud** — the same codebase powers both, and a single environment flag (`OPENSHIP_TARGET`) decides which role an instance plays. This page is the map; the pages that follow go one level deeper.
+
+## The control plane
+
+Your instance — a self-hosted server, the desktop app, or the SaaS — is the control plane. It owns projects, deployments, domains, environment variables, and the permission model, and it is the only thing the dashboard talks to.
+
+## Deploy targets
+
+A project deploys to one of three targets:
+
+- **local** — a container or process on the instance's own machine.
+- **server** — an SSH-reachable server you've connected.
+- **cloud** — Openship Cloud compute.
+
+The target is resolved once per deploy and snapshotted, so preflight, the build pipeline, and rollback can never disagree on where a deployment lands.
+
+## Where data lives
+
+Local and server projects are canonical in your instance's own database. Cloud projects are canonical on Openship Cloud — a project is either fully local or fully cloud, never split. See [Cloud-as-source](/docs/architecture/cloud-as-source).

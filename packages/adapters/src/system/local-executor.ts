@@ -50,32 +50,27 @@ export class LocalExecutor implements CommandExecutor {
         env: getLocalExecEnv(),
       });
 
+      // Raw passthrough: forward the untouched byte stream (rawData = base64)
+      // so the client's xterm renders carriage returns / ANSI natively —
+      // progress lines (git clone, npm, next build) repaint in place instead
+      // of flooding new lines. We keep the decoded text in `chunks` for the
+      // returned `output` (build-kill-hint detection + persistence fallback).
+      // Do NOT split on "\n" or trim here — that is exactly what destroyed the
+      // "\r" carriage returns and made every progress tick its own line.
       const chunks: string[] = [];
 
-      child.stdout.on("data", (data: Buffer) => {
+      const onChunk = (data: Buffer, level: LogEntry["level"]) => {
         const text = data.toString();
-        for (const raw of text.split("\n")) {
-          const line = raw.trimEnd();
-          if (line) {
-            chunks.push(line);
-            onLog(logEntry(line));
-          }
-        }
-      });
+        if (!text) return;
+        chunks.push(text);
+        onLog(logEntry(text, level, data.toString("base64")));
+      };
 
-      child.stderr.on("data", (data: Buffer) => {
-        const text = data.toString();
-        for (const raw of text.split("\n")) {
-          const line = raw.trimEnd();
-          if (line) {
-            chunks.push(line);
-            onLog(logEntry(line, "warn"));
-          }
-        }
-      });
+      child.stdout.on("data", (data: Buffer) => onChunk(data, "info"));
+      child.stderr.on("data", (data: Buffer) => onChunk(data, "warn"));
 
       child.on("close", (code) => {
-        resolve({ code: code ?? 1, output: chunks.join("\n") });
+        resolve({ code: code ?? 1, output: chunks.join("") });
       });
 
       child.on("error", (err) => {

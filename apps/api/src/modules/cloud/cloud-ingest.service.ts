@@ -16,10 +16,12 @@
 import {
   db,
   schema,
+  and,
   eq,
   sql,
   dumpSubgraph,
   restoreSubgraph,
+  deleteProjectSubgraph,
   DUMP_FORMAT_VERSION,
   type DatabaseDump,
   type SubgraphScope,
@@ -125,5 +127,54 @@ export async function ingestSubgraph(
     publicUrl: cloudRuntimeTarget.dashboard,
     imported,
   };
+}
+
+export class TeardownProjectNotFoundError extends Error {
+  readonly code = "TEARDOWN_PROJECT_NOT_FOUND" as const;
+  constructor(public readonly projectId: string) {
+    super(`Project ${projectId} not found in this organization.`);
+    this.name = "TeardownProjectNotFoundError";
+  }
+}
+
+/**
+ * The tenant boundary for project-scoped cloud ops (export, teardown): true
+ * only when `projectId` exists AND belongs to `organizationId`. Shared so the
+ * ownership gate is identical across every SaaS handler that names a project.
+ */
+export async function projectExistsInOrg(
+  projectId: string,
+  organizationId: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: schema.project.id })
+    .from(schema.project)
+    .where(
+      and(
+        eq(schema.project.id, projectId),
+        eq(schema.project.organizationId, organizationId),
+      ),
+    );
+  return rows.length > 0;
+}
+
+/**
+ * Delete a project's rows from the SaaS DB for the caller's org. Powers:
+ *   - bring-home cleanup (remove the SaaS copy once a project is demoted local),
+ *   - force-reconcile (a local promote finds a leftover cloud copy from an
+ *     earlier promote/bring-home and cleans it before re-ingesting).
+ *
+ * Ownership is enforced: the project MUST belong to `organizationId`, so a
+ * cloud session can never delete another tenant's project. Leaves the shared
+ * `project_app` parent intact (see deleteProjectSubgraph).
+ */
+export async function teardownProjectSubgraph(input: {
+  organizationId: string;
+  projectId: string;
+}): Promise<void> {
+  if (!(await projectExistsInOrg(input.projectId, input.organizationId))) {
+    throw new TeardownProjectNotFoundError(input.projectId);
+  }
+  await deleteProjectSubgraph(input.projectId);
 }
 

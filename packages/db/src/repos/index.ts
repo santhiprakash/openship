@@ -12,6 +12,13 @@ export {
   type NewGithubInstallState,
   type CreateInstallStateInput,
 } from "./github-install-state.repo";
+export {
+  createPersonalAccessTokenRepo,
+  type PersonalAccessToken,
+  type PublicPersonalAccessToken,
+  type NewPersonalAccessToken,
+  type CreatePatInput,
+} from "./personal-access-token.repo";
 export { createProjectAppRepo, type ProjectApp, type NewProjectApp } from "./project-app.repo";
 export {
   createProjectRepo,
@@ -156,6 +163,7 @@ import { createAnalyticsRepo } from "./analytics.repo";
 import { createTerminalSessionRepo } from "./terminal-session.repo";
 import { createServiceTerminalSessionRepo } from "./service-terminal-session.repo";
 import { createCloudHandoffCodeRepo } from "./cloud-handoff-code.repo";
+import { createPersonalAccessTokenRepo } from "./personal-access-token.repo";
 import {
   createBackupDestinationRepo,
   createBackupPolicyRepo,
@@ -207,6 +215,7 @@ export const repos = {
   terminalSession: createTerminalSessionRepo(db),
   serviceTerminalSession: createServiceTerminalSessionRepo(db),
   cloudHandoffCode: createCloudHandoffCodeRepo(db),
+  personalAccessToken: createPersonalAccessTokenRepo(db),
   backupDestination: createBackupDestinationRepo(db),
   backupPolicy: createBackupPolicyRepo(db),
   backupRun: createBackupRunRepo(db),

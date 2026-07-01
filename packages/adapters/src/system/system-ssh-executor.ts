@@ -16,7 +16,7 @@ import type {
   ShellSession,
   SshConfig,
 } from "../types";
-import { emitBufferedLines, flushBufferedLines, logEntry, sq } from "./local-shell";
+import { logEntry, sq } from "./local-shell";
 import {
   canUseRemoteRsync,
   transferRemoteDirectoryWithRsync,
@@ -177,24 +177,26 @@ export class SystemSshExecutor implements CommandExecutor {
         { env: sshChildEnv(this.config), stdio: ["ignore", "pipe", "pipe"] },
       );
 
+      // Raw passthrough (see LocalExecutor.streamExec): forward the untouched
+      // byte stream as rawData so the client's xterm renders "\r"/ANSI natively
+      // — remote builds get in-place progress repaints too, not new lines.
       const chunks: string[] = [];
-      const outState = { partial: "" };
-      const errState = { partial: "" };
 
-      child.stdout.on("data", (chunk: Buffer) => {
-        emitBufferedLines(chunk, outState, (line) => { chunks.push(line); onLog(logEntry(line)); });
-      });
-      child.stderr.on("data", (chunk: Buffer) => {
-        emitBufferedLines(chunk, errState, (line) => { chunks.push(line); onLog(logEntry(line, "warn")); });
-      });
+      const onChunk = (chunk: Buffer, level: LogEntry["level"]) => {
+        const text = chunk.toString();
+        if (!text) return;
+        chunks.push(text);
+        onLog(logEntry(text, level, chunk.toString("base64")));
+      };
+
+      child.stdout.on("data", (chunk: Buffer) => onChunk(chunk, "info"));
+      child.stderr.on("data", (chunk: Buffer) => onChunk(chunk, "warn"));
       child.on("error", (err) => {
         onLog(logEntry(`Process error: ${err.message}`, "error"));
         resolve({ code: 1, output: err.message });
       });
       child.on("close", (code) => {
-        flushBufferedLines(outState, (line) => { chunks.push(line); onLog(logEntry(line)); });
-        flushBufferedLines(errState, (line) => { chunks.push(line); onLog(logEntry(line, "warn")); });
-        resolve({ code: code ?? 1, output: chunks.join("\n") });
+        resolve({ code: code ?? 1, output: chunks.join("") });
       });
     });
   }

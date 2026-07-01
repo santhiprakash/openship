@@ -257,9 +257,9 @@ const PROJECT_ROOTED: ReadonlySet<CheckedResourceType> = new Set([
  * that org has a cloud link to proxy through; otherwise null (→ 404, IDOR-safe).
  *
  * The role check in `checkPermission` then runs against this org: owner/admin/
- * member pass; `restricted` is denied (its grant path needs a local resource,
- * which doesn't exist — per-cloud-project grants are deferred). The SaaS remains
- * the authoritative per-project gate; a bogus id still 404s once proxied.
+ * member pass; `restricted` passes only with an explicit per-project grant on
+ * the cloud project id (see the cloud fallback in the restricted arm). The SaaS
+ * remains the authoritative per-project gate; a bogus id still 404s once proxied.
  */
 async function resolveCloudFallbackOrg(
   c: Context,
@@ -318,8 +318,20 @@ export async function checkPermission(
 
   // 4. Restricted: only explicit grants.
   if (role === "restricted") {
-    const root = await resolveResourceOrg(input.resourceType, input.resourceId);
-    if (!root) return false;
+    let root = await resolveResourceOrg(input.resourceType, input.resourceId);
+    if (!root) {
+      // A `project` with no local row is a CLOUD project (canonical on the
+      // SaaS). `assert` only reaches here with a resolved `organizationId` when
+      // the cloud fallback fired (the org is cloud-linked), so honor a grant
+      // keyed by the cloud project id itself. Scoped to the directly-granted
+      // `project` type — cloud sub-resources can't be resolved to their parent
+      // locally, and are covered by the project-level grant on their routes.
+      if (!env.CLOUD_MODE && input.resourceType === "project" && input.resourceId !== "*") {
+        root = { orgId: organizationId, rootType: "project", rootId: input.resourceId };
+      } else {
+        return false;
+      }
+    }
     const grant = await repos.resourceGrant.findForResource(
       organizationId,
       userId,

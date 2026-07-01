@@ -1,0 +1,18 @@
+---
+title: Organization isolation
+description: Personal vs. team workspaces, membership, and how projects stay isolated.
+---
+
+Every resource is scoped to an organization, and access is decided by your membership in that organization — never by an ambient "current org" that changes as a side effect of navigation.
+
+## Personal & team workspaces
+
+Each account gets a **personal workspace**. You can invite collaborators to it directly, or create a **separate team organization** for a shared space — your choice. Personal and team workspaces stay isolated from one another; a member of one is not implicitly a member of the other.
+
+## Scoped collaboration
+
+Sharing a single project without exposing the rest is done with a `restricted` member plus a per-project grant — they see only what they've been granted. See [Permission model](/docs/security/permissions).
+
+## Cross-org safety
+
+An organization id sent by a client is only honored if the caller is actually a member of that org; membership is re-checked on every request against the resource's own organization.

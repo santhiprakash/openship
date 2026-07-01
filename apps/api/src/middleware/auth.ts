@@ -7,6 +7,8 @@ import { ensureLocalUser } from "../lib/local-user";
 import { resolveActiveOrganizationId } from "./active-organization";
 import { getAuthMode } from "../lib/auth-mode";
 import { isLoopbackRequest, peerAddress } from "./loopback-peer";
+import { hashPatToken } from "../lib/pat";
+import { isPatToken, parseBearerToken } from "../lib/bearer";
 import {
   buildRequestContext,
   type RequestContext,
@@ -53,6 +55,68 @@ function hasBearerHeader(c: Context): boolean {
   return typeof raw === "string" && /^bearer\s+/i.test(raw);
 }
 
+const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/** Sentinel: the PAT path fully handled the request (ran next()). */
+const PAT_HANDLED = Symbol("pat-handled");
+
+/**
+ * Personal Access Token auth. A Bearer credential of the form
+ * `opsh_pat_<secret>` resolves to its owning user + org and builds the same
+ * RequestContext a session would — so permission.assert applies unchanged.
+ * A read-only token rejects mutation methods.
+ *
+ * Returns: `null` when the header is not a PAT (fall through to sessions); an
+ * error `Response` to short-circuit; or `PAT_HANDLED` after a successful auth +
+ * next() (so the caller must NOT continue to the session path).
+ */
+async function tryPatAuth(c: Context, next: Next): Promise<Response | typeof PAT_HANDLED | null> {
+  const token = parseBearerToken(c);
+  if (!isPatToken(token)) return null;
+
+  // Parity with the Bearer-from-browser guard below: a PAT is a CLI/API
+  // credential and should never arrive from a browser-trusted origin.
+  if (originIsBrowserTrusted(c)) {
+    return c.json(
+      { error: "Access tokens are not allowed from browser origins", code: "BEARER_NOT_ALLOWED_FROM_BROWSER" },
+      401,
+    );
+  }
+
+  const pat = await repos.personalAccessToken.findActiveByHash(hashPatToken(token));
+  if (!pat) return c.json({ error: "Invalid or expired access token", code: "INVALID_TOKEN" }, 401);
+
+  // A token bound to an org is confined to it: reject an X-Organization-Id that
+  // asks for a different org, so the token can't act in the user's OTHER orgs.
+  if (pat.organizationId) {
+    const requestedOrg = c.req.header("x-organization-id")?.trim();
+    if (requestedOrg && requestedOrg !== pat.organizationId) {
+      return c.json(
+        { error: "This access token is scoped to a different organization", code: "TOKEN_ORG_SCOPE" },
+        403,
+      );
+    }
+  }
+
+  if (pat.readOnly && MUTATION_METHODS.has(c.req.method.toUpperCase())) {
+    return c.json({ error: "This access token is read-only", code: "TOKEN_READ_ONLY" }, 403);
+  }
+
+  const user = await repos.user.findById(pat.userId);
+  if (!user) return c.json({ error: "Invalid or expired access token", code: "INVALID_TOKEN" }, 401);
+
+  void repos.personalAccessToken.touchLastUsed(pat.id).catch(() => {});
+
+  await applyAuthedRequest(
+    c,
+    user,
+    { id: `pat:${pat.id}`, activeOrganizationId: pat.organizationId },
+    "bearer",
+  );
+  await next();
+  return PAT_HANDLED;
+}
+
 function originIsBrowserTrusted(c: Context): boolean {
   const origin = c.req.header("origin");
   if (!origin) return false;
@@ -60,6 +124,12 @@ function originIsBrowserTrusted(c: Context): boolean {
 }
 
 export async function authMiddleware(c: Context, next: Next) {
+  // ── 0. Personal Access Token (Bearer opsh_pat_…) ────────────────────
+  // Handled before Better Auth so a PAT is never mis-parsed as a session
+  // token. null → not a PAT (continue); otherwise the PAT path handled it.
+  const patResult = await tryPatAuth(c, next);
+  if (patResult !== null) return patResult === PAT_HANDLED ? undefined : patResult;
+
   // ── 1. Real session ─────────────────────────────────────────────────
   let session: Awaited<ReturnType<typeof auth.api.getSession>> | null;
   try {

@@ -37,7 +37,7 @@ import { resolveProjectTrafficSource, fetchMgmt, mgmtStream } from "../../lib/pr
 import { refreshProjectFaviconIfStale } from "../../lib/favicon-detector";
 import { getAdminOblienClient } from "../../lib/oblien-user-client";
 import { cloudClient } from "../../lib/cloud/client";
-import { resolveOrgCloudUserId, readCloudJson } from "../../lib/cloud/transport";
+import { fetchOrgCloudProjects } from "../../lib/cloud/projects";
 import {
   registerWebhook,
   updateWebhook,
@@ -123,37 +123,6 @@ export async function ensure(c: Context) {
 
 // ─── Projects CRUD ───────────────────────────────────────────────────────────
 
-/**
- * Cloud-as-source merge: fetch the org's CLOUD projects from the SaaS (proxied
- * as the org owner) so the local home list shows local + cloud in one view.
- *   - not-connected: org has no cloud link → caller shows local only (no flag).
- *   - unavailable:   linked but the SaaS call failed/non-JSON → caller shows
- *                    local only + `cloudPartial:true` so the UI can warn.
- *   - merged:        the SaaS projects + numbers.
- */
-async function fetchCloudHomeProjects(
-  organizationId: string,
-): Promise<
-  | { state: "merged"; projects: Array<Record<string, unknown>>; numbers: Record<string, number> }
-  | { state: "not-connected" }
-  | { state: "unavailable" }
-> {
-  // On the SaaS we ARE the source — never merge-from-self (no proxy recursion).
-  if (env.CLOUD_MODE) return { state: "not-connected" };
-  const linked = await resolveOrgCloudUserId(organizationId).catch(() => null);
-  if (!linked) return { state: "not-connected" };
-  const res = await cloudClient({ organizationId })
-    .request("/api/projects/home", { method: "GET" })
-    .catch(() => null);
-  if (!res || !res.ok) return { state: "unavailable" };
-  const body = await readCloudJson<{ projects?: unknown[]; numbers?: Record<string, number> }>(res);
-  if (!body || !Array.isArray(body.projects)) return { state: "unavailable" };
-  return {
-    state: "merged",
-    projects: body.projects as Array<Record<string, unknown>>,
-    numbers: body.numbers ?? {},
-  };
-}
 
 export async function getHome(c: Context) {
   const ctx = getRequestContext(c);
@@ -276,7 +245,7 @@ export async function getHome(c: Context) {
   // from the SaaS as the org owner), tagged with `source` so the dashboard can
   // badge them and replay the source hint on subsequent calls.
   const localProjects = projects.map((p) => ({ ...p, source: "local" as const }));
-  const cloud = await fetchCloudHomeProjects(organizationId);
+  const cloud = await fetchOrgCloudProjects(organizationId);
 
   let mergedProjects: unknown[] = localProjects;
   let cloudProjectCount = 0;

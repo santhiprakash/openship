@@ -1079,13 +1079,15 @@ export async function runPreflightChecks(
       : false;
   checks.push(await checkCloudRuntime(cloudPreflight, cloudRequirement, cloudConnected));
 
-  // GitHub App installation check - fires whenever the API is running in
-  // App auth mode (SaaS), regardless of deploy target. The App installation
-  // token is the only credential we're willing to ship downstream for
-  // self-hosted deploys originating from a SaaS API - see resolveBuildGitToken
-  // in build.service.ts. Catching it here surfaces a clear "install the App
-  // on <owner>" error instead of a 403 deep in the build pipeline.
-  if (getGitHubAuthMode() === "app") {
+  const effectiveBuildStrategy =
+    opts?.buildStrategy ?? (snapshot.buildStrategy as "local" | "server" | undefined);
+
+  // GitHub App installation check — only relevant when the repo is cloned on a
+  // REMOTE build worker (server build). A LOCAL build ("Build on this machine")
+  // clones on the API host using local credentials (gh CLI / OAuth), so the
+  // cloud App installation is irrelevant — skip it. This mirrors the
+  // remote-clone-token check below, which already passes for local builds.
+  if (getGitHubAuthMode() === "app" && effectiveBuildStrategy !== "local") {
     checks.push(
       await checkGitHubAppInstallation(githubCtx, opts?.gitOwner),
     );
@@ -1095,11 +1097,7 @@ export async function runPreflightChecks(
   // and local builds: pass. For cli mode + remote: hard FAIL (matches the
   // backend's clone-auth refusal). For oauth/token + remote: warn only.
   checks.push(
-    await checkRemoteBuildTokenLeak(
-      githubCtx,
-      effectiveTarget,
-      opts?.buildStrategy ?? (snapshot.buildStrategy as "local" | "server" | undefined),
-    ),
+    await checkRemoteBuildTokenLeak(githubCtx, effectiveTarget, effectiveBuildStrategy),
   );
 
   // Atomic remote-clone-token check — the single source of truth for
@@ -1112,7 +1110,7 @@ export async function runPreflightChecks(
       opts?.gitOwner,
       opts?.projectId,
       effectiveTarget,
-      opts?.buildStrategy ?? (snapshot.buildStrategy as "local" | "server" | undefined),
+      effectiveBuildStrategy,
     ),
   );
 

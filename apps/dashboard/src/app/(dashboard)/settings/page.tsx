@@ -5,9 +5,9 @@
  * scroll tabs (mobile). Mirrors the project-detail page pattern.
  *
  * Tabs:
- *   - general   → identity, GitHub connection, clone credentials, deploy
- *                 defaults, build preferences (everything that was
- *                 previously rendered flat)
+ *   - general   → GitHub connection, deploy defaults, build preferences
+ *   - tokens    → clone credentials, API access tokens
+ *   - mcp        → MCP connection (endpoint + client config)
  *   - team      → organization members + invitations (moved from /members)
  *   - audit     → audit log feed (moved from /audit), admin+ only
  *   - cloud     → cloud connection (self-hosted only)
@@ -25,6 +25,8 @@ import { DeployDefaults } from "./_components/DeployDefaults";
 import { CloudConnection } from "./_components/CloudConnection";
 import { GitHubConnection } from "./_components/GitHubConnection";
 import { CloneCredentials } from "./_components/CloneCredentials";
+import { PersonalAccessTokens } from "./_components/PersonalAccessTokens";
+import { McpConnection } from "./_components/McpConnection";
 import { InstanceInfo } from "./_components/InstanceInfo";
 import { TeamTab } from "./_components/TeamTab";
 import { NotificationsTab } from "./_components/NotificationsTab";
@@ -93,11 +95,19 @@ function SettingsPageInner() {
           {activeTab === "general" && (
             <>
               <GitHubConnection />
-              <CloneCredentials />
               {showDeployDefaults && <DeployDefaults />}
               {showBuildPreferences && <BuildPreferences />}
             </>
           )}
+
+          {activeTab === "tokens" && (
+            <>
+              <CloneCredentials />
+              <PersonalAccessTokens />
+            </>
+          )}
+
+          {activeTab === "mcp" && <McpConnection />}
 
           {activeTab === "team" && <TeamTab />}
 

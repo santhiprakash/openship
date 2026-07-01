@@ -26,6 +26,12 @@ export interface DeploymentMeta {
   deployTarget?: DeployTarget;
   runtimeMode?: RuntimeMode;
   serverId?: string;
+  /**
+   * "local" | "server" — where the build runs. A local build targeting cloud
+   * keeps the project LOCAL-canonical and uploads the output to a cloud
+   * workspace (no promote/transfer); see resolveEffectiveTarget.
+   */
+  buildStrategy?: "local" | "server";
   /** Cloud workspace this deployment provisioned (cloud target only). */
   workspaceId?: string;
 }
@@ -95,13 +101,25 @@ export function resolveEffectiveTarget(base: Platform["target"], snapshot: Deplo
     if (snapshot.serverId) return "server";
     // UI chose "server" target but serverId may be missing → still route to SSH
     if (snapshot.deployTarget === "server") return "server";
+    // Local-orchestrated cloud deploy: build on THIS host, upload the output to
+    // an Openship Cloud workspace, and run it there — the project stays
+    // local-canonical (no promote/transfer). This is the ONLY combo that keeps
+    // the cloud target on a self-hosted box; a server-build cloud deploy is
+    // promoted to the SaaS earlier (deployment.controller) and never reaches here.
+    if (snapshot.deployTarget === "cloud" && snapshot.buildStrategy === "local") return "cloud";
     return "local";
   }
   return "cloud";
 }
 
 export function usesManagedRouting(base: Platform["target"], effectiveTarget: DeployTarget): boolean {
-  return base === "selfhosted" || (base === "desktop" && (effectiveTarget === "server" || effectiveTarget === "local"));
+  // Managed (local OpenResty) routing applies only to on-box targets. A cloud
+  // target — including the local-orchestrated cloud deploy — routes via cloud
+  // pages/edge, not the local proxy.
+  return (
+    (effectiveTarget === "server" || effectiveTarget === "local") &&
+    (base === "selfhosted" || base === "desktop")
+  );
 }
 
 /**

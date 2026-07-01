@@ -173,32 +173,23 @@ export class SshExecutor implements CommandExecutor {
       client.exec(SshExecutor.ENV_PREFIX + command, (err, stream) => {
         if (err) return reject(err);
 
+        // Raw passthrough (see LocalExecutor.streamExec): forward the untouched
+        // byte stream as rawData so the client's xterm renders "\r"/ANSI
+        // natively — progress lines repaint in place instead of new lines.
         const chunks: string[] = [];
 
-        stream.on("data", (data: Buffer) => {
+        const onChunk = (data: Buffer, level: LogEntry["level"]) => {
           const text = data.toString();
-          for (const raw of text.split("\n")) {
-            const line = raw.trimEnd();
-            if (line) {
-              chunks.push(line);
-              onLog(logEntry(line));
-            }
-          }
-        });
+          if (!text) return;
+          chunks.push(text);
+          onLog(logEntry(text, level, data.toString("base64")));
+        };
 
-        stream.stderr.on("data", (data: Buffer) => {
-          const text = data.toString();
-          for (const raw of text.split("\n")) {
-            const line = raw.trimEnd();
-            if (line) {
-              chunks.push(line);
-              onLog(logEntry(line, "warn"));
-            }
-          }
-        });
+        stream.on("data", (data: Buffer) => onChunk(data, "info"));
+        stream.stderr.on("data", (data: Buffer) => onChunk(data, "warn"));
 
         stream.on("close", (code: number) => {
-          resolve({ code: code ?? 1, output: chunks.join("\n") });
+          resolve({ code: code ?? 1, output: chunks.join("") });
         });
       });
     });

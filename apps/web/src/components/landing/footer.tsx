@@ -6,18 +6,19 @@ const footerLinks = {
     { label: "Install", href: "/download" },
     { label: "Pricing", href: "/pricing" },
     { label: "Docs", href: "/docs" },
+    { label: "Changelog", href: "/changelog" },
   ],
   Developers: [
     { label: "CLI Reference", href: "/docs/cli" },
     { label: "API Reference", href: "/docs/api" },
-    { label: "MCP Integration", href: "/docs/mcp" },
-    { label: "Self-Hosting Guide", href: "/docs/self-hosting" },
+    { label: "Architecture", href: "/docs/architecture/overview" },
+    { label: "Security", href: "/docs/security/permissions" },
   ],
   Company: [
     { label: "Resources", href: "/resources" },
+    { label: "Trust & Security", href: "/trust" },
     { label: "About", href: "/about" },
     { label: "Contact", href: "/contact" },
-    { label: "Brand", href: "/brand" },
   ],
   Legal: [
     { label: "Privacy", href: "/privacy" },

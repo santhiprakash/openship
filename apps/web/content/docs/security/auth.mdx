@@ -1,0 +1,21 @@
+---
+title: Authentication
+description: Sessions, the org-owner cloud link, and how credentials are custodied.
+---
+
+Openship uses session-based authentication. Browser clients authenticate with httpOnly session cookies; programmatic clients use bearer tokens.
+
+## The cloud link
+
+Connecting a self-hosted instance to Openship Cloud performs a PKCE handshake that mints a **cloud session** for the connecting owner. It is stored **encrypted, server-side only** — the browser never sees it. Org-scoped cloud calls resolve this owner link and act on its behalf.
+
+## Credential custody
+
+Sensitive credentials are held where they're safest, not copied around:
+
+- The **GitHub App** private key lives only on Openship Cloud; self-hosted instances mint App tokens through the cloud rather than holding the key.
+- Per-project git tokens and environment secrets are encrypted at rest.
+
+## Revocation
+
+A removed member's session stops working on its next check, and disconnecting an instance revokes its cloud link.

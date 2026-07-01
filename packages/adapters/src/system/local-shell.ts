@@ -33,8 +33,13 @@ export function sq(value: string): string {
 export function logEntry(
   message: string,
   level: LogEntry["level"] = "info",
+  rawData?: string,
 ): LogEntry {
-  return { timestamp: new Date().toISOString(), message, level };
+  // rawData = base64 of the UNTOUCHED bytes for this chunk. When set, the SSE
+  // forwards it verbatim to the client's xterm, so carriage returns / ANSI are
+  // preserved and progress lines (git, npm, next build) repaint in place
+  // instead of flooding new lines. Omitted for synthesized (non-stream) entries.
+  return { timestamp: new Date().toISOString(), message, level, ...(rawData ? { rawData } : {}) };
 }
 
 export function getLocalShellPath(): string {

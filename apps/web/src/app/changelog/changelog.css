@@ -1,0 +1,32 @@
+/* Minimal prose styling for rendered changelog MDX bodies. */
+.changelog-prose > * + * {
+  margin-top: 0.75rem;
+}
+.changelog-prose ul {
+  list-style: disc;
+  padding-left: 1.15rem;
+}
+.changelog-prose ul > li + li {
+  margin-top: 0.35rem;
+}
+.changelog-prose strong {
+  color: var(--th-text-strong);
+  font-weight: 600;
+}
+.changelog-prose a {
+  color: var(--th-clr-plum);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.changelog-prose code {
+  background: var(--th-sf-06);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+}
+.changelog-prose h3 {
+  color: var(--th-text-title);
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-top: 1.25rem;
+}

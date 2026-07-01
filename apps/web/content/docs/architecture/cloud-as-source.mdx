@@ -1,0 +1,22 @@
+---
+title: Cloud-as-source
+description: Cloud projects are owned by Openship Cloud; your self-hosted instance is a gateway in front of it.
+---
+
+When a project runs on Openship Cloud, **the SaaS owns it** — its record, deployments, domains, env, and logs live on the cloud, and the cloud runs its build/lifecycle. Your self-hosted instance keeps **no local copy**; it acts as a gateway that proxies requests for that project to the SaaS as the organization owner.
+
+## Why a gateway, not a mirror
+
+A resource is either fully local or fully on the cloud — never split across both. That eliminates the "two sources of truth" problem: there is nothing to reconcile, and a local bug can't corrupt cloud-owned data. Your dashboard still talks only to your local API; the gateway forwards cloud-project calls upstream.
+
+## Born-on-cloud
+
+Choosing a cloud deploy for a local project **promotes** it to the SaaS first (its data is copied up and the local rows torn down), then the deploy runs on the cloud. It never exists as a "local project reaching into the cloud."
+
+## The one identity
+
+All cloud calls travel as the organization **owner's** cloud session. Team members don't need their own cloud accounts — the local instance gates who may act (by role), then proxies as the owner.
+
+## Local participation
+
+For a cloud project, the local box does zero orchestration — with one opt-in exception: it can build an artifact locally and upload it to the cloud workspace. See [Runtime model](/docs/architecture/runtime-model).

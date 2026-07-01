@@ -23,6 +23,15 @@ export async function clientIpMiddleware(c: Context, next: Next) {
   const peer = peerAddress(c);
   const xri = c.req.header("x-real-ip")?.trim() || null;
 
+  // In-process dispatch (app.fetch — the MCP adapter calling the API itself)
+  // has NO TCP peer; every external caller has one (the proxy/socket), so this
+  // is unforgeable. Treat it as trusted loopback so self-calls resolve a client
+  // IP — the outer request already authenticated + was rate-limited.
+  if (peer === null) {
+    c.set("clientIp", xri || "127.0.0.1");
+    return next();
+  }
+
   const trustHeader = isLoopbackPeer(peer) || env.TRUST_PROXY === true;
   const ip = trustHeader ? xri || peer : peer;
 

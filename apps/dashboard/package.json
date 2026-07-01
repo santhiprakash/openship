@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "node --env-file=.env node_modules/next/dist/bin/next dev",
-    "dev:saas": "node --env-file=.env.saas node_modules/next/dist/bin/next dev",
+    "dev": "ENV_FILE=.env node --import ./scripts/load-env.mjs node_modules/next/dist/bin/next dev",
+    "dev:saas": "ENV_FILE=.env.saas node --import ./scripts/load-env.mjs node_modules/next/dist/bin/next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

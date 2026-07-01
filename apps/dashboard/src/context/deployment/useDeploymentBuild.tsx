@@ -376,7 +376,10 @@ export function useDeploymentBuild(
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   const startDeployment = useCallback(async (
-    overrides?: { runtimeMode?: DeploymentConfig["runtimeMode"]; saveConfigOnly?: boolean },
+    overrides?: {
+      runtimeMode?: DeploymentConfig["runtimeMode"];
+      saveConfigOnly?: boolean;
+    },
   ): Promise<string | null> => {
     const saveConfigOnly = overrides?.saveConfigOnly === true;
     const isLocal = !!config.localPath;
@@ -628,6 +631,7 @@ export function useDeploymentBuild(
       console.error("Deployment error:", err);
       const message = getApiErrorMessage(err, "Failed to start deployment");
       const errorCode = extractErrorCode(err);
+
       const canConnectCloud = canUseCloudConnection({ selfHosted, deployMode });
       const needsManagedProjectDomainHelp =
         canConnectCloud &&
@@ -920,7 +924,25 @@ export function useDeploymentBuild(
             lastEventIdRef.current = data.lastEventId;
           }
           const textEncoder = new TextEncoder();
-          buildLogs.forEach((log) => writeToTerminal(textEncoder.encode(`${log.text}\r\n`)));
+          buildLogs.forEach((log) => {
+            // Prefer the original terminal bytes when present (active-session
+            // refresh): carriage returns / ANSI are preserved so replay
+            // repaints exactly like the live stream. Persisted (finished)
+            // entries are already collapsed to one clean line each server-side
+            // (collapseTerminalLogs) and carry no rawData → the text path.
+            if (log.rawData) {
+              try {
+                const binary = atob(log.rawData);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                writeToTerminal(bytes);
+                return;
+              } catch {
+                /* corrupt base64 — fall back to the decoded text line */
+              }
+            }
+            writeToTerminal(textEncoder.encode(`${log.text}\r\n`));
+          });
         }
 
         // Handle scenarios

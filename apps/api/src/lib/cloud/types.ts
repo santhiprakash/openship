@@ -152,4 +152,16 @@ export interface CloudClient {
     | { ok: true; dump: DatabaseDump }
     | { ok: false; error: string; code?: string }
   >;
+  /**
+   * Delete a project's rows on the SaaS for the caller's org. Used by the
+   * bring-home flow (drop the cloud copy after demote) and by promote
+   * reconcile (clean a leftover cloud copy before re-ingesting). Ownership is
+   * enforced SaaS-side — the project must belong to the caller's org.
+   */
+  teardownProject(input: {
+    projectId: string;
+  }): Promise<
+    | { ok: true }
+    | { ok: false; error: string; code?: string }
+  >;
 }

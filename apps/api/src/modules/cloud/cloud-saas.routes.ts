@@ -76,6 +76,12 @@ r.use("/export-subgraph", rateLimiter);
 r.use("/export-subgraph", cloudSessionAuth);
 r.post("/export-subgraph", { tag: "cloud:admin" }, saas.exportSubgraphHandler);
 
+// Delete a project's rows on the SaaS (bring-home cleanup + promote reconcile).
+// Ownership is enforced in the service; rate-limited like the other data ops.
+r.use("/teardown-project", rateLimiter);
+r.use("/teardown-project", cloudSessionAuth);
+r.post("/teardown-project", { tag: "cloud:admin" }, saas.teardownProjectHandler);
+
 // ─── GitHub App proxy (cloud holds the App private key) ───────────────────
 // All endpoints below are what self-hosted instances call via cloud-client.
 // Cloud signs JWTs / mints install tokens; local never holds App creds.

@@ -22,11 +22,11 @@
 import {
   dumpSubgraph,
   restoreSubgraph,
+  deleteProjectSubgraph,
   PkCollisionError,
   db,
   schema,
   eq,
-  inArray,
   type DatabaseDump,
   type SubgraphScope,
 } from "@repo/db";
@@ -145,6 +145,7 @@ export async function transferProjectToCloud(
   const result = await cloudClient({
     organizationId: input.organizationId,
   }).ingestSubgraph({ dump });
+
   if (!result.ok) {
     // No cloud session linked for this org.
     if (/not connected/i.test(result.error)) {
@@ -153,11 +154,10 @@ export async function transferProjectToCloud(
     if (result.code === "INGEST_VALIDATION_FAILED") {
       throw new TransferCloudCallFailedError(result.error);
     }
-    // PK collision on the SaaS-side restoreSubgraph surfaces as code
-    // "PK_COLLISION" (from PkCollisionError in @repo/db, mapped to 409
-    // by the cloud-ingest controller). The legacy string-match check
-    // is kept as a fallback for older SaaS instances that pre-date
-    // typed collision errors.
+    // A leftover SaaS copy of this project. Surfaces as code "PK_COLLISION"
+    // (typed) or a "duplicate key value" message (legacy SaaS). Reported as a
+    // conflict; cleanup is an explicit, runtime-aware operation (not a
+    // deploy-triggered auto-delete).
     if (result.code === "PK_COLLISION" || /duplicate key value/i.test(result.error)) {
       throw new TransferConflictError("id", project.id);
     }
@@ -257,34 +257,10 @@ export async function transferProjectToSelfHosted(
   const dump: DatabaseDump = result.dump;
 
   // 3) Wipe the local rows for this project, then merge-insert the dump.
-  //    The primitive's "merge = no truncate" rule is intact: the wipe is
-  //    scoped to *this project* and lives inside this service.
-  await db.transaction(async (tx) => {
-    // Resolve deployment ids first so we can purge service_deployment rows.
-    const deploymentRows = await tx
-      .select({ id: schema.deployment.id })
-      .from(schema.deployment)
-      .where(eq(schema.deployment.projectId, project.id));
-    const deploymentIds = deploymentRows.map((r) => r.id);
-
-    if (deploymentIds.length > 0) {
-      await tx
-        .delete(schema.serviceDeployment)
-        .where(inArray(schema.serviceDeployment.deploymentId, deploymentIds));
-    }
-
-    // Reverse FK dependency order — children before parents.
-    await tx.delete(schema.service).where(eq(schema.service.projectId, project.id));
-    await tx.delete(schema.domain).where(eq(schema.domain.projectId, project.id));
-    await tx.delete(schema.envVar).where(eq(schema.envVar.projectId, project.id));
-    await tx
-      .delete(schema.backupPolicy)
-      .where(eq(schema.backupPolicy.projectId, project.id));
-    await tx
-      .delete(schema.deployment)
-      .where(eq(schema.deployment.projectId, project.id));
-    await tx.delete(schema.project).where(eq(schema.project.id, project.id));
-  });
+  //    Uses the shared subgraph-delete primitive (child→parent FK order,
+  //    leaves the shared project_app parent) — the same one the SaaS teardown
+  //    uses, so both sides stay in lockstep.
+  await deleteProjectSubgraph(project.id);
 
   try {
     await restoreSubgraph(dump, {
@@ -308,8 +284,26 @@ export async function transferProjectToSelfHosted(
     .set({ cloudWorkspaceId: null, updatedAt: new Date() })
     .where(eq(schema.project.id, project.id));
 
+  // 5) Tear down the SaaS copy's ROWS so it doesn't linger as a leftover that
+  //    would collide on a future re-promote. Best-effort: the local copy is
+  //    already authoritative, so a teardown failure is drift to reconcile later
+  //    (via the teardown endpoint), not a reason to fail the bring-home.
+  //    SCOPE: data-only — this drops rows, it does NOT destroy the cloud
+  //    workspace RUNTIME. Row-only leftovers (never-deployed promotes, dev) are
+  //    fully cleaned; a project that was actually RUNNING on cloud leaves its
+  //    workspace to be destroyed by the deferred cloud-workspace teardown below.
+  const teardown = await cloudClient({
+    organizationId: input.organizationId,
+  }).teardownProject({ projectId: project.id });
+  if (!teardown.ok) {
+    console.warn(
+      `[transfer] bring-home: cloud teardown failed for project ${project.id}: ${teardown.error}`,
+    );
+  }
+
   // TODO (business-logic phase, NOT in this change):
-  //   - schedule the cloud-side teardown (delete cloud workspace)
+  //   - destroy the cloud workspace RUNTIME (containers/routes) for a project
+  //     that was live on cloud — teardownProject above is data-only
   //   - kick the local deploy pipeline so containers come back up
   //   - re-bind GitHub installation to the local org
   //   - audit_event row

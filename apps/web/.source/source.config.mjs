@@ -12,8 +12,19 @@ var resources = defineDocs({
     })
   }
 });
+var changelog = defineDocs({
+  dir: "content/changelog",
+  docs: {
+    schema: frontmatterSchema.extend({
+      version: z.string(),
+      date: z.string(),
+      tags: z.array(z.string()).optional()
+    })
+  }
+});
 var source_config_default = defineConfig();
 export {
+  changelog,
   source_config_default as default,
   docs,
   resources
