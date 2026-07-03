@@ -43,14 +43,30 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
     deploymentStatus === "cancelled";
   const services = state.serviceStatuses;
   const logServiceNames = useMemo(() => {
-    const names = new Set<string>();
-    config.services.forEach((service) => {
-      if (service.name) names.add(service.name);
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    // Source-built services (build/dockerfile) emit real build logs; static
+    // image-only services (postgres, redis) just get pulled. Surface the
+    // buildable ones first so the first tab — and the default selection — lands
+    // on a service with meaningful logs instead of a static image pull.
+    const buildFirst = [...config.services].sort((a, b) => {
+      const aStatic = a.build || a.dockerfile ? 0 : 1;
+      const bStatic = b.build || b.dockerfile ? 0 : 1;
+      return aStatic - bStatic;
+    });
+    buildFirst.forEach((service) => {
+      if (service.name && !seen.has(service.name)) {
+        seen.add(service.name);
+        ordered.push(service.name);
+      }
     });
     services.forEach((service) => {
-      if (service.serviceName) names.add(service.serviceName);
+      if (service.serviceName && !seen.has(service.serviceName)) {
+        seen.add(service.serviceName);
+        ordered.push(service.serviceName);
+      }
     });
-    return Array.from(names);
+    return ordered;
   }, [config.services, services]);
   const total = Math.max(services.length, logServiceNames.length);
   const running = services.filter((s) => s.status === "running").length;
@@ -73,9 +89,16 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
     }
 
     if (!activeLogTab || !logServiceNames.includes(activeLogTab)) {
-      setActiveLogTab(logServiceNames[0] ?? "");
+      // Prefer a service that's actively working so the opened tab shows live
+      // logs; otherwise fall back to the first tab (buildable-first ordering).
+      const statusByName = new Map(services.map((s) => [s.serviceName, s.status]));
+      const workingService = logServiceNames.find((name) => {
+        const status = statusByName.get(name);
+        return status === "building" || status === "deploying";
+      });
+      setActiveLogTab(workingService ?? logServiceNames[0] ?? "");
     }
-  }, [activeLogTab, logServiceNames]);
+  }, [activeLogTab, logServiceNames, services]);
 
   // ── Pipeline prompt modal ──────────────────────────────────────────────
   useEffect(() => {
@@ -534,15 +557,20 @@ function ComposeServiceLogsPanel({
     <div className="bg-card rounded-2xl border border-border/50 p-6 mb-20">
       <div className="flex flex-col gap-5">
         <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            {generateIcon("terminal-58-1658431404.png", 24, "currentColor")}
-            <h2 className="text-base font-normal text-foreground">Deployment Logs</h2>
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/50 bg-muted/40 text-muted-foreground">
+              {generateIcon("terminal-58-1658431404.png", 18, "currentColor")}
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold tracking-tight text-foreground">Deployment Logs</h2>
+              <p className="truncate text-xs text-muted-foreground">Live output, streamed per service</p>
+            </div>
           </div>
           {total > 0 && (
-            <span className="text-xs text-muted-foreground tabular-nums">
-              {running}/{total} running
-              {building > 0 && <span className="ml-1">· {building} building</span>}
-              {failed > 0 && <span className="text-destructive ml-1">· {failed} failed</span>}
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border/50 bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground tabular-nums">
+              <span className="font-semibold text-foreground">{running}/{total}</span> running
+              {building > 0 && <span>· {building} building</span>}
+              {failed > 0 && <span className="text-destructive">· {failed} failed</span>}
             </span>
           )}
         </div>

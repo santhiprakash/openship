@@ -1,5 +1,5 @@
 import { eq, and, asc, inArray } from "drizzle-orm";
-import { generateId } from "@repo/core";
+import { generateId, type ComposeAdvanced } from "@repo/core";
 import type { Database } from "../client";
 import { service, serviceDeployment } from "../schema";
 import type { ComposeServiceSpec } from "../schema/service";
@@ -25,6 +25,7 @@ export function toComposeSpec(s: {
   volumes?: string[] | null;
   command?: string | null;
   restart?: string | null;
+  advanced?: ComposeAdvanced | null;
 }): ComposeServiceSpec {
   return {
     image: s.image ?? null,
@@ -36,25 +37,31 @@ export function toComposeSpec(s: {
     volumes: s.volumes ?? [],
     command: s.command ?? null,
     restart: s.restart ?? "unless-stopped",
+    advanced: s.advanced ?? {},
   };
 }
 
-const canonicalSpec = (s: ComposeServiceSpec): string => {
-  const env = s.environment ?? {};
-  const sortedEnv: Record<string, string> = {};
-  for (const k of Object.keys(env).sort()) sortedEnv[k] = env[k];
-  return JSON.stringify({
-    image: s.image ?? null,
-    build: s.build ?? null,
-    dockerfile: s.dockerfile ?? null,
-    ports: s.ports ?? [],
-    dependsOn: s.dependsOn ?? [],
-    environment: sortedEnv,
-    volumes: s.volumes ?? [],
-    command: s.command ?? null,
-    restart: s.restart ?? "unless-stopped",
-  });
+/**
+ * Recursively sort object keys so two structurally-equal values stringify
+ * identically, while preserving array order. This generalizes the old
+ * environment-only sort: reordered maps (env, and now nested `advanced` blocks
+ * like healthcheck/labels) must NOT read as drift, but ordered arrays (ports,
+ * volumes, dependsOn, healthcheck argv) are order-significant and kept as-is.
+ */
+const canonicalize = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    const sorted: Record<string, unknown> = {};
+    for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[k] = canonicalize((value as Record<string, unknown>)[k]);
+    }
+    return sorted;
+  }
+  return value;
 };
+
+const canonicalSpec = (s: ComposeServiceSpec): string =>
+  JSON.stringify(canonicalize(toComposeSpec(s)));
 
 /** Compose-field equality (ignores routing + ordering-insensitive env). */
 export const composeSpecsEqual = (a: ComposeServiceSpec, b: ComposeServiceSpec) =>
@@ -63,25 +70,16 @@ export const composeSpecsEqual = (a: ComposeServiceSpec, b: ComposeServiceSpec) 
 /** Per-field diff of two specs — powers the drift UI. */
 export function composeSpecDiff(base: ComposeServiceSpec, next: ComposeServiceSpec) {
   const fields: (keyof ComposeServiceSpec)[] = [
-    "image", "build", "dockerfile", "ports", "dependsOn", "environment", "volumes", "command", "restart",
+    "image", "build", "dockerfile", "ports", "dependsOn", "environment", "volumes", "command", "restart", "advanced",
   ];
-  // `environment` must be compared key-order-insensitively, matching
-  // canonicalSpec/composeSpecsEqual — otherwise a reordered env block shows as a
-  // phantom "environment changed" the reviewer can't resolve.
-  const canon = (field: keyof ComposeServiceSpec, v: unknown) => {
-    if (field === "environment" && v && typeof v === "object") {
-      const obj = v as Record<string, string>;
-      const sorted: Record<string, string> = {};
-      for (const k of Object.keys(obj).sort()) sorted[k] = obj[k];
-      return JSON.stringify(sorted);
-    }
-    return JSON.stringify(v);
-  };
+  // Compare each field key-order-insensitively (matching canonicalSpec/
+  // composeSpecsEqual) so a reordered `environment` or nested `advanced` block
+  // doesn't show as a phantom change the reviewer can't resolve.
   const changed: { field: string; from: unknown; to: unknown }[] = [];
   const b = toComposeSpec(base);
   const n = toComposeSpec(next);
   for (const f of fields) {
-    if (canon(f, b[f]) !== canon(f, n[f])) {
+    if (JSON.stringify(canonicalize(b[f])) !== JSON.stringify(canonicalize(n[f]))) {
       changed.push({ field: f, from: b[f], to: n[f] });
     }
   }
@@ -105,6 +103,7 @@ export type ParsedComposeService = {
   volumes?: string[];
   command?: string;
   restart?: string;
+  advanced?: ComposeAdvanced;
   exposed?: boolean;
   exposedPort?: string;
   domain?: string;

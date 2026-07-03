@@ -36,6 +36,37 @@ const RestartEnum = Type.Union([
   Type.Literal("unless-stopped"),
 ]);
 
+/** compose `healthcheck` block (mirrors ComposeHealthcheck in @repo/core). */
+const HealthcheckSchema = Type.Object(
+  {
+    test: Type.Optional(
+      Type.Union([
+        Type.String({ maxLength: 2000 }),
+        Type.Array(Type.String({ maxLength: 500 }), { maxItems: 50 }),
+      ]),
+    ),
+    interval: Type.Optional(Type.String({ maxLength: 32 })),
+    timeout: Type.Optional(Type.String({ maxLength: 32 })),
+    retries: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
+    startPeriod: Type.Optional(Type.String({ maxLength: 32 })),
+    disable: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+/**
+ * Extended compose fields stored in the `advanced` JSONB blob (mirrors
+ * ComposeAdvanced in @repo/core). Strict: new keys must be added here as they
+ * become supported, so an unknown key is rejected rather than silently stored.
+ * Grows with each phase (labels, entrypoint, caps, …).
+ */
+const AdvancedSchema = Type.Object(
+  {
+    healthcheck: Type.Optional(HealthcheckSchema),
+  },
+  { additionalProperties: false },
+);
+
 /**
  * Shared compose-source fields (image, Dockerfile, network, runtime).
  * Spread into both Create and Update so a field added here propagates
@@ -50,6 +81,7 @@ const ComposeFieldsBlock = {
   environment: Type.Optional(Type.Record(Type.String(), Type.String())),
   volumes: Type.Optional(Type.Array(Type.String({ maxLength: 500 }), { maxItems: 50 })),
   command: Type.Optional(Type.String({ maxLength: 1000 })),
+  advanced: Type.Optional(AdvancedSchema),
   exposed: Type.Optional(Type.Boolean()),
   exposedPort: Type.Optional(Type.String({ maxLength: 50 })),
   domain: Type.Optional(Type.String({ maxLength: 255 })),

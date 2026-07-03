@@ -10,7 +10,7 @@
  */
 
 import { repos, type Deployment, type Domain, type Project, type Service } from "@repo/db";
-import { SYSTEM, resolveServiceHostnameLabel } from "@repo/core";
+import { SYSTEM, resolveServiceHostnameLabel, type ComposeAdvanced } from "@repo/core";
 import {
   BuildLogger,
   DEFAULT_RESOURCE_CONFIG,
@@ -174,6 +174,7 @@ function createServiceRuntimeConfig(opts: {
     volumes: (service.volumes as string[]) ?? [],
     command: runtimeCommand,
     restart: service.restart ?? "unless-stopped",
+    advanced: service.advanced ?? undefined,
     resources,
     expose: service.exposed,
     publicPort: resolveServicePublicPort(service),
@@ -491,6 +492,20 @@ export async function deployComposeServices(
       serviceId: svc.id,
       status: "deploying",
     });
+
+    // Warn-and-drop: advanced compose keys this runtime can't honor (e.g. cloud
+    // has no Docker healthcheck). Never fails the deploy — the service still
+    // runs, just without the unsupported extras.
+    const droppedAdvancedKeys = (Object.keys(svc.advanced ?? {}) as (keyof ComposeAdvanced)[]).filter(
+      (key) => runtime.unsupportedComposeKeys.has(key),
+    );
+    if (droppedAdvancedKeys.length > 0) {
+      logger.log(
+        `Service "${svc.name}": the ${runtime.name} runtime does not support ${droppedAdvancedKeys.join(", ")} — ignoring.\n`,
+        "warn",
+        { serviceName: svc.name },
+      );
+    }
 
     const serviceRuntimeConfig = createServiceRuntimeConfig({
       project,

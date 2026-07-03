@@ -83,7 +83,7 @@ import type {
 import { BuildLogger, parseLogLevel, sq } from "./build-pipeline";
 import { createDockerBuildContext } from "./docker-build-context";
 import { transferLocalDirectory } from "./transfer";
-import { safeErrorMessage } from "@repo/core";
+import { safeErrorMessage, type ComposeAdvanced, type ComposeHealthcheck } from "@repo/core";
 import {
   type DockerConnectionOptions,
   type DockerTransport,
@@ -120,17 +120,92 @@ function parsePortBindings(portSpecs: string[]): {
   const exposedPorts: Record<string, object> = {};
   const portBindings: Record<string, { HostPort: string }[]> = {};
   for (const spec of portSpecs) {
-    const parts = spec.split(":");
+    // A protocol suffix ("/udp", "/sctp") applies to the container port and sits
+    // at the very end of the spec. Strip it first, then split host:container.
+    // Anything other than udp/sctp (including omitted) is tcp, matching Docker.
+    const slashIdx = spec.lastIndexOf("/");
+    const rawProto = slashIdx >= 0 ? spec.slice(slashIdx + 1).toLowerCase() : "";
+    const protocol = rawProto === "udp" || rawProto === "sctp" ? rawProto : "tcp";
+    const mapping = slashIdx >= 0 ? spec.slice(0, slashIdx) : spec;
+
+    const parts = mapping.split(":");
     if (parts.length === 2) {
       const [hostPort, containerPort] = parts;
-      exposedPorts[`${containerPort}/tcp`] = {};
-      portBindings[`${containerPort}/tcp`] = [{ HostPort: hostPort }];
+      const key = `${containerPort}/${protocol}`;
+      exposedPorts[key] = {};
+      portBindings[key] = [{ HostPort: hostPort }];
     } else if (parts.length === 1) {
-      exposedPorts[`${parts[0]}/tcp`] = {};
-      portBindings[`${parts[0]}/tcp`] = [{ HostPort: "" }]; // random host port
+      const key = `${parts[0]}/${protocol}`;
+      exposedPorts[key] = {};
+      portBindings[key] = [{ HostPort: "" }]; // random host port
     }
   }
   return { exposedPorts, portBindings };
+}
+
+const DURATION_UNITS_NS: Record<string, number> = {
+  ns: 1,
+  us: 1_000,
+  "µs": 1_000,
+  ms: 1_000_000,
+  s: 1_000_000_000,
+  m: 60_000_000_000,
+  h: 3_600_000_000_000,
+};
+
+/**
+ * Parse a compose/Go duration ("30s", "1m30s", "500ms") to nanoseconds — the
+ * unit Docker's Engine API expects for Healthcheck timings. A bare number is
+ * treated as seconds (lenient; compose long-form usually carries units, but
+ * bare ints appear in the wild). Returns undefined when nothing parses, so the
+ * caller omits the field and Docker keeps its default.
+ */
+function parseDurationNs(value: string | undefined): number | undefined {
+  if (value == null) return undefined;
+  const str = String(value).trim();
+  if (!str) return undefined;
+  if (/^\d+(\.\d+)?$/.test(str)) return Math.round(parseFloat(str) * 1_000_000_000);
+  const re = /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g;
+  let total = 0;
+  let matched = false;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(str)) !== null) {
+    matched = true;
+    total += parseFloat(m[1]!) * DURATION_UNITS_NS[m[2]!]!;
+  }
+  return matched ? Math.round(total) : undefined;
+}
+
+/**
+ * Convert a parsed compose healthcheck into a Docker Engine Healthcheck object.
+ * `test` string → `["CMD-SHELL", cmd]`; `test` array → `["CMD", ...argv]`;
+ * `disable` → `["NONE"]` (turns off an image's baked-in check). Returns
+ * undefined when there's nothing to configure so the image default stands.
+ */
+function toDockerHealthcheck(hc?: ComposeHealthcheck):
+  | { Test: string[]; Interval?: number; Timeout?: number; Retries?: number; StartPeriod?: number }
+  | undefined {
+  if (!hc) return undefined;
+  if (hc.disable) return { Test: ["NONE"] };
+
+  let Test: string[] | undefined;
+  if (typeof hc.test === "string" && hc.test.trim()) {
+    Test = ["CMD-SHELL", hc.test];
+  } else if (Array.isArray(hc.test) && hc.test.length > 0) {
+    Test = ["CMD", ...hc.test];
+  }
+  if (!Test) return undefined;
+
+  const Interval = parseDurationNs(hc.interval);
+  const Timeout = parseDurationNs(hc.timeout);
+  const StartPeriod = parseDurationNs(hc.startPeriod);
+  return {
+    Test,
+    ...(Interval !== undefined && { Interval }),
+    ...(Timeout !== undefined && { Timeout }),
+    ...(typeof hc.retries === "number" && { Retries: hc.retries }),
+    ...(StartPeriod !== undefined && { StartPeriod }),
+  };
 }
 
 /**
@@ -218,6 +293,9 @@ export class DockerRuntime implements RuntimeAdapter {
     "serviceShell",
     "projectContainerSweep",
   ]);
+
+  /** Docker honors every extended compose key we currently support. */
+  readonly unsupportedComposeKeys: ReadonlySet<keyof ComposeAdvanced> = new Set();
 
   /** Underlying dockerode instance - exposed for advanced usage */
   readonly docker: Dockerode;
@@ -1388,6 +1466,7 @@ export class DockerRuntime implements RuntimeAdapter {
     const binds = config.volumes.length > 0 ? config.volumes : undefined;
 
     const restartPolicy = resolveRestartPolicy(config.restart);
+    const healthcheck = toDockerHealthcheck(config.advanced?.healthcheck);
 
     log({
       timestamp: new Date().toISOString(),
@@ -1433,6 +1512,7 @@ export class DockerRuntime implements RuntimeAdapter {
         }),
         "openship.service": config.serviceName,
       },
+      ...(healthcheck && { Healthcheck: healthcheck }),
       ExposedPorts: exposedPorts,
       HostConfig: {
         RestartPolicy: restartPolicy,

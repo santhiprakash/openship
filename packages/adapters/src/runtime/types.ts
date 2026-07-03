@@ -23,6 +23,7 @@ import type {
   ShellOptions,
   ShellSession,
 } from "../types";
+import type { ComposeAdvanced } from "@repo/core";
 import type { BuildLogger } from "./build-pipeline";
 
 // ─── Capabilities ────────────────────────────────────────────────────────────
@@ -295,6 +296,9 @@ export interface MultiServiceDeployConfig {
   volumes: string[];
   command?: string;
   restart?: string;
+  /** Extended compose fields (healthcheck, …). Docker honors them; runtimes
+   *  that can't (cloud) warn-and-drop. See ComposeAdvanced in @repo/core. */
+  advanced?: ComposeAdvanced;
   resources?: { cpuCores?: number; memoryMb?: number };
   publicPort?: number;
   publicSlug?: string;
@@ -311,6 +315,15 @@ export interface MultiServiceDeployResult {
 
 export interface MultiServiceRuntimeAdapter extends RuntimeAdapter {
   readonly capabilities: ReadonlySet<RuntimeCapability>;
+
+  /**
+   * Extended compose keys (from `service.advanced`) this runtime cannot honor.
+   * The compose deploy service warns once per service for any requested key in
+   * this set and drops it — never fails — so a docker-authored compose file
+   * still deploys elsewhere, just without the host-level extras. Empty = honors
+   * everything it's given (the Docker runtime).
+   */
+  readonly unsupportedComposeKeys: ReadonlySet<keyof ComposeAdvanced>;
 
   /** Prepare shared runtime state for sibling services (network, workspace, mesh, etc.) */
   ensureServiceGroup(config: {

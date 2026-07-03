@@ -113,6 +113,7 @@ export async function acceptServiceDrift(
     volumes: theirs.volumes ?? [],
     command: theirs.command ?? null,
     restart: theirs.restart ?? "unless-stopped",
+    advanced: theirs.advanced ?? {},
     importedSpec: theirs,
     driftSpec: null,
   });
@@ -199,6 +200,7 @@ export async function createService(
     volumes: data.volumes ?? [],
     command: trimOrNull(data.command),
     restart: data.restart ?? "unless-stopped",
+    advanced: data.advanced ?? {},
     ...routing,
     enabled: data.enabled ?? true,
     sortOrder: data.sortOrder ?? services.length,

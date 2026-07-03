@@ -88,3 +88,37 @@ export interface PaginatedResponse<T> extends ApiResponse<T[]> {
   page: number;
   perPage: number;
 }
+
+/* ---------- Docker Compose ---------- */
+
+/**
+ * A container healthcheck as authored in compose (`services.<name>.healthcheck`),
+ * shaped after the Docker Engine Healthcheck object. `test` is normalized to
+ * either a shell string (compose `test: "curl ..."` / the `CMD-SHELL` array
+ * form) or an argv array (the `CMD` array form). Durations stay as compose
+ * strings ("30s", "1m30s") — the runtime converts them to nanoseconds at
+ * container-create time. `disable` mirrors compose `healthcheck.disable: true`
+ * (turns off an image's baked-in check → Docker `Test: ["NONE"]`).
+ */
+export type ComposeHealthcheck = {
+  test?: string | string[];
+  interval?: string;
+  timeout?: string;
+  retries?: number;
+  startPeriod?: string;
+  disable?: boolean;
+};
+
+/**
+ * Extended compose fields that don't warrant their own first-class columns.
+ * Stored as ONE JSONB blob (`service.advanced`) and nested inside the drift
+ * `ComposeServiceSpec` so 3-way reconciliation covers it like any other
+ * compose-owned field. Grows per phase (labels, entrypoint, extra_hosts, dns,
+ * cap_add, …); because it's JSONB, every addition is a pure TS shape-widening —
+ * no migration. Runtimes that can't honor a key (e.g. the cloud runtime for
+ * host-level options) warn-and-drop rather than fail. Lives in @repo/core so
+ * both @repo/db (storage) and @repo/adapters (runtime) can share one definition.
+ */
+export type ComposeAdvanced = {
+  healthcheck?: ComposeHealthcheck;
+};

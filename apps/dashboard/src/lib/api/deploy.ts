@@ -1,6 +1,6 @@
 import { api } from "./client";
 import { endpoints } from "./endpoints";
-import type { StackId } from "@repo/core";
+import type { StackId, ComposeAdvanced } from "@repo/core";
 import type { CloudResourceTier, CloudResourceCustom } from "@/context/deployment/types";
 
 export type PrepareProjectSource =
@@ -28,6 +28,7 @@ export interface PrepareComposeService {
   volumes: string[];
   command?: string;
   restart?: string;
+  advanced?: ComposeAdvanced;
   exposed?: boolean;
   exposedPort?: string;
   domain?: string;

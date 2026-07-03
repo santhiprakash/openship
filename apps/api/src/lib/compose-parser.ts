@@ -6,6 +6,7 @@
  */
 
 import { parse as parseYaml } from "yaml";
+import type { ComposeAdvanced, ComposeHealthcheck } from "@repo/core";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,8 @@ export interface ComposeService {
   volumes: string[];
   command?: string;
   restart?: string;
+  /** Extended compose fields (healthcheck, …) not warranting a top-level key. */
+  advanced?: ComposeAdvanced;
   exposed?: boolean;
   exposedPort?: string;
   domain?: string;
@@ -78,6 +81,7 @@ export function parseComposeFile(content: string, options: ComposeParseOptions =
     const svc = def as Record<string, unknown>;
     const build = parseBuild(svc.build, interpolationEnv);
     const environment = parseEnvironment(svc.environment, interpolationEnv);
+    const advanced = parseAdvanced(svc, interpolationEnv);
 
     services.push({
       name,
@@ -91,6 +95,7 @@ export function parseComposeFile(content: string, options: ComposeParseOptions =
       volumes: parseVolumes(svc.volumes, interpolationEnv),
       command: parseCommand(svc.command, interpolationEnv),
       restart: typeof svc.restart === "string" ? interpolateComposeString(svc.restart, interpolationEnv) : undefined,
+      ...(advanced && { advanced }),
     });
   }
 
@@ -117,14 +122,19 @@ function parseBuild(build: unknown, env: Record<string, string>): { context?: st
 function parsePorts(ports: unknown, env: Record<string, string>): string[] {
   if (!Array.isArray(ports)) return [];
   return ports.map((p) => {
+    // String short form already carries any "/udp" suffix — keep it verbatim.
     if (typeof p === "string") return interpolateComposeString(p, env);
     if (typeof p === "number") return String(p);
     if (p && typeof p === "object") {
       const port = p as Record<string, unknown>;
       const target = port.target ?? port.container_port;
       const published = port.published ?? port.host_port;
+      // Long form carries protocol as a separate `protocol: tcp|udp` field;
+      // fold it back into the "/proto" suffix so the string form is lossless.
+      const proto = typeof port.protocol === "string" ? port.protocol.toLowerCase() : undefined;
+      const suffix = proto && proto !== "tcp" ? `/${proto}` : "";
       if (target) {
-        return published ? `${published}:${target}` : String(target);
+        return published ? `${published}:${target}${suffix}` : `${target}${suffix}`;
       }
     }
     return String(p);
@@ -209,6 +219,72 @@ function parseCommand(command: unknown, env: Record<string, string>): string | u
     return command.map((part) => interpolateComposeString(String(part), env)).join(" ");
   }
   return undefined;
+}
+
+/**
+ * Extract the extended compose keys that live under `service.advanced`. Returns
+ * undefined when nothing was found so callers can omit the field entirely (keeps
+ * it out of drift comparisons and the runtime payload). Grows as more keys are
+ * supported; for A1 only `healthcheck` is read.
+ */
+function parseAdvanced(svc: Record<string, unknown>, env: Record<string, string>): ComposeAdvanced | undefined {
+  const advanced: ComposeAdvanced = {};
+
+  const healthcheck = parseHealthcheck(svc.healthcheck, env);
+  if (healthcheck) advanced.healthcheck = healthcheck;
+
+  return Object.keys(advanced).length > 0 ? advanced : undefined;
+}
+
+/**
+ * Normalize a compose `healthcheck` block. The `test` field is reduced to the
+ * form the runtime re-wraps: a shell string (compose `test: "…"` or the
+ * `CMD-SHELL` array form) or an argv array (the `CMD` array form). `["NONE"]`
+ * and `disable: true` both collapse to `disable`. Durations are kept as compose
+ * strings ("30s") — the runtime converts to nanoseconds at create time.
+ */
+function parseHealthcheck(hc: unknown, env: Record<string, string>): ComposeHealthcheck | undefined {
+  if (!hc || typeof hc !== "object") return undefined;
+  const h = hc as Record<string, unknown>;
+  const result: ComposeHealthcheck = {};
+
+  if (h.disable === true) result.disable = true;
+
+  const rawTest = h.test;
+  if (typeof rawTest === "string") {
+    result.test = interpolateComposeString(rawTest, env);
+  } else if (Array.isArray(rawTest)) {
+    const parts = rawTest.map((p) => interpolateComposeString(String(p), env));
+    const head = parts[0];
+    if (head === "NONE") {
+      result.disable = true;
+    } else if (head === "CMD-SHELL") {
+      result.test = parts.slice(1).join(" ");
+    } else if (head === "CMD") {
+      result.test = parts.slice(1);
+    } else {
+      result.test = parts;
+    }
+  }
+
+  const dur = (v: unknown): string | undefined =>
+    typeof v === "string" ? interpolateComposeString(v, env) : typeof v === "number" ? String(v) : undefined;
+
+  const interval = dur(h.interval);
+  if (interval) result.interval = interval;
+  const timeout = dur(h.timeout);
+  if (timeout) result.timeout = timeout;
+  const startPeriod = dur(h.start_period);
+  if (startPeriod) result.startPeriod = startPeriod;
+
+  if (typeof h.retries === "number" && Number.isInteger(h.retries) && h.retries >= 0) {
+    result.retries = h.retries;
+  } else if (typeof h.retries === "string") {
+    const n = Number(interpolateComposeString(h.retries, env));
+    if (Number.isInteger(n) && n >= 0) result.retries = n;
+  }
+
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 // ─── Docker Compose interpolation ────────────────────────────────────────────

@@ -1,5 +1,8 @@
 import { api } from "./client";
 import { endpoints } from "./endpoints";
+import type { ComposeAdvanced } from "@repo/core";
+
+export type { ComposeAdvanced, ComposeHealthcheck } from "@repo/core";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -32,6 +35,8 @@ export interface Service {
   volumes: string[] | null;
   command: string | null;
   restart: string | null;
+  /** Extended compose fields (healthcheck, …) stored as one JSONB blob. */
+  advanced?: ComposeAdvanced | null;
   exposed: boolean;
   exposedPort: string | null;
   domain: string | null;
@@ -93,6 +98,7 @@ export type ServiceInput = {
   volumes?: string[];
   command?: string;
   restart?: string;
+  advanced?: ComposeAdvanced;
   exposed?: boolean;
   exposedPort?: string;
   domain?: string;

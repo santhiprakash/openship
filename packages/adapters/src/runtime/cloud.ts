@@ -64,7 +64,7 @@ import { runLocalBuild } from "./local-build";
 import { transferLocalDirectory } from "./transfer";
 import { checkGit } from "../system/checks";
 import { installGit } from "../system/installer";
-import { STACKS, TRANSFER_EXCLUDES, safeErrorMessage, type StackId, type StackDefinition } from "@repo/core";
+import { STACKS, TRANSFER_EXCLUDES, safeErrorMessage, type StackId, type StackDefinition, type ComposeAdvanced } from "@repo/core";
 
 type CloudWorkspaceRuntime = Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
 const DOCKERFILE_SOURCE_IMAGE = "node:22";
@@ -295,6 +295,16 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
     "containerIp",
     "rollback",
     "serviceShell",
+  ]);
+
+  /**
+   * Services map to Oblien workspaces, not Docker containers, so host-level
+   * compose extras have no equivalent. `healthcheck` is dropped-with-a-warning
+   * here (A1); host-level keys — caps/devices/privileged/sysctls/ulimits/
+   * logging/dns — join this set as they're added in later phases.
+   */
+  readonly unsupportedComposeKeys: ReadonlySet<keyof ComposeAdvanced> = new Set<keyof ComposeAdvanced>([
+    "healthcheck",
   ]);
 
   private readonly client: Oblien;

@@ -4,7 +4,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Save, X } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Checkbox } from "@/components/ui/Checkbox";
-import { serviceKind, type Service, type ServiceInput } from "@/lib/api/services";
+import {
+  serviceKind,
+  type Service,
+  type ServiceInput,
+  type ComposeAdvanced,
+  type ComposeHealthcheck,
+} from "@/lib/api/services";
 import { RoutingSettingsCard } from "@/components/routing/RoutingSettingsCard";
 import EnvironmentVariables from "@/components/import-project/EnvironmentVariables";
 
@@ -69,6 +75,13 @@ export function ServiceEditorModal({
   const [volumes, setVolumes] = useState("");
   const [command, setCommand] = useState("");
   const [restart, setRestart] = useState("unless-stopped");
+  // Healthcheck (compose `advanced.healthcheck`). `test` is edited as the shell
+  // (CMD-SHELL) form; empty test = no healthcheck override.
+  const [hcTest, setHcTest] = useState("");
+  const [hcInterval, setHcInterval] = useState("");
+  const [hcTimeout, setHcTimeout] = useState("");
+  const [hcRetries, setHcRetries] = useState("");
+  const [hcStartPeriod, setHcStartPeriod] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [exposed, setExposed] = useState(false);
   const [exposedPort, setExposedPort] = useState("");
@@ -101,6 +114,12 @@ export function ServiceEditorModal({
     setVolumes(joinList(service?.volumes));
     setCommand(service?.command ?? "");
     setRestart(service?.restart ?? "unless-stopped");
+    const hc = service?.advanced?.healthcheck;
+    setHcTest(hc ? (Array.isArray(hc.test) ? hc.test.join(" ") : hc.test ?? "") : "");
+    setHcInterval(hc?.interval ?? "");
+    setHcTimeout(hc?.timeout ?? "");
+    setHcRetries(hc?.retries != null ? String(hc.retries) : "");
+    setHcStartPeriod(hc?.startPeriod ?? "");
     setEnabled(service?.enabled ?? true);
     setExposed(service?.exposed ?? false);
     setExposedPort(service?.exposedPort ?? "");
@@ -157,6 +176,20 @@ export function ServiceEditorModal({
     setSaving(true);
     setError(null);
 
+    // Assemble the compose `advanced` blob. Empty test → `{}` so saving clears
+    // any prior healthcheck (rather than silently preserving it).
+    const buildAdvanced = (): ComposeAdvanced => {
+      const test = hcTest.trim();
+      if (!test) return {};
+      const hc: ComposeHealthcheck = { test };
+      if (hcInterval.trim()) hc.interval = hcInterval.trim();
+      if (hcTimeout.trim()) hc.timeout = hcTimeout.trim();
+      if (hcStartPeriod.trim()) hc.startPeriod = hcStartPeriod.trim();
+      const retries = Number(hcRetries);
+      if (hcRetries.trim() && Number.isInteger(retries) && retries >= 0) hc.retries = retries;
+      return { healthcheck: hc };
+    };
+
     const payload: ServiceInput = isMonorepo
       ? {
           // Monorepo sub-app: source-built. No image/build/dockerfile -
@@ -200,6 +233,7 @@ export function ServiceEditorModal({
           volumes: splitList(volumes),
           command: command.trim(),
           restart,
+          advanced: buildAdvanced(),
           enabled,
           exposed,
           exposedPort: exposed ? exposedPort.trim() || undefined : undefined,
@@ -449,6 +483,51 @@ export function ServiceEditorModal({
               className="w-full rounded-xl border border-border/50 bg-muted/20 px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary/40"
             />
           </Field>
+
+          {/* Compose-only: container healthcheck override. Honored by the Docker
+              runtime; the cloud runtime ignores it (warns at deploy). */}
+          {!isMonorepo && (
+            <Field label="Healthcheck">
+              <input
+                value={hcTest}
+                onChange={(event) => setHcTest(event.target.value)}
+                placeholder="curl -f http://localhost:3000/health || exit 1"
+                className="h-11 w-full rounded-xl border border-border/50 bg-muted/20 px-3 text-sm text-foreground outline-none transition-colors focus:border-primary/40"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Test command (shell form). Leave empty to use the image&apos;s default check.
+              </p>
+              {hcTest.trim() && (
+                <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                  <input
+                    value={hcInterval}
+                    onChange={(event) => setHcInterval(event.target.value)}
+                    placeholder="interval 30s"
+                    className="h-10 w-full rounded-lg border border-border/50 bg-muted/20 px-2.5 text-sm text-foreground outline-none focus:border-primary/40"
+                  />
+                  <input
+                    value={hcTimeout}
+                    onChange={(event) => setHcTimeout(event.target.value)}
+                    placeholder="timeout 10s"
+                    className="h-10 w-full rounded-lg border border-border/50 bg-muted/20 px-2.5 text-sm text-foreground outline-none focus:border-primary/40"
+                  />
+                  <input
+                    value={hcRetries}
+                    onChange={(event) => setHcRetries(event.target.value)}
+                    placeholder="retries 3"
+                    inputMode="numeric"
+                    className="h-10 w-full rounded-lg border border-border/50 bg-muted/20 px-2.5 text-sm text-foreground outline-none focus:border-primary/40"
+                  />
+                  <input
+                    value={hcStartPeriod}
+                    onChange={(event) => setHcStartPeriod(event.target.value)}
+                    placeholder="start 40s"
+                    className="h-10 w-full rounded-lg border border-border/50 bg-muted/20 px-2.5 text-sm text-foreground outline-none focus:border-primary/40"
+                  />
+                </div>
+              )}
+            </Field>
+          )}
 
           <div className="rounded-2xl border border-border/50 bg-muted/10 p-4">
             <RoutingSettingsCard

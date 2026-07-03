@@ -11,6 +11,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { project } from "./project";
 import { deployment } from "./deployment";
+import type { ComposeAdvanced } from "@repo/core";
 
 /**
  * The compose-owned fields of a service — the shape stored in `importedSpec`
@@ -28,6 +29,7 @@ export type ComposeServiceSpec = {
   volumes?: string[];
   command?: string | null;
   restart?: string | null;
+  advanced?: ComposeAdvanced;
 };
 
 // ─── Services ────────────────────────────────────────────────────────────────
@@ -83,6 +85,13 @@ export const service = pgTable("service", {
   command: text("command"),
   /** Restart policy: no | always | on-failure | unless-stopped */
   restart: text("restart").default("unless-stopped"),
+  /**
+   * Extended compose fields (healthcheck now; labels/entrypoint/caps/… later)
+   * that don't warrant their own columns. See ComposeAdvanced. Honored by the
+   * Docker runtime; runtimes that can't (cloud) warn-and-drop. Widening the
+   * type needs no migration — it's a JSONB blob.
+   */
+  advanced: jsonb("advanced").$type<ComposeAdvanced>().default({}),
 
   /* ── Public routing ─────────────────────────────────────────────── */
   /** Whether this service should be exposed publicly through routing */
