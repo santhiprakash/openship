@@ -35,11 +35,23 @@ export function OAuthButtons({ callbackURL = "/" }: { callbackURL?: string }) {
   async function handleOAuth(provider: "github" | "google") {
     setLoading(provider);
     try {
+      // Resolve callbackURL against the DASHBOARD origin. Better Auth resolves
+      // a relative callback against its baseURL — the API host — so in
+      // split-origin SaaS (app.* vs api.*) a bare "/" dead-ends on the API
+      // subdomain after the OAuth callback instead of returning to the app.
+      const appOrigin = window.location.origin;
+      const cb = new URL(callbackURL, appOrigin).toString();
       // better-auth resolves sign-in errors into `{ error }` rather than
       // throwing, so inspecting the return value is what actually surfaces a
       // misconfigured/failed provider — the try/catch only covers thrown
       // network/abort errors. Without this the spinner spun forever.
-      const { error } = await signIn.social({ provider, callbackURL });
+      const { error } = await signIn.social({
+        provider,
+        callbackURL: cb,
+        // First-time OAuth users take the newUser branch; keep them on the app.
+        newUserCallbackURL: cb,
+        errorCallbackURL: new URL("/login", appOrigin).toString(),
+      });
       if (error) {
         toast("error", error.message ?? t.auth.errors.oauthFailed);
         setLoading(null);

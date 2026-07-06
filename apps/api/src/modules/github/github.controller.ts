@@ -11,7 +11,7 @@
  */
 
 import type { Context } from "hono";
-import { env } from "../../config/env";
+import { env, runtimeTarget } from "../../config/env";
 import { auth } from "../../lib/auth";
 import { audit, auditContextFrom } from "../../lib/audit";
 import * as githubAuth from "./github.auth";
@@ -405,10 +405,22 @@ export async function connectRedirect(c: Context) {
   // Both "app" (this is the SaaS) and "cloud-app" (self-hosted + cloud-
   // connected) install the GitHub App, so both want the install
   // callback URL. CLI / OAuth-only paths just close the popup.
-  const callbackURL =
+  const path =
     mode === "app" || mode === "cloud-app"
       ? "/auth/callback/install"
       : "/auth/callback/close";
+
+  // Better Auth stores callbackURL/errorCallbackURL verbatim and redirects to
+  // them as-is after the OAuth callback (which runs on the API origin). In
+  // split-origin SaaS (app.* vs api.*) a relative path would resolve against
+  // the API host and dead-end, so absolutize against the dashboard origin.
+  // Self-hosted keeps the relative path (resolves against its single origin).
+  const dashOrigin = env.CLOUD_MODE ? runtimeTarget.dashboard : "";
+  const callbackURL = `${dashOrigin}${path}`;
+  // Route link FAILURES to the app's close page (which surfaces the error via
+  // localStorage → opener toast) instead of Better Auth's raw error page on
+  // the API origin, where the popup would otherwise dead-end.
+  const errorCallbackURL = `${dashOrigin}/auth/callback/close`;
 
   try {
     // Use linkSocialAccount (not signInSocial) because the user is already
@@ -417,6 +429,7 @@ export async function connectRedirect(c: Context) {
       body: {
         provider: "github",
         callbackURL,
+        errorCallbackURL,
         disableRedirect: true,
       },
       headers: c.req.raw.headers,

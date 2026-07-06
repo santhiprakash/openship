@@ -18,6 +18,10 @@ import {
 } from "@/lib/api/client";
 import { openAuthWindow } from "@/utils/authWindow";
 import { useToast } from "@/context/ToastContext";
+import {
+  GITHUB_CONNECT_ERROR_KEY,
+  githubConnectErrorMessage,
+} from "@/lib/github-connect-error";
 
 /* ── Types ────────────────────────────────────────────────────────── */
 
@@ -272,6 +276,16 @@ export function GitHubProvider({ children, initialData }: GitHubProviderProps) {
 
     const finishRedirectFlow = () => {
       setConnecting(false);
+      // Surface a link failure the callback page stashed (e.g. the GitHub
+      // account is already linked to a different user) — otherwise the flow
+      // just silently reports "not connected".
+      try {
+        const linkError = localStorage.getItem(GITHUB_CONNECT_ERROR_KEY);
+        if (linkError) {
+          localStorage.removeItem(GITHUB_CONNECT_ERROR_KEY);
+          showToast(githubConnectErrorMessage(linkError), "error", "GitHub");
+        }
+      } catch { /* storage unavailable */ }
       // One immediate + one short follow-up. The immediate call covers
       // the happy path; the 1500ms follow-up covers the race where the
       // popup closes before the SaaS-side cookie/DB write is visible.

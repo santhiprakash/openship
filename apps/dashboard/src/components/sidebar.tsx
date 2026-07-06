@@ -109,7 +109,7 @@ function getNavSections(isSaaS: boolean, selfHosted: boolean): NavSection[] {
     { section: "main", items: MAIN_ITEMS },
     { section: "settings", items: settingsItems },
     { section: "infrastructure", items: infraItems },
-  ];
+  ].filter((s) => s.items.length > 0);
 }
 
 export function Sidebar() {

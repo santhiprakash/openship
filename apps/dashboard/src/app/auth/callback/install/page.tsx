@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { getApiOrigin } from "@/lib/api/urls";
+import { GITHUB_CONNECT_ERROR_KEY } from "@/lib/github-connect-error";
 
 /**
  * OAuth callback for cloud mode - after GitHub OAuth completes,
@@ -11,6 +12,16 @@ import { getApiOrigin } from "@/lib/api/urls";
  */
 export default function OAuthCallbackInstall() {
   useEffect(() => {
+    // Better Auth appends ?error=<code> on a failed link (e.g. the GitHub
+    // account is already linked to a different user). Hand it to the opener
+    // via same-origin localStorage and close instead of proceeding to install.
+    const linkError = new URLSearchParams(window.location.search).get("error");
+    if (linkError) {
+      try { localStorage.setItem(GITHUB_CONNECT_ERROR_KEY, linkError); } catch { /* storage unavailable */ }
+      window.close();
+      return;
+    }
+
     async function redirect() {
       try {
         const BASE = getApiOrigin(window.location.origin);
