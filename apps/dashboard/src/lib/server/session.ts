@@ -126,6 +126,26 @@ export interface GetDeploymentInfoOptions {
   skipCache?: boolean;
 }
 
+/**
+ * Fetch /health/env with one short retry on a transient (rate-limit /
+ * overload) status. This is a bootstrap call the whole dashboard SSR depends
+ * on, so a single blip must not cascade into a login 500. `/health/env` is
+ * exempt from the API rate limiter, but the retry is cheap insurance against a
+ * momentary 429/503 from any layer in front of it.
+ */
+async function fetchDeploymentInfoWithRetry(): Promise<DeploymentInfo> {
+  try {
+    return await serverApi.get<DeploymentInfo>("health/env");
+  } catch (err) {
+    const status = (err as { status?: number } | null)?.status;
+    if (status === 429 || status === 503) {
+      await new Promise((r) => setTimeout(r, 250));
+      return serverApi.get<DeploymentInfo>("health/env");
+    }
+    throw err;
+  }
+}
+
 export async function getDeploymentInfo(
   options: GetDeploymentInfoOptions = {},
 ): Promise<DeploymentInfo> {
@@ -138,7 +158,7 @@ export async function getDeploymentInfo(
   }
 
   try {
-    _deploymentInfo = await serverApi.get<DeploymentInfo>("health/env");
+    _deploymentInfo = await fetchDeploymentInfoWithRetry();
     _deploymentInfoFetchedAt = Date.now();
   } catch (err) {
     // Last-known-good beats a transient refetch failure.

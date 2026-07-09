@@ -103,6 +103,20 @@ export function rateLimiterFor(policyId: PolicyId): MiddlewareHandler {
  * for unauthed traffic and `default-authed` for authed traffic.
  */
 export async function rateLimiter(c: Context, next: Next): Promise<void | Response> {
+  // Health/bootstrap endpoints are NEVER rate-limited. The dashboard MUST
+  // reach GET /health/env to render at all (it refuses to guess deploy/auth
+  // mode), and the orchestrator + load balancers poll /health for liveness.
+  // Because server-side SSR calls all originate from ONE IP (the dashboard
+  // host; loopback in dev), a burst of renders would otherwise drain the
+  // per-IP `default-anon` bucket and 429 the health probe — turning a
+  // transient spike into a full dashboard outage (429 → getDeploymentInfo →
+  // login 500). These endpoints expose only public deploy metadata, so
+  // exempting them carries no data risk.
+  if (c.req.path.startsWith("/api/health")) {
+    await next();
+    return;
+  }
+
   // Per-route middleware already enforced its policy — skip the default.
   if (c.get("rateLimitApplied" as never)) {
     await next();
