@@ -77,5 +77,26 @@ export function createSettingsRepo(db: Database) {
         .limit(1);
       return rows[0]?.settings;
     },
+
+    /**
+     * All org ids whose owner has linked Openship Cloud. Same join/filter as
+     * findOrgOwnerCloudLink, minus the org scope — used to route an org-less
+     * inbound webhook to the cloud-linked org that owns the pushed repo.
+     */
+    async listCloudLinkedOrgIds(): Promise<string[]> {
+      const rows = await db
+        .select({ organizationId: member.organizationId })
+        .from(userSettings)
+        .innerJoin(member, eq(member.userId, userSettings.userId))
+        .where(
+          and(
+            eq(member.role, "owner"),
+            isNotNull(userSettings.cloudSessionToken),
+            sql`length(${userSettings.cloudSessionToken}) > 0`,
+          ),
+        )
+        .groupBy(member.organizationId);
+      return rows.map((r) => r.organizationId);
+    },
   };
 }

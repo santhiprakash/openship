@@ -90,7 +90,9 @@ export async function handleCheckRun(
       branch,
       commitSha: dep.commitSha ?? undefined,
       commitMessage: dep.commitMessage ?? undefined,
-      trigger: "webhook",
+      // "check-run" (not "webhook") so it bypasses the push commit-sha dedup —
+      // a deliberate re-run at the current commit.
+      trigger: "check-run",
       serviceIds: [sd.serviceId],
       forceAll: false,
       commitShaBefore: dep.commitShaBefore ?? undefined,

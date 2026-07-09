@@ -56,6 +56,9 @@ export async function create(c: Context) {
     smartRoute?: boolean;
     /** Refresh: re-apply current env to the active deploy — no git pull, no rebuild. */
     refresh?: boolean;
+    /** Auto-deploy marker from the webhook forward. Only "webhook" is honored
+     *  (sanitized below) so it can't spoof trigger provenance. */
+    trigger?: string;
   }>();
   if (body.projectId) {
     await permission.assert(getRequestContext(c), { resourceType: "project", resourceId: body.projectId, action: "write" });
@@ -82,6 +85,7 @@ export async function create(c: Context) {
     serviceIds: body.serviceIds,
     smartRoute: body.smartRoute,
     refresh: body.refresh,
+    trigger: body.trigger === "webhook" ? "webhook" : undefined,
   });
   return c.json({ data: result }, 202);
 }

@@ -24,6 +24,7 @@ import {
   restoreSubgraph,
   deleteProjectSubgraph,
   PkCollisionError,
+  repos,
   db,
   schema,
   eq,
@@ -209,6 +210,28 @@ export async function promoteProjectToCloud(
     projectId,
     organizationId: ctx.organizationId,
   });
+
+  // The teardown below keeps the GitHub webhook but drops the local row (and its
+  // secret). Persist a binding first so a push forwarded from this box can find
+  // the cloud project and hard-validate the signature. cloudProjectId == the
+  // local id (dump/ingest preserves it); the secret ciphertext is copied verbatim.
+  const local = await repos.project.findById(projectId).catch(() => null);
+  if (local?.gitOwner && local?.gitRepo && local?.webhookId) {
+    await repos.cloudWebhookBinding
+      .upsert({
+        organizationId: ctx.organizationId,
+        cloudProjectId: projectId,
+        gitOwner: local.gitOwner,
+        gitRepo: local.gitRepo,
+        gitBranch: local.gitBranch ?? "",
+        webhookId: local.webhookId,
+        webhookSecret: local.webhookSecret ?? null,
+      })
+      .catch((err) =>
+        console.warn(`[transfer] cloud webhook binding upsert failed for ${projectId}:`, err),
+      );
+  }
+
   const teardown = await teardownProject(ctx, projectId, {
     force: true,
     preserveWebhook: true,
@@ -283,6 +306,12 @@ export async function transferProjectToSelfHosted(
     .update(schema.project)
     .set({ cloudWorkspaceId: null, updatedAt: new Date() })
     .where(eq(schema.project.id, project.id));
+
+  // The project is local again — drop any cloud webhook binding so pushes are
+  // handled locally, not forwarded to the (now torn-down) SaaS copy.
+  await repos.cloudWebhookBinding
+    .deleteByCloudProject(project.id)
+    .catch(() => {});
 
   // 5) Tear down the SaaS copy's ROWS so it doesn't linger as a leftover that
   //    would collide on a future re-promote. Best-effort: the local copy is

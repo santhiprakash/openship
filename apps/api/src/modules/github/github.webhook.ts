@@ -13,6 +13,7 @@
 
 import { repos } from "@repo/db";
 import { env } from "../../config/env";
+import { decrypt } from "../../lib/encryption";
 import { verifyHmacSha256 } from "../webhooks/webhook.service";
 import { resolveProjectWebhookSecret } from "./github.service";
 import { handleInstallation } from "./webhook-installation";
@@ -83,6 +84,19 @@ async function resolveDeliverySecret(
     // value (project.webhookSecret was non-null).
     if (p.webhookSecret && secret) return secret;
   }
+
+  // No local project → may be a CLOUD project this box forwards for. The binding
+  // holds the same per-project secret, preserved across promote, so a forged push
+  // still rejects. Decrypt failure (key rotation) falls through to env.
+  const bindings = await repos.cloudWebhookBinding.findByRepo(owner, repo).catch(() => []);
+  for (const b of bindings) {
+    if (!b.webhookSecret) continue;
+    try {
+      return decrypt(b.webhookSecret);
+    } catch {
+      // try the next binding, then env fallback
+    }
+  }
   return null;
 }
 
@@ -107,16 +121,13 @@ export const githubWebhookProvider: WebhookProvider = {
     const projectSecret = await resolveDeliverySecret(payload, headers);
     const secret = projectSecret ?? env.GITHUB_WEBHOOK_SECRET ?? null;
 
+    // No unsigned path — a delivery with no resolvable secret can't be verified,
+    // even self-hosted. Register the webhook through Openship (sets a per-project
+    // secret) or configure GITHUB_WEBHOOK_SECRET.
     if (!secret) {
-      if (env.CLOUD_MODE || env.GITHUB_AUTH_MODE === "app") {
-        return { valid: false, error: "GITHUB_WEBHOOK_SECRET is required in GitHub App mode" };
-      }
-
-      // Self-hosted installs may use unsigned repo webhooks while setting up.
-      return { valid: true };
+      return { valid: false, error: "No webhook secret configured — signature cannot be verified" };
     }
 
-    // Secret configured but no signature in request - reject
     if (!signature) {
       return { valid: false, error: "Missing x-hub-signature-256 header" };
     }
@@ -131,17 +142,37 @@ export const githubWebhookProvider: WebhookProvider = {
       return { success: true, event: "unknown", message: "Missing x-github-event header" };
     }
 
+    // Idempotency: claim the delivery id so an at-least-once redelivery is dropped
+    // (persistent — survives restarts/replicas). Missing id or claim error → process.
+    const deliveryId = headers["x-github-delivery"];
+    if (deliveryId) {
+      const claimed = await repos.githubWebhookEvent.claim(deliveryId, event).catch(() => true);
+      if (!claimed) {
+        return { success: true, event, message: "Duplicate delivery ignored" };
+      }
+    }
+
+    let result: WebhookHandlerResult;
     switch (event) {
       case "installation":
-        return handleInstallation(payload as GitHubInstallationPayload);
+        result = await handleInstallation(payload as GitHubInstallationPayload);
+        break;
       case "push":
-        return handlePush(payload as GitHubPushPayload);
+        result = await handlePush(payload as GitHubPushPayload);
+        break;
       case "check_run":
-        return handleCheckRun(payload as GitHubCheckRunPayload);
+        result = await handleCheckRun(payload as GitHubCheckRunPayload);
+        break;
       case "ping":
-        return { success: true, event, message: "Pong" };
+        result = { success: true, event, message: "Pong" };
+        break;
       default:
-        return { success: true, event, message: `Event '${event}' not handled` };
+        result = { success: true, event, message: `Event '${event}' not handled` };
     }
+
+    if (deliveryId) {
+      await repos.githubWebhookEvent.markProcessed(deliveryId).catch(() => {});
+    }
+    return result;
   },
 };

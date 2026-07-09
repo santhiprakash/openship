@@ -120,7 +120,7 @@ export default function ProjectsPage() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-6">
               {/* Left: project list / empty state for the active search + filter */}
               <div className="min-w-0">
                 {filteredProjects.length > 0 ? (

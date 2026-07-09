@@ -204,6 +204,20 @@
       "when": 1783460970566,
       "tag": "0028_stale_rogue",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1783622801772,
+      "tag": "0029_bouncy_loners",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1783624145593,
+      "tag": "0030_bright_darkstar",
+      "breakpoints": true
     }
   ]
 }

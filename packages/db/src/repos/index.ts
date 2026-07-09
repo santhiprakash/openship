@@ -36,6 +36,16 @@ export {
 } from "./deployment.repo";
 export { createDomainRepo, type Domain, type NewDomain } from "./domain.repo";
 export {
+  createCloudWebhookBindingRepo,
+  type CloudWebhookBinding,
+  type NewCloudWebhookBinding,
+} from "./cloud-webhook-binding.repo";
+export {
+  createGithubWebhookEventRepo,
+  type GithubWebhookEvent,
+  type NewGithubWebhookEvent,
+} from "./github-webhook-event.repo";
+export {
   createServiceRepo,
   normalizeRoutingFields,
   toComposeSpec,
@@ -160,6 +170,8 @@ import { createProjectAppRepo } from "./project-app.repo";
 import { createProjectRepo } from "./project.repo";
 import { createDeploymentRepo } from "./deployment.repo";
 import { createDomainRepo } from "./domain.repo";
+import { createCloudWebhookBindingRepo } from "./cloud-webhook-binding.repo";
+import { createGithubWebhookEventRepo } from "./github-webhook-event.repo";
 import { createServiceRepo } from "./service.repo";
 import { createServiceDeploymentRepo } from "./service-deployment.repo";
 import { createSettingsRepo } from "./settings.repo";
@@ -213,6 +225,8 @@ export const repos = {
   project: createProjectRepo(db),
   deployment: createDeploymentRepo(db),
   domain: createDomainRepo(db),
+  cloudWebhookBinding: createCloudWebhookBindingRepo(db),
+  githubWebhookEvent: createGithubWebhookEventRepo(db),
   service: createServiceRepo(db),
   serviceDeployment: createServiceDeploymentRepo(db),
   settings: createSettingsRepo(db),

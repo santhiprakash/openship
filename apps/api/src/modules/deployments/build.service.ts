@@ -1198,6 +1198,24 @@ export async function triggerDeployment(
   const branch = await resolveProjectBranch(ctx, project, data.branch);
   const environment = data.environment ?? "production";
 
+  // Skip an auto (webhook) deploy whose commit is already in-flight or live —
+  // closes the App + repo-webhook double-deploy window. Manual/forceAll bypass.
+  if (data.trigger === "webhook" && !data.forceAll && data.commitSha) {
+    const inFlight = await repos.deployment
+      .findInProgressByCommit(project.id, data.commitSha)
+      .catch(() => undefined);
+    const active = project.activeDeploymentId
+      ? await repos.deployment.findById(project.activeDeploymentId).catch(() => null)
+      : null;
+    const existing = inFlight ?? (active?.commitSha === data.commitSha ? active : null);
+    if (existing) {
+      console.log(
+        `[Deploy] project ${project.id}: webhook deploy for ${data.commitSha} skipped — already ${inFlight ? "in progress" : "live"} (${existing.id}).`,
+      );
+      return { deployment: existing, skipped: true as const };
+    }
+  }
+
   await checkNoActiveBuild(project.id);
 
   // Reconcile upstream compose drift before the pipeline reads service rows —

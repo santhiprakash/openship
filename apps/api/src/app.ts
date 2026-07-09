@@ -39,6 +39,7 @@ import { scheduleAuditPrune } from "./modules/audit/audit-prune-schedule";
 import { schedulePendingGrantPrune } from "./modules/permissions/pending-grant-prune-schedule";
 import { scheduleOrphanGc } from "./modules/projects/orphan-gc-schedule";
 import { scheduleReconcile } from "./modules/deployments/reconcile-schedule";
+import { scheduleWebhookEventPrune } from "./modules/github/webhook-event-prune-schedule";
 import { scheduleBillingAnniversary } from "./modules/billing/billing-anniversary.cron";
 import { backupOrchestrator } from "./modules/backups/backup.orchestrator";
 import { getJobRunner } from "./lib/job-runner";
@@ -248,6 +249,11 @@ if (env.CLOUD_MODE) {
 
   void scheduleAuditPrune().catch((err) =>
     console.warn("[boot] scheduleAuditPrune failed:", err),
+  );
+
+  // Daily prune of the github_webhook_event idempotency table (7-day window).
+  void scheduleWebhookEventPrune().catch((err) =>
+    console.warn("[boot] scheduleWebhookEventPrune failed:", err),
   );
 
   // Hourly GC of resources orphaned by an enforced (server-unreachable) delete.
