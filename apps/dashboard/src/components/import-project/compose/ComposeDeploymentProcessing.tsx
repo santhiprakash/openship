@@ -88,8 +88,19 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
         ordered.push(service.serviceName);
       }
     });
+    // Also surface any service that has already produced live log lines, even
+    // if config.services / serviceStatuses haven't hydrated yet. Without this,
+    // a per-service line whose name isn't yet in the roster is coerced to the
+    // Prepare tab (parseLogLines) and only lands in its own tab after a refresh
+    // repopulates the roster from getBuildStatus.
+    state.buildLogs.forEach((log) => {
+      if (log.serviceName && !seen.has(log.serviceName)) {
+        seen.add(log.serviceName);
+        ordered.push(log.serviceName);
+      }
+    });
     return ordered;
-  }, [config.services, services]);
+  }, [config.services, services, state.buildLogs]);
   const total = Math.max(services.length, logServiceNames.length);
   const running = services.filter((s) => s.status === "running").length;
   const built = services.filter((s) => s.status === "built").length;

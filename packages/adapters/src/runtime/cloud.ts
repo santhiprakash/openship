@@ -354,6 +354,62 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
     return this.client.workspace(workspaceId);
   }
 
+  /**
+   * Connect a custom domain to `workspaceId`, REASSIGNING it from a previous
+   * deployment if needed.
+   *
+   * Each cloud deploy is a fresh workspace, but the custom domain is still
+   * bound to the PREVIOUS (still-live) deployment's workspace during cutover —
+   * so a plain connect returns "Domain is unavailable". That's a false
+   * conflict when the project is re-pointing its OWN domain. We look up the
+   * domain's current owner: if it's already this workspace, we're done
+   * (idempotent); if it's another workspace we own (the prior deploy), we
+   * disconnect it there and retry. A domain owned by anything else (another
+   * account's route, a page, etc.) still errors — no silent takeover.
+   */
+  private async connectCustomDomainReassigning(
+    workspaceId: string,
+    domain: string,
+    port: number,
+    log?: (entry: LogEntry) => void,
+  ): Promise<void> {
+    const ws = this.ws(workspaceId);
+    try {
+      await ws.domains.connect({ domain, port });
+      return;
+    } catch (err) {
+      const owner = await this.findDomainOwner(domain).catch(() => null);
+      // Already bound to this very workspace → treat the connect error as a
+      // benign "already connected" and succeed.
+      if (owner && owner.owner_id === workspaceId) return;
+      // Only reassign a stale binding held by ANOTHER workspace we own; leave
+      // pages / other resources / genuine third-party conflicts to fail.
+      if (!owner || owner.owner_type !== "workspace") throw err;
+      log?.({
+        timestamp: now(),
+        level: "info",
+        message: `Reassigning ${domain} from the previous deployment...\n`,
+      });
+      await this.ws(owner.owner_id).domains.disconnect().catch(() => {});
+      await ws.domains.connect({ domain, port });
+    }
+  }
+
+  /** Find the current owner route for a hostname among the caller's routes. */
+  private async findDomainOwner(
+    domain: string,
+  ): Promise<{ owner_id: string; owner_type: string } | null> {
+    const target = domain.trim().toLowerCase();
+    const res = await this.client.domain.routes();
+    const routes = res?.data ?? [];
+    const match = routes.find(
+      (r) =>
+        (r.hostname ?? "").toLowerCase() === target ||
+        (r.domain ?? "").toLowerCase() === target,
+    );
+    return match ? { owner_id: match.owner_id, owner_type: match.owner_type } : null;
+  }
+
   private createActiveBuild(sessionId: string) {
     const activeBuild = {
       abort: new AbortController(),
@@ -1431,10 +1487,15 @@ fi`;
         // custom domain we allow the target port explicitly instead.
         await ws.network.update({ ingress_ports: [primaryPort] });
 
-        await ws.domains.connect({
-          domain: primaryCustomDomain,
-          port: primaryPort,
-        });
+        // Reassign the domain from the previous deployment's workspace if it's
+        // still bound there (redeploy cutover) instead of failing on "Domain
+        // is unavailable" for a domain the project already owns.
+        await this.connectCustomDomainReassigning(
+          workspaceId,
+          primaryCustomDomain,
+          primaryPort,
+          log,
+        );
         url = `https://${primaryCustomDomain}`;
       } catch (err) {
         throw new Error(

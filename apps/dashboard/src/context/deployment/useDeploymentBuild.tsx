@@ -394,12 +394,19 @@ export function useDeploymentBuild(
         if (rawBytes) {
           writeToTerminal(rawBytes);
         }
-        if (usesServiceDeployment(config) && rawText) {
+        if (rawText && rawText.trim().length > 0) {
           const serviceName =
             typeof message.serviceName === "string" && message.serviceName.trim()
               ? message.serviceName
               : undefined;
-          if (rawText.trim().length > 0) {
+          // Capture into structured buildLogs (feeds the compose per-service
+          // tabs) for any services deploy OR any line that carries a
+          // serviceName. Do NOT gate solely on usesServiceDeployment(config):
+          // `config` can still be unresolved when the first live per-service
+          // lines arrive, which previously dropped them from the tabs until a
+          // refresh rebuilt buildLogs from persisted logs. A serviceName only
+          // ever appears on a services deploy, so single-app is unaffected.
+          if (usesServiceDeployment(config) || serviceName) {
             const nextLog: BuildLog = {
               type: logTypeFromStreamMessage((message as { level?: unknown }).level, rawText),
               text: rawText,
