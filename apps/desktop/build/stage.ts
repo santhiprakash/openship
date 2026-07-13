@@ -69,9 +69,20 @@ function main(): void {
     const binDir = join(RESOURCES, "bin");
     mkdirSync(binDir, { recursive: true });
     const out = join(binDir, API_BIN);
+    // cpu-features is an optional native dep of ssh2 whose .node binding can't
+    // be embedded in a --compile binary. ssh2 guards its require in try/catch
+    // and falls back to pure JS, so keep it external instead of failing here.
     execFileSync(
       BUN,
-      ["build", join(API_DIR, "src/index.ts"), "--compile", "--outfile", out],
+      [
+        "build",
+        join(API_DIR, "src/index.ts"),
+        "--compile",
+        "--external",
+        "cpu-features",
+        "--outfile",
+        out,
+      ],
       { cwd: REPO_ROOT, stdio: "inherit" },
     );
     process.stdout.write(`  ${API_BIN}: ${sizeOf(out)}\n`);
