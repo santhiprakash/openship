@@ -16,7 +16,7 @@
     },
     "apps/api": {
       "name": "@repo/api",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "@better-auth/drizzle-adapter": "^1.5.4",
         "@hono/node-server": "^1.19.11",
@@ -106,7 +106,7 @@
     },
     "apps/desktop": {
       "name": "@repo/desktop",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "@repo/core": "workspace:*",
         "@repo/onboarding": "workspace:*",
@@ -118,7 +118,7 @@
         "@electron-forge/maker-zip": "^7.11.1",
         "@reforged/maker-appimage": "^4.0.0",
         "@types/node": "^22.13.0",
-        "electron": "^40.8.0",
+        "electron": "40.8.0",
         "electronmon": "^2.0.4",
         "esbuild": "^0.25.0",
         "typescript": "^5.9.3",
@@ -126,11 +126,11 @@
     },
     "apps/email": {
       "name": "@repo/email",
-      "version": "0.1.0",
+      "version": "0.1.2",
     },
     "apps/web": {
       "name": "@repo/web",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "@repo/core": "workspace:*",
         "@repo/ui": "workspace:*",
