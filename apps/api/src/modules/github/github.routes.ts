@@ -21,10 +21,10 @@ const r = secureRouter(new Hono(), {
 });
 
 /* ─── Status / Connection ──────────────────────────────────────────────── */
-r.get("/status", { tag: "github:read" }, ctrl.getStatus);
+r.get("/status", { tag: "github:read", mcp: { description: "GitHub connection status for the org." } }, ctrl.getStatus);
 r.get("/local-status", { tag: "github:read" }, localOnly, ctrl.getLocalStatus);
 r.get("/connect/poll", { tag: "github:read" }, localOnly, ctrl.pollConnect);
-r.get("/home", { tag: "github:read" }, ctrl.getHome);
+r.get("/home", { tag: "github:read", mcp: { description: "GitHub home: connection state, accounts, and repos in one call." } }, ctrl.getHome);
 r.post("/connect", { tag: "github:write" }, ctrl.connect);
 r.public("get", "/connect/redirect", { reason: "GitHub OAuth callback - no session yet during redirect" }, ctrl.connectRedirect);
 r.post("/disconnect", { tag: "github:admin" }, ctrl.disconnect);
@@ -32,26 +32,26 @@ r.post("/disconnect", { tag: "github:admin" }, ctrl.disconnect);
 /* ─── Accounts / Organisations ─────────────────────────────────────────── */
 // /home returns { state, accounts, repos } in one round trip — the
 // dashboard's only entry point.
-r.get("/orgs/:org/repos", { tag: "github:list" }, ctrl.listOrgRepos);
+r.get("/orgs/:org/repos", { tag: "github:list", mcp: { description: "List repositories in a GitHub org/account." } }, ctrl.listOrgRepos);
 
 /* ─── Repositories ─────────────────────────────────────────────────────── */
-r.get("/repos", { tag: "github:list" }, ctrl.listRepos);
+r.get("/repos", { tag: "github:list", mcp: { description: "List the connected account's GitHub repositories." } }, ctrl.listRepos);
 r.post("/repos", { tag: "github:write" }, ctrl.createRepo);
-r.get("/repos/:owner/:repo", { tag: "github:read" }, ctrl.getRepo);
+r.get("/repos/:owner/:repo", { tag: "github:read", mcp: { description: "Get a GitHub repository's metadata." } }, ctrl.getRepo);
 r.delete("/repos/:owner/:repo", { tag: "github:admin" }, ctrl.deleteRepo);
 
 /* ─── Branches ─────────────────────────────────────────────────────────── */
-r.get("/repos/:owner/:repo/branches", { tag: "github:list" }, ctrl.listBranches);
+r.get("/repos/:owner/:repo/branches", { tag: "github:list", mcp: { description: "List a repository's branches." } }, ctrl.listBranches);
 
 /* ─── Clone token (short-lived GitHub App installation token) ──────────── */
 r.get("/repos/:owner/:repo/clone-token", { tag: "github:read" }, ctrl.getCloneToken);
 
 /* ─── Files ────────────────────────────────────────────────────────────── */
-r.get("/repos/:owner/:repo/files", { tag: "github:list" }, ctrl.listFiles);
-r.get("/repos/:owner/:repo/file", { tag: "github:read" }, ctrl.getFile);
+r.get("/repos/:owner/:repo/files", { tag: "github:list", mcp: { description: "List files/dirs at a path in a repo (query: path, ref)." } }, ctrl.listFiles);
+r.get("/repos/:owner/:repo/file", { tag: "github:read", mcp: { description: "Read a single file's contents from a repo (to detect stack / read config)." } }, ctrl.getFile);
 
 /* ─── Repo Webhooks ────────────────────────────────────────────────────── */
-r.get("/repos/:owner/:repo/webhooks", { tag: "github:list" }, ctrl.listWebhooks);
+r.get("/repos/:owner/:repo/webhooks", { tag: "github:list", mcp: { description: "List a repo's webhooks (to check push auto-deploy wiring)." } }, ctrl.listWebhooks);
 r.post("/repos/:owner/:repo/webhooks", { tag: "github:write" }, ctrl.registerWebhook);
 r.delete("/repos/:owner/:repo/webhooks", { tag: "github:admin" }, ctrl.deleteWebhook);
 

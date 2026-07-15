@@ -36,30 +36,43 @@ const r = secureRouter(new Hono(), {
 /* Auth runs before any permission check. */
 
 /* ─── Service CRUD ─────────────────────────────────────────────────────── */
-r.get("/", { tag: "project:service:list" }, cloudProjectProxy, ctrl.list);
+r.get(
+  "/",
+  { tag: "project:service:list", mcp: { description: "List a project's services (compose services / monorepo sub-apps)." } },
+  cloudProjectProxy,
+  ctrl.list,
+);
 r.post(
   "/",
-  { tag: "project:service:write" },
+  {
+    tag: "project:service:write",
+    mcp: { description: "Add a service to a project.", body: CreateServiceBody },
+  },
   cloudProjectProxy,
   tbValidator("json", CreateServiceBody),
   ctrl.create,
 );
 r.get(
   "/containers",
-  { tag: "project:read" },
+  { tag: "project:read", mcp: { description: "List the running containers for a project's services." } },
   cloudProjectProxy,
   ctrl.activeContainers,
 );
 r.post(
   "/sync",
-  { tag: "project:service:write" },
+  { tag: "project:service:write", mcp: { description: "Sync services from the project's docker-compose file into the service table." } },
   cloudProjectProxy,
   ctrl.syncFromCompose,
 );
-r.get("/:serviceId", { tag: "project:service:read" }, cloudProjectProxy, ctrl.getById);
+r.get(
+  "/:serviceId",
+  { tag: "project:service:read", mcp: { description: "Get one service by id." } },
+  cloudProjectProxy,
+  ctrl.getById,
+);
 r.get(
   "/:serviceId/logs",
-  { tag: "project:service:read" },
+  { tag: "project:service:read", mcp: { description: "Fetch a service's runtime logs (non-streaming)." } },
   cloudProjectProxy,
   ctrl.runtimeLogs,
 );
@@ -71,7 +84,10 @@ r.get(
 );
 r.patch(
   "/:serviceId",
-  { tag: "project:service:write" },
+  {
+    tag: "project:service:write",
+    mcp: { description: "Update a service's configuration.", body: UpdateServiceBody },
+  },
   cloudProjectProxy,
   tbValidator("json", UpdateServiceBody),
   ctrl.update,
@@ -86,32 +102,35 @@ r.delete(
 /* ─── Compose drift (accept upstream / keep edits) ──────────────────────── */
 r.post(
   "/:serviceId/drift/accept",
-  { tag: "project:service:write" },
+  { tag: "project:service:write", mcp: { description: "Accept upstream docker-compose changes for this service." } },
   cloudProjectProxy,
   ctrl.acceptDrift,
 );
 r.post(
   "/:serviceId/drift/keep",
-  { tag: "project:service:write" },
+  { tag: "project:service:write", mcp: { description: "Keep local edits over upstream docker-compose changes for this service." } },
   cloudProjectProxy,
   ctrl.keepDrift,
 );
 
 /* ─── Per-service container actions ─────────────────────────────────────── */
-r.post("/:serviceId/start", { tag: "project:service:write" }, cloudProjectProxy, ctrl.startContainer);
-r.post("/:serviceId/stop", { tag: "project:service:write" }, cloudProjectProxy, ctrl.stopContainer);
-r.post("/:serviceId/restart", { tag: "project:service:write" }, cloudProjectProxy, ctrl.restartContainer);
+r.post("/:serviceId/start", { tag: "project:service:write", mcp: { description: "Start this service's container." } }, cloudProjectProxy, ctrl.startContainer);
+r.post("/:serviceId/stop", { tag: "project:service:write", mcp: { description: "Stop this service's container." } }, cloudProjectProxy, ctrl.stopContainer);
+r.post("/:serviceId/restart", { tag: "project:service:write", mcp: { description: "Restart this service's container." } }, cloudProjectProxy, ctrl.restartContainer);
 
 /* ─── Service environment variables ─────────────────────────────────────── */
 r.get(
   "/:serviceId/env",
-  { tag: "project:service:read" },
+  { tag: "project:service:read", mcp: { description: "List a service's environment variables." } },
   cloudProjectProxy,
   ctrl.listEnvVars,
 );
 r.put(
   "/:serviceId/env",
-  { tag: "project:service:write" },
+  {
+    tag: "project:service:write",
+    mcp: { description: "Replace a service's environment variables.", body: SetServiceEnvVarsBody },
+  },
   cloudProjectProxy,
   tbValidator("json", SetServiceEnvVarsBody),
   ctrl.setEnvVars,

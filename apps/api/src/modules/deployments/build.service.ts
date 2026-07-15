@@ -32,11 +32,8 @@ import type {
   LogEntry,
   ResourceConfig,
 } from "@repo/adapters";
-import {
-  resolveCloudResourceConfig,
-  type CloudResourceTier,
-  type CloudResourceCustom,
-} from "./cloud-resources";
+import { resolveCloudResourceConfig } from "./cloud-resources";
+import type { TBuildAccessBody } from "./deployment.schema";
 import { platform } from "../../lib/controller-helpers";
 import { encrypt } from "../../lib/encryption";
 import { getLatestCommit, getRepository } from "../github/github.service";
@@ -227,40 +224,14 @@ export interface DeploymentConfigSnapshot {
   cloneStrategy?: "api-host" | "server";
 }
 
-export interface BuildAccessInput {
-  projectId: string;
-  branch?: string;
-  environment?: string;
-  envVars?: Record<string, string>;
-  publicEndpoints?: Array<{
-    port?: string;
-    targetPath?: string;
-    domain?: string;
-    customDomain?: string;
-    domainType?: "free" | "custom";
-  }>;
-  buildStrategy?: BuildStrategy;
-  deployTarget?: DeployTarget;
-  serverId?: string;
-  /** Folder-upload deploy: the upload session whose workspace/staging dir holds
-   *  the source for this deploy. Resolved into the snapshot below. */
-  uploadSessionId?: string;
-  runtimeMode?: "bare" | "docker";
-  serviceDeploymentMode?: "services" | "single";
-  services?: DeployableService[];
-  /** Openship Cloud resource tier picked in the UI (server-backed cloud deploys only). */
-  cloudResourceTier?: CloudResourceTier;
-  /** Custom CPU/RAM/disk, used only when cloudResourceTier === "custom". */
-  cloudResourceCustom?: CloudResourceCustom;
-  /**
-   * Per-deploy opt-in to forward the operator's local `gh` identity to the
-   * remote host for the on-server clone (desktop-only; default off). Carried
-   * into the snapshot; the pipeline enforces desktop + server-build gating.
-   */
-  forwardGitCredentials?: boolean;
-  /** Per-deploy: "api-host" (default) or "server" clone. See snapshot field. */
-  cloneStrategy?: "api-host" | "server";
-}
+/**
+ * Request body for POST /deployments/build/access. Derived from the single
+ * source `BuildAccessBody` (deployment.schema.ts) so the type, the runtime
+ * body, and the MCP tool's param schema can't drift. `services` is the wire
+ * subset of DeployableService (extra parser/monorepo fields optional), so it
+ * stays assignable to DeployableService[] where consumed below.
+ */
+export type BuildAccessInput = TBuildAccessBody;
 
 /** Narrow the free-form `project.runtime_mode` text column (string | null) to
  *  the runtime-isolation union — a validated check instead of an unchecked

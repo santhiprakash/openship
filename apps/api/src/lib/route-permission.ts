@@ -23,6 +23,7 @@
  */
 
 import type { Context, Next, MiddlewareHandler } from "hono";
+import type { TSchema } from "@sinclair/typebox";
 import { NotFoundError } from "@repo/core";
 import { permission, type CheckedResourceType } from "./permission";
 import { getRequestContext } from "./request-context";
@@ -271,6 +272,23 @@ export type RateLimitPolicyId =
   | "webhook-ingress"
   | "billing-portal";
 
+/**
+ * MCP exposure for a route. Presence of this block is the MCP allowlist:
+ * routes without `mcp` are never exposed as tools (see modules/mcp/mcp-tools).
+ * Co-locating it with the route keeps the description and the body-param schema
+ * next to the handler instead of in a detached map.
+ */
+export interface McpRouteMeta {
+  /** Agent-facing tool description. */
+  description: string;
+  /**
+   * TypeBox schema for the request body — emitted verbatim as the tool's body
+   * params. TypeBox *is* JSON Schema, so there's no second contract to keep in
+   * sync; reuse the same schema the controller types against.
+   */
+  body?: TSchema;
+}
+
 export interface PermissionSpec {
   /** The tag describing what action is being performed. */
   tag: PermissionTag;
@@ -321,6 +339,8 @@ export interface PermissionSpec {
    * flag is a 400, not a silent fall-through to org-singleton scope.
    */
   collection?: boolean;
+  /** Opt this route into the MCP tool surface. See {@link McpRouteMeta}. */
+  mcp?: McpRouteMeta;
 }
 
 export interface PublicSpec {

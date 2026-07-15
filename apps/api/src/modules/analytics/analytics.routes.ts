@@ -21,20 +21,20 @@ const r = secureRouter(new Hono(), {
    no-ops for org-wide requests. */
 
 /* ─── Request analytics ────────────────────────────────────────────────── */
-r.get("/", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.summary);
-r.get("/periods", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.periods);
-r.get("/overview", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.overview);
+r.get("/", { tag: "analytics:read", mcp: { description: "Analytics summary for the org (or ?projectId=): requests, traffic overview." } }, cloudProjectProxyByQuery, ctrl.summary);
+r.get("/periods", { tag: "analytics:read", mcp: { description: "Available analytics time periods." } }, cloudProjectProxyByQuery, ctrl.periods);
+r.get("/overview", { tag: "analytics:read", mcp: { description: "Analytics overview (traffic, status codes, top paths)." } }, cloudProjectProxyByQuery, ctrl.overview);
 
 /* ─── Deployment stats ─────────────────────────────────────────────────── */
-r.get("/deployments", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.deploymentStats);
+r.get("/deployments", { tag: "analytics:read", mcp: { description: "Deployment statistics (frequency, success rate, durations)." } }, cloudProjectProxyByQuery, ctrl.deploymentStats);
 
 /* ─── Resource usage ───────────────────────────────────────────────────── */
-r.get("/usage", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.usage);
+r.get("/usage", { tag: "analytics:read", mcp: { description: "Resource usage (CPU/memory/bandwidth) for the org or a project." } }, cloudProjectProxyByQuery, ctrl.usage);
 r.get("/usage/stream", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.usageStream);
-r.get("/container", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.containerInfo);
+r.get("/container", { tag: "analytics:read", mcp: { description: "Container-level metrics for a project's runtime." } }, cloudProjectProxyByQuery, ctrl.containerInfo);
 
 /* ─── Dashboard ────────────────────────────────────────────────────────── */
-r.get("/dashboard", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.dashboard);
+r.get("/dashboard", { tag: "analytics:read", mcp: { description: "Dashboard analytics rollup (headline metrics)." } }, cloudProjectProxyByQuery, ctrl.dashboard);
 
 /* ─── Server analytics (scraped from OpenResty mgmt API) ───────────────── */
 r.get(

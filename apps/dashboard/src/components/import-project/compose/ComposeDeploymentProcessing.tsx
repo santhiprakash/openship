@@ -27,7 +27,8 @@ const PREPARE_TAB = "__prepare__";
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 interface Props {
-  onRedeploy: () => void;
+  // Resolves to the new deployment id (navigates on success) or null on failure.
+  onRedeploy: () => void | Promise<string | null>;
 }
 
 const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
@@ -38,6 +39,9 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
   const { resolvedTheme } = useTheme();
   const router = useRouter();
   const promptModalRef = React.useRef<string | null>(null);
+  // Holds the Redeploy button's spinner from click until navigation to the new
+  // deployment (or re-enables on failure).
+  const [isRedeploying, setIsRedeploying] = useState(false);
   // Tracks which deployment's decision dialog we've already auto-opened, so it
   // pops once (not on every re-render) while staying re-openable via the banner.
   const autoOpenedDecisionRef = React.useRef<string | null>(null);
@@ -397,7 +401,15 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
 
           {/* Action buttons */}
           <div className="bg-card rounded-2xl border border-border/50 p-4 space-y-2">
-            {deploymentStatus === "deploying" || deploymentStatus === "building" ? (
+            {isRedeploying ? (
+              <button
+                disabled
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl transition-all font-medium text-sm bg-primary/60 text-primary-foreground cursor-not-allowed"
+              >
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Redeploying…
+              </button>
+            ) : deploymentStatus === "deploying" || deploymentStatus === "building" ? (
               <button
                 onClick={stopDeployment}
                 disabled={state.isStopping}
@@ -420,7 +432,17 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
               <>
                 {(deploymentStatus === "failed" || deploymentStatus === "cancelled") && (
                   <button
-                    onClick={onRedeploy}
+                    onClick={async () => {
+                      if (isRedeploying) return;
+                      setIsRedeploying(true);
+                      // Keep the spinner up until the redeploy resolves and
+                      // navigates to the new deployment; re-enable on failure.
+                      try {
+                        await onRedeploy();
+                      } finally {
+                        setIsRedeploying(false);
+                      }
+                    }}
                     className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-xl font-medium text-sm hover:bg-primary/90 transition-all"
                   >
                     Redeploy

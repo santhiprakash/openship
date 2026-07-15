@@ -192,6 +192,31 @@ export const CreateProjectBody = Type.Object({
 
 export const UpdateProjectBody = Type.Partial(CreateProjectBody);
 
+/**
+ * POST /projects/ensure — CreateProjectBody plus an optional `projectId` to
+ * update an existing project in place instead of creating a new one.
+ */
+export const EnsureProjectBody = Type.Composite([
+  CreateProjectBody,
+  Type.Object({
+    projectId: Type.Optional(
+      Type.String({ description: "Update this existing project instead of creating a new one." }),
+    ),
+  }),
+]);
+
+/** POST /projects/folder/session — open a folder-upload deploy session. */
+export const FolderSessionBody = Type.Object(
+  {
+    stack: Type.Optional(
+      Type.String({ description: "Stack hint (e.g. 'vite','nextjs'); picks the cloud build image." }),
+    ),
+    packageManager: Type.Optional(Type.String({ description: "npm | pnpm | yarn | bun." })),
+    name: Type.Optional(Type.String({ description: "Project name." })),
+  },
+  { additionalProperties: true },
+);
+
 export const CreateProjectEnvironmentBody = Type.Object({
   environmentName: Type.String({ minLength: 1, maxLength: 80 }),
   environmentSlug: Type.Optional(

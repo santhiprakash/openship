@@ -27,7 +27,8 @@ import { useTheme } from "@/components/theme-provider";
 import { useModal } from "@/context/ModalContext";
 
 interface DeploymentProcessingProps {
-  onRedeploy: () => void; // Keep this as it updates URL
+  // Resolves to the new deployment id (navigates on success) or null on failure.
+  onRedeploy: () => void | Promise<string | null>;
 }
 
 /** Compact duration label: "8s", "1m 02s". */
@@ -98,6 +99,9 @@ const DeploymentProcessing: React.FC<DeploymentProcessingProps> = ({ onRedeploy 
   const { showModal, hideModal } = useModal();
   const router = useRouter();
   const promptModalRef = React.useRef<string | null>(null);
+  // Holds the Redeploy button's spinner from click until the redeploy resolves
+  // and navigates to the new deployment (or re-enables on failure).
+  const [isRedeploying, setIsRedeploying] = useState(false);
 
   const renderPromptDetails = useCallback((details?: Record<string, unknown>) => {
     if (!details) return null;
@@ -356,7 +360,15 @@ const DeploymentProcessing: React.FC<DeploymentProcessingProps> = ({ onRedeploy 
 
             {/* Actions — under the details card */}
             <div className="bg-card rounded-2xl border border-border/50 p-4">
-              {deploymentStatus === "deploying" || deploymentStatus === "building" ? (
+              {isRedeploying ? (
+                <button
+                  disabled
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl transition-all font-medium text-sm bg-primary/60 text-primary-foreground cursor-not-allowed"
+                >
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Redeploying…
+                </button>
+              ) : deploymentStatus === "deploying" || deploymentStatus === "building" ? (
                 <button
                   onClick={stopDeployment}
                   disabled={state.isStopping}
@@ -377,7 +389,17 @@ const DeploymentProcessing: React.FC<DeploymentProcessingProps> = ({ onRedeploy 
               ) : (deploymentStatus === "failed" || deploymentStatus === "cancelled") ? (
                 <div className="space-y-2">
                   <button
-                    onClick={onRedeploy}
+                    onClick={async () => {
+                      if (isRedeploying) return;
+                      setIsRedeploying(true);
+                      // Keep the spinner up until the redeploy request resolves
+                      // and navigates to the new deployment; re-enable on failure.
+                      try {
+                        await onRedeploy();
+                      } finally {
+                        setIsRedeploying(false);
+                      }
+                    }}
                     className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-xl transition-all font-medium text-sm hover:bg-primary/90"
                   >
                     Redeploy

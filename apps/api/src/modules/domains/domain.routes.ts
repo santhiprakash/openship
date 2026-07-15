@@ -18,20 +18,25 @@ const r = secureRouter(new Hono(), {
 
 
 /* ─── Domains ──────────────────────────────────────────────────────────── */
-r.get("/", { tag: "domain:list" }, ctrl.list);
-r.post("/", { tag: "domain:write" }, tbValidator("json", AddDomainBody), ctrl.add);
+r.get("/", { tag: "domain:list", mcp: { description: "List domains for the org / project." } }, ctrl.list);
+r.post(
+  "/",
+  { tag: "domain:write", mcp: { description: "Add a domain (free subdomain or custom).", body: AddDomainBody } },
+  tbValidator("json", AddDomainBody),
+  ctrl.add,
+);
 // Side-effect-free DNS probe — POST is used to carry hostname in body.
 // readOnly opts out of the scanner's "POST must be write/admin" rule.
-r.post("/preview", { tag: "domain:read", readOnly: true }, ctrl.preview);
+r.post("/preview", { tag: "domain:read", readOnly: true, mcp: { description: "Preview the DNS records a domain will need, before adding it." } }, ctrl.preview);
 // Per-domain routes carry cloudDomainProxy (after the permission middleware):
 // a domain belonging to a cloud project is proxied to the SaaS; a local domain
 // falls through to the local handler.
 r.delete("/:id", { tag: "domain:admin" }, cloudDomainProxy, ctrl.remove);
-r.post("/:id/verify", { tag: "domain:write" }, cloudDomainProxy, ctrl.verify);
-r.post("/:id/primary", { tag: "domain:write" }, cloudDomainProxy, ctrl.setPrimary);
-r.get("/:id/records", { tag: "domain:read" }, cloudDomainProxy, ctrl.records);
-r.post("/:id/renew", { tag: "domain:write" }, cloudDomainProxy, ctrl.renewSsl);
-r.post("/:id/verify-ssl", { tag: "domain:write" }, cloudDomainProxy, ctrl.verifySsl);
+r.post("/:id/verify", { tag: "domain:write", mcp: { description: "Verify a domain's ownership / DNS." } }, cloudDomainProxy, ctrl.verify);
+r.post("/:id/primary", { tag: "domain:write", mcp: { description: "Set this domain as the project's primary domain." } }, cloudDomainProxy, ctrl.setPrimary);
+r.get("/:id/records", { tag: "domain:read", mcp: { description: "Get the DNS records for a domain." } }, cloudDomainProxy, ctrl.records);
+r.post("/:id/renew", { tag: "domain:write", mcp: { description: "Renew the domain's SSL certificate." } }, cloudDomainProxy, ctrl.renewSsl);
+r.post("/:id/verify-ssl", { tag: "domain:write", mcp: { description: "Check/verify the domain's SSL certificate." } }, cloudDomainProxy, ctrl.verifySsl);
 r.post("/renew-all", { tag: "domain:write" }, ctrl.renewAllSsl);
 r.post("/verify-pending", { tag: "domain:write" }, ctrl.verifyPending);
 

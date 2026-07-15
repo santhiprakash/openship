@@ -6,9 +6,11 @@ import {
 } from "../../lib/route-permission";
 
 /**
- * MCP tool generation from the HTTP route registry. Every curated route becomes
- * one tool; the tool's handler dispatches an internal request through the real
- * Hono app (see mcp-dispatch.ts), so no business logic is duplicated here.
+ * MCP tool generation from the HTTP route registry. A route is exposed as a
+ * tool ONLY if its spec declares an `mcp` block (opt-in allowlist) — the
+ * description and body-param schema come from there, co-located with the route.
+ * Each tool's handler dispatches an internal request through the real Hono app
+ * (see mcp-dispatch.ts), so no business logic is duplicated here.
  */
 
 export interface McpToolDef {
@@ -24,37 +26,20 @@ export interface McpToolDef {
 }
 
 /**
- * Modules whose routes are never tools (transport-incompatible or non-agentic).
- * `tokens` is denied for privilege-containment: exposing it would let a
- * full-access MCP token mint a fresh PAT (or re-scope its own binding) and
- * escape the read-only/scope limits of its authorization — credential
- * management must never be an agent capability.
+ * Modules that must NEVER be tools even if a route is mistakenly annotated —
+ * credential/auth surfaces. `tokens` in particular would let a full-access MCP
+ * token mint a fresh PAT and escape its own scope. Everything else is gated by
+ * opt-in (no `mcp` block → not a tool), so this stays minimal.
  */
-const DENY_MODULES = new Set(["webhooks", "auth", "health", "images", "mcp", "tokens"]);
-
-/** Path fragments to exclude: streaming/interactive endpoints and callback/webhook routes. */
-const DENY_PATH_FRAGMENTS = [
-  "/stream",
-  "/logs/stream",
-  "/server-logs",
-  "/ws",
-  "/terminal",
-  "/events",
-  "/webhooks",
-  "/webhook",
-  "/callback",
-  "/oauth",
-  "/folder/upload",
-];
+const HARD_DENY = new Set(["tokens", "auth", "mcp"]);
 
 const BODY_METHODS = new Set(["POST", "PUT", "PATCH"]);
 
 function includeRoute(route: RegisteredRoute): boolean {
-  if (isPublicSpec(route.spec)) return false; // no permission tag → not agentic/safe
-  if (DENY_MODULES.has(route.module)) return false;
-  const p = route.path.toLowerCase();
-  if (DENY_PATH_FRAGMENTS.some((f) => p.includes(f))) return false;
-  return true;
+  const spec = route.spec;
+  if (isPublicSpec(spec)) return false;
+  if (HARD_DENY.has(route.module)) return false;
+  return spec.mcp != null; // opt-in allowlist
 }
 
 function extractPathParams(path: string): string[] {
@@ -70,7 +55,7 @@ function toolName(route: RegisteredRoute, taken: Set<string>): string {
     .split("/")
     .filter((s) => s && s !== "api")
     .map((s) => (s.startsWith(":") ? `by_${s.slice(1)}` : s.replace(/[^a-z0-9]+/gi, "_")));
-  let base = [route.method.toLowerCase(), ...segments].join("_").replace(/_+/g, "_").slice(0, 64);
+  const base = [route.method.toLowerCase(), ...segments].join("_").replace(/_+/g, "_").slice(0, 64);
   let name = base;
   let n = 2;
   while (taken.has(name)) {
@@ -80,14 +65,20 @@ function toolName(route: RegisteredRoute, taken: Set<string>): string {
   return name;
 }
 
-function inputSchema(pathParams: string[], hasBody: boolean): Record<string, unknown> {
+function inputSchema(
+  pathParams: string[],
+  hasBody: boolean,
+  bodySchema?: Record<string, unknown>,
+): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   for (const p of pathParams) {
     properties[p] = { type: "string", description: `Path parameter :${p}` };
   }
   properties.query = { type: "object", description: "Optional query-string parameters", additionalProperties: true };
   if (hasBody) {
-    properties.body = { type: "object", description: "Request JSON body", additionalProperties: true };
+    // The route's TypeBox body schema (JSON Schema at runtime) when declared,
+    // else a permissive fallback so a body can still be passed.
+    properties.body = bodySchema ?? { type: "object", description: "Request JSON body", additionalProperties: true };
   }
   return {
     type: "object",
@@ -118,14 +109,15 @@ export function getMcpTools(): McpToolDef[] {
   cached = getRouteRegistry()
     .filter(includeRoute)
     .map((route): McpToolDef => {
+      const spec = route.spec;
+      const mcp = isPublicSpec(spec) ? undefined : spec.mcp;
       const pathParams = extractPathParams(route.path);
       const hasBody = BODY_METHODS.has(route.method);
-      const spec = route.spec;
-      const tag = isPublicSpec(spec) ? "public" : spec.tag;
+      const bodySchema = mcp?.body as Record<string, unknown> | undefined;
       return {
         name: toolName(route, taken),
-        description: `${route.method} ${route.path} (${tag})`,
-        inputSchema: inputSchema(pathParams, hasBody),
+        description: mcp?.description ?? `${route.method} ${route.path}`,
+        inputSchema: inputSchema(pathParams, hasBody, hasBody ? bodySchema : undefined),
         annotations: annotationsFor(route),
         method: route.method,
         path: route.path,

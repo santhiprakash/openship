@@ -20,6 +20,15 @@ import { cloudProjectProxy } from "../../lib/cloud/project-router";
 import * as ctrl from "./project.controller";
 import * as folder from "./folder/folder.controller";
 import * as transfer from "./transfer.controller";
+import {
+  CreateProjectBody,
+  EnsureProjectBody,
+  FolderSessionBody,
+  UpdateProjectBody,
+  CreateProjectEnvironmentBody,
+  MergeEnvVarsBody,
+  UpdateResourcesBody,
+} from "./project.schema";
 
 const r = secureRouter(new Hono(), {
   module: "projects",
@@ -47,8 +56,31 @@ r.post("/import", { tag: "project:write", collection: true }, localOnly, ctrl.im
  * binary /folder/upload route is excluded from MCP (see mcp-tools). */
 // session + scan run on BOTH SaaS and self-hosted (session provisions the
 // Oblien workspace / staging dir; scan detects on the uploaded source).
-r.post("/folder/session", { tag: "project:write", collection: true }, folder.createSession);
-r.post("/folder/scan/:sessionId", { tag: "project:write", collection: true }, folder.scanSession);
+r.post(
+  "/folder/session",
+  {
+    tag: "project:write",
+    collection: true,
+    mcp: {
+      description:
+        "Folder-upload deploy — STEP 1/4. Opens an upload session for a local source folder and returns `upload` = { url, method, headers }. NEXT, upload the gzipped tarball yourself: POST it to `upload.url` with the returned headers and Content-Type: application/gzip. That byte upload is NOT an MCP tool (raw binary can't cross JSON-RPC) — use an HTTP client. Then call folder/scan. Sequence: session → (out-of-band tarball upload) → folder/scan → projects/ensure → deployments/build/access.",
+      body: FolderSessionBody,
+    },
+  },
+  folder.createSession,
+);
+r.post(
+  "/folder/scan/:sessionId",
+  {
+    tag: "project:write",
+    collection: true,
+    mcp: {
+      description:
+        "Folder-upload deploy — STEP 2/4. Run AFTER the tarball is uploaded. Detects the uploaded source's framework/build config (stack, packageManager, install/build/start commands, outputDirectory, productionPaths, port). Body may be empty ({}). Feed the result into projects/ensure (STEP 3).",
+    },
+  },
+  folder.scanSession,
+);
 // The relay upload is SELF-HOSTED ONLY: on the SaaS the browser uploads
 // straight to the Oblien workspace, so the API never receives bytes. localOnly
 // 404s this in CLOUD_MODE; the 300MB bodyLimit only runs once localOnly passes.
@@ -67,25 +99,74 @@ r.post(
 // getHome merges local + cloud projects server-side; create/ensure stay local
 // for now (promote-to-cloud lives on /:id/transfer/to-cloud).
 r.get("/home", { tag: "project:list" }, ctrl.getHome);
-r.post("/ensure", { tag: "project:write", collection: true }, ctrl.ensure);
-r.get("/", { tag: "project:list" }, ctrl.list);
-r.post("/", { tag: "project:write", collection: true }, ctrl.create);
+r.post(
+  "/ensure",
+  {
+    tag: "project:write",
+    collection: true,
+    mcp: {
+      description:
+        "Folder-upload deploy — STEP 3/4. Create or update the project that carries the build config — deployments/build/access reads config from the PROJECT ROW, not the upload session, so this must run first. Map the folder/scan fields in (framework = the scan's stack id) and set gitProvider:'upload'. Pass projectId to update an existing project. Returns the project id for STEP 4.",
+      body: EnsureProjectBody,
+    },
+  },
+  ctrl.ensure,
+);
+r.get(
+  "/",
+  { tag: "project:list", mcp: { description: "List projects in the org." } },
+  ctrl.list,
+);
+r.post(
+  "/",
+  {
+    tag: "project:write",
+    collection: true,
+    mcp: {
+      description:
+        "Create a project from a git or local source (build config baked into the project). For a folder-upload deploy use projects/ensure instead (it accepts the folder/scan config and gitProvider:'upload').",
+      body: CreateProjectBody,
+    },
+  },
+  ctrl.create,
+);
 
 /* ─── Projects CRUD ────────────────────────────────────────────────────── */
-r.get("/:id", { tag: "project:read" }, cloudProjectProxy, ctrl.getById);
-r.patch("/:id", { tag: "project:write" }, cloudProjectProxy, ctrl.update);
+r.get(
+  "/:id",
+  { tag: "project:read", mcp: { description: "Get a project by id — config, source, routes, status." } },
+  cloudProjectProxy,
+  ctrl.getById,
+);
+r.patch(
+  "/:id",
+  {
+    tag: "project:write",
+    mcp: { description: "Update a project's configuration (build config, source, options).", body: UpdateProjectBody },
+  },
+  cloudProjectProxy,
+  ctrl.update,
+);
 r.delete("/:id", { tag: "project:admin" }, cloudProjectProxy, ctrl.remove);
-r.get("/:id/info", { tag: "project:read" }, cloudProjectProxy, ctrl.getInfo);
-r.get("/:id/environments", { tag: "project:read" }, cloudProjectProxy, ctrl.listEnvironments);
-r.post("/:id/environments", { tag: "project:write" }, cloudProjectProxy, ctrl.createEnvironment);
-r.get("/:id/deletion-preview", { tag: "project:read" }, cloudProjectProxy, ctrl.deletionPreview);
+r.get("/:id/info", { tag: "project:read", mcp: { description: "Get a project's detailed info (runtime, build, source)." } }, cloudProjectProxy, ctrl.getInfo);
+r.get("/:id/environments", { tag: "project:read", mcp: { description: "List a project's environments (production / previews)." } }, cloudProjectProxy, ctrl.listEnvironments);
+r.post(
+  "/:id/environments",
+  {
+    tag: "project:write",
+    mcp: { description: "Create a project environment (e.g. a preview).", body: CreateProjectEnvironmentBody },
+  },
+  cloudProjectProxy,
+  ctrl.createEnvironment,
+);
+r.get("/:id/deletion-preview", { tag: "project:read", mcp: { description: "Preview what deleting this project would remove (read-only)." } }, cloudProjectProxy, ctrl.deletionPreview);
 
 /* ─── Build options ────────────────────────────────────────────────────── */
-r.post("/:id/options", { tag: "project:write" }, cloudProjectProxy, ctrl.setOptions);
+r.post("/:id/options", { tag: "project:write", mcp: { description: "Set build/deploy options for a project." } }, cloudProjectProxy, ctrl.setOptions);
 
 /* ─── Enable / Disable ─────────────────────────────────────────────────── */
-r.post("/:id/enable", { tag: "project:write" }, cloudProjectProxy, ctrl.enable);
-r.post("/:id/disable", { tag: "project:write" }, cloudProjectProxy, ctrl.disable);
+r.post("/:id/enable", { tag: "project:write", mcp: { description: "Enable a project (allow deploys / bring online)." } }, cloudProjectProxy, ctrl.enable);
+r.post("/:id/disable", { tag: "project:write", mcp: { description: "Disable a project (pause deploys / take offline)." } }, cloudProjectProxy, ctrl.disable);
 
 /* ─── Environment variables ────────────────────────────────────────────── */
 // Project-scoped bulk routes (no per-env_var id in the URL) → gate on the
@@ -94,46 +175,62 @@ r.post("/:id/disable", { tag: "project:write" }, cloudProjectProxy, ctrl.disable
 // project:env_var:* tags required a :envVarId param these routes don't have,
 // so the permission middleware 400'd before the handler. Secret VALUES stay
 // protected by masking in listEnvVars, not by the route tag.
-r.get("/:id/env", { tag: "project:read" }, cloudProjectProxy, ctrl.listEnvVars);
+r.get("/:id/env", { tag: "project:read", mcp: { description: "List a project's environment variables (secret values masked)." } }, cloudProjectProxy, ctrl.listEnvVars);
 // Project env edits go through the MERGE path (PATCH) only — the old destructive
 // full-replace PUT was removed (it could wipe/corrupt masked secrets and had no
 // remaining caller; the editor sends a diff via mergeEnvVars).
-r.patch("/:id/env", { tag: "project:write" }, cloudProjectProxy, ctrl.mergeEnvVars);
+r.patch(
+  "/:id/env",
+  {
+    tag: "project:write",
+    mcp: { description: "Merge env var changes (upserts + deletes); untouched vars are preserved.", body: MergeEnvVarsBody },
+  },
+  cloudProjectProxy,
+  ctrl.mergeEnvVars,
+);
 
 /* ─── Per-project clone token (git credential override) ────────────────── */
 r.get("/:id/clone-token", { tag: "project:read" }, cloudProjectProxy, ctrl.getCloneToken);
 r.patch("/:id/clone-token", { tag: "project:admin" }, cloudProjectProxy, ctrl.updateCloneToken);
 
 /* ─── Git ──────────────────────────────────────────────────────────────── */
-r.get("/:id/git", { tag: "project:read" }, cloudProjectProxy, ctrl.getGitInfo);
-r.get("/:id/commit-status", { tag: "project:read" }, cloudProjectProxy, ctrl.getCommitStatus);
-r.post("/:id/git/link", { tag: "project:write" }, cloudProjectProxy, ctrl.linkRepo);
-r.get("/:id/branches", { tag: "project:read" }, cloudProjectProxy, ctrl.listBranches);
-r.post("/:id/auto-deploy", { tag: "project:write" }, cloudProjectProxy, ctrl.setAutoDeploy);
+r.get("/:id/git", { tag: "project:read", mcp: { description: "Get the project's linked git repository info." } }, cloudProjectProxy, ctrl.getGitInfo);
+r.get("/:id/commit-status", { tag: "project:read", mcp: { description: "Compare the deployed commit against the remote HEAD." } }, cloudProjectProxy, ctrl.getCommitStatus);
+r.post("/:id/git/link", { tag: "project:write", mcp: { description: "Link a git repository to the project." } }, cloudProjectProxy, ctrl.linkRepo);
+r.get("/:id/branches", { tag: "project:read", mcp: { description: "List the linked repository's branches." } }, cloudProjectProxy, ctrl.listBranches);
+r.post("/:id/auto-deploy", { tag: "project:write", mcp: { description: "Enable/disable auto-deploy on push." } }, cloudProjectProxy, ctrl.setAutoDeploy);
 r.post("/:id/webhook-domain", { tag: "project:write" }, cloudProjectProxy, ctrl.setWebhookDomain);
-r.post("/:id/branch", { tag: "project:write" }, cloudProjectProxy, ctrl.setBranch);
+r.post("/:id/branch", { tag: "project:write", mcp: { description: "Set the project's deploy branch." } }, cloudProjectProxy, ctrl.setBranch);
 
 /* ─── Resources ────────────────────────────────────────────────────────── */
-r.get("/:id/resources", { tag: "project:read" }, cloudProjectProxy, ctrl.getResources);
-r.patch("/:id/resources", { tag: "project:write" }, cloudProjectProxy, ctrl.updateResources);
+r.get("/:id/resources", { tag: "project:read", mcp: { description: "Get the project's CPU/RAM/disk resource config." } }, cloudProjectProxy, ctrl.getResources);
+r.patch(
+  "/:id/resources",
+  {
+    tag: "project:write",
+    mcp: { description: "Update the project's CPU/RAM/disk, sleep mode, or port.", body: UpdateResourcesBody },
+  },
+  cloudProjectProxy,
+  ctrl.updateResources,
+);
 r.post("/:id/resources", { tag: "project:write" }, cloudProjectProxy, ctrl.updateResources);
 
 /* ─── Sleep mode ───────────────────────────────────────────────────────── */
-r.post("/:id/sleep-mode", { tag: "project:write" }, cloudProjectProxy, ctrl.setSleepMode);
+r.post("/:id/sleep-mode", { tag: "project:write", mcp: { description: "Set the project's sleep mode (auto_sleep / always_on)." } }, cloudProjectProxy, ctrl.setSleepMode);
 
 /* ─── Deployments ──────────────────────────────────────────────────────── */
-r.get("/:id/deployments", { tag: "project:deployment:list" }, cloudProjectProxy, ctrl.listDeployments);
+r.get("/:id/deployments", { tag: "project:deployment:list", mcp: { description: "List a project's deployments (history, statuses)." } }, cloudProjectProxy, ctrl.listDeployments);
 r.post("/:id/deployment-session", { tag: "project:read", readOnly: true }, cloudProjectProxy, ctrl.deploymentSession);
 
 /* ─── Custom domain ────────────────────────────────────────────────────── */
 r.post("/:id/connect", { tag: "project:write" }, cloudProjectProxy, ctrl.connectDomain);
 
 /* ─── Runtime logs ─────────────────────────────────────────────────────── */
-r.get("/:id/logs", { tag: "project:read" }, cloudProjectProxy, ctrl.runtimeLogs);
+r.get("/:id/logs", { tag: "project:read", mcp: { description: "Fetch the project's runtime logs (non-streaming)." } }, cloudProjectProxy, ctrl.runtimeLogs);
 r.get("/:id/logs/stream", { tag: "project:read" }, cloudProjectProxy, ctrl.runtimeLogStream);
 
 /* ─── Server HTTP request logs ─────────────────────────────────────────── */
-r.get("/:id/server-logs/recent", { tag: "project:read" }, cloudProjectProxy, ctrl.recentServerLogs);
+r.get("/:id/server-logs/recent", { tag: "project:read", mcp: { description: "Fetch recent HTTP request logs for the project." } }, cloudProjectProxy, ctrl.recentServerLogs);
 r.get("/:id/server-logs/stream-token", { tag: "project:read" }, cloudProjectProxy, ctrl.serverLogStreamToken);
 r.get("/:id/server-logs/stream", { tag: "project:read" }, cloudProjectProxy, ctrl.serverLogStream);
 

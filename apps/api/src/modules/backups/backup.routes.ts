@@ -27,7 +27,7 @@ r.use("/backup-runs/*", authMiddleware);
 r.use("/backup-restores/*", authMiddleware);
 
 // Policies — project-scoped routes proxy to the SaaS for cloud projects.
-r.get("/projects/:projectId/backup-policies", { tag: "project:write", ids: { project: "projectId" } }, cloudProjectProxy, ctrl.listProjectPolicies);
+r.get("/projects/:projectId/backup-policies", { tag: "project:write", ids: { project: "projectId" }, mcp: { description: "List a project's backup policies (schedules/retention)." } }, cloudProjectProxy, ctrl.listProjectPolicies);
 r.post("/projects/:projectId/backup-policies", { tag: "project:write", ids: { project: "projectId" } }, cloudProjectProxy, ctrl.createProjectPolicy);
 r.patch("/backup-policies/:policyId", { tag: "backup_destination:backup_policy:write" }, ctrl.patchPolicy);
 r.delete("/backup-policies/:policyId", { tag: "backup_destination:backup_policy:write" }, ctrl.removePolicy);
@@ -36,8 +36,8 @@ r.delete("/backup-policies/:policyId", { tag: "backup_destination:backup_policy:
 r.post("/backup-policies/:policyId/run", { tag: "backup_destination:backup_policy:write" }, ctrl.triggerManual);
 
 // Runs
-r.get("/projects/:projectId/backup-runs", { tag: "project:write", ids: { project: "projectId" } }, cloudProjectProxy, ctrl.listRuns);
-r.get("/backup-runs/:runId", { tag: "backup_destination:backup_run:read" }, ctrl.getOneRun);
+r.get("/projects/:projectId/backup-runs", { tag: "project:write", ids: { project: "projectId" }, mcp: { description: "List a project's backup runs (history, status)." } }, cloudProjectProxy, ctrl.listRuns);
+r.get("/backup-runs/:runId", { tag: "backup_destination:backup_run:read", mcp: { description: "Get one backup run's details/status." } }, ctrl.getOneRun);
 r.get("/backup-runs/:runId/stream", { tag: "backup_destination:backup_run:read" }, ctrl.streamRun);
 
 // Protect-from-retention
@@ -47,7 +47,7 @@ r.post("/backup-runs/:runId/protect", { tag: "backup_destination:backup_run:writ
 r.post("/backup-runs/:runId/restore/prepare", { tag: "backup_destination:backup_run:write" }, ctrl.prepareRestore);
 r.post("/backup-restores/:restoreId/apply", { tag: "backup_destination:backup_restore:write" }, ctrl.applyRestore);
 r.post("/backup-restores/:restoreId/cancel", { tag: "backup_destination:backup_restore:write" }, ctrl.cancelRestore);
-r.get("/backup-restores/:restoreId", { tag: "backup_destination:backup_restore:read" }, ctrl.getOneRestore);
+r.get("/backup-restores/:restoreId", { tag: "backup_destination:backup_restore:read", mcp: { description: "Get one backup restore's status." } }, ctrl.getOneRestore);
 r.get("/backup-restores/:restoreId/stream", { tag: "backup_destination:backup_restore:read" }, ctrl.streamRestore);
 
 export const backupRoutes = r.hono;

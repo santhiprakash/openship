@@ -23,22 +23,22 @@ const r = secureRouter(new Hono(), {
 // header or session default — no per-route id mapping needed.
 
 /** GET  /            - get current org's workspace settings */
-r.get("/", { tag: "settings:read" }, ctrl.get);
+r.get("/", { tag: "settings:read", mcp: { description: "Get the org's workspace settings (build mode, deploy defaults, preferences)." } }, ctrl.get);
 
 /** PUT  /            - create or update workspace settings */
 r.put("/", { tag: "settings:write" }, ctrl.upsert);
 
 /** PATCH /build-mode - update only build mode preference */
-r.patch("/build-mode", { tag: "settings:write" }, ctrl.updateBuildMode);
+r.patch("/build-mode", { tag: "settings:write", mcp: { description: "Set the default build mode (server / local)." } }, ctrl.updateBuildMode);
 
 /** PATCH /deploy-defaults - set/clear the default deploy target + server */
-r.patch("/deploy-defaults", { tag: "settings:write" }, ctrl.updateDeployDefaults);
+r.patch("/deploy-defaults", { tag: "settings:write", mcp: { description: "Set/clear the default deploy target (local/server/cloud) and server." } }, ctrl.updateDeployDefaults);
 
 /** PATCH /clone-credentials - set/clear the user-global git clone token */
 r.patch("/clone-credentials", { tag: "settings:write" }, ctrl.updateCloneCredentials);
 
 /** PATCH /clone-strategy-preference - save the first-time deploy nudge choice */
-r.patch("/clone-strategy-preference", { tag: "settings:write" }, ctrl.updateCloneStrategyPreference);
+r.patch("/clone-strategy-preference", { tag: "settings:write", mcp: { description: "Set the default clone strategy (api-host / server)." } }, ctrl.updateCloneStrategyPreference);
 
 export const settingsRoutes = r.hono;
 
