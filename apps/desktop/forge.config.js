@@ -6,21 +6,27 @@ const path = require("node:path");
 const ICON_BASE = path.join(__dirname, "assets/icon"); // packager appends .icns/.ico
 const RESOURCES = path.join(__dirname, "resources");
 
-// Code signing is opt-in: only wire osxSign/osxNotarize when the Apple creds
-// are present in the environment (CI secrets). Unset → an unsigned build.
+// Code signing is opt-in: wire osxSign only when the Developer ID identity is
+// present (CI secret APPLE_IDENTITY). Unset → an unsigned build.
+//
+// NOTE: notarization + stapling are NOT done here — they run in the release
+// workflow against the finished .dmg (release.yml). Notarizing per-.app would
+// double the notary round-trips and can't staple the .dmg the user downloads.
 const APPLE_IDENTITY = process.env.APPLE_IDENTITY;
 const osxSigning = APPLE_IDENTITY
   ? {
-      osxSign: { identity: APPLE_IDENTITY },
-      ...(process.env.APPLE_ID
-        ? {
-            osxNotarize: {
-              appleId: process.env.APPLE_ID,
-              appleIdPassword: process.env.APPLE_PASSWORD,
-              teamId: process.env.APPLE_TEAM_ID,
-            },
-          }
-        : {}),
+      osxSign: {
+        identity: APPLE_IDENTITY,
+        // Hardened runtime + entitlements are REQUIRED for notarization, and the
+        // same entitlements must apply to every nested Mach-O (the compiled
+        // openship-api binary, any native .node addons in the dashboard bundle)
+        // via optionsForFile — the app spawns/loads them, so they all need
+        // allow-jit / disable-library-validation or the hardened app crashes.
+        optionsForFile: () => ({
+          hardenedRuntime: true,
+          entitlements: path.join(__dirname, "entitlements.plist"),
+        }),
+      },
     }
   : {};
 
@@ -28,6 +34,10 @@ module.exports = {
   packagerConfig: {
     name: "Openship",
     executableName: "openship",
+    // Stable, owned bundle identifier — used by the code signature, notarization,
+    // Keychain, and LaunchServices. Without it packager defaults to the generic
+    // `com.electron.openship`, which collides with other Electron apps.
+    appBundleId: "com.oblien.openship",
     icon: ICON_BASE,
     asar: true,
     // The main/preload are bundled (build/bundle.mjs) into self-contained files,
@@ -68,18 +78,15 @@ module.exports = {
       });
     },
 
-    // The compiled API is an executable data file — make sure the exec bit
-    // survives packaging on macOS/Linux (Windows doesn't use it).
+    // The compiled API's exec bit is set in build/stage.ts BEFORE packaging so
+    // osxSign seals a correct bundle — we must NEVER chmod inside a signed .app
+    // here (that broke the signature and produced the "damaged" Gatekeeper
+    // error). This only re-asserts it for Linux, which ships unsigned.
     postPackage: async (_forgeConfig, options) => {
-      if (process.platform === "win32") return;
+      if (process.platform !== "linux") return;
       for (const out of options.outputPaths) {
-        for (const rel of [
-          "Openship.app/Contents/Resources/bin/openship-api", // macOS
-          "resources/bin/openship-api", // linux
-        ]) {
-          const p = path.join(out, rel);
-          if (existsSync(p)) chmodSync(p, 0o755);
-        }
+        const p = path.join(out, "resources/bin/openship-api");
+        if (existsSync(p)) chmodSync(p, 0o755);
       }
     },
 
@@ -101,7 +108,10 @@ module.exports = {
       const staging = path.join(__dirname, "out", `dmg-staging-${arch}`);
       execFileSync("rm", ["-rf", staging, dmgPath]);
       execFileSync("mkdir", ["-p", staging]);
-      execFileSync("cp", ["-R", appPath, path.join(staging, "Openship.app")]);
+      // `ditto` (not `cp -R`) preserves the code signature, symlinks, and
+      // extended attributes of the signed .app bundle. `cp -R` can drop xattrs
+      // and mangle framework symlinks, invalidating the signature.
+      execFileSync("ditto", [appPath, path.join(staging, "Openship.app")]);
       execFileSync("ln", ["-s", "/Applications", path.join(staging, "Applications")]);
       execFileSync(
         "hdiutil",

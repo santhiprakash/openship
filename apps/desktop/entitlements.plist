@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Hardened-runtime entitlements. REQUIRED for notarization, and specifically
+    tuned for how this app runs: an Electron shell that spawns the compiled
+    `openship-api` binary and runs the dashboard through Electron's Node.
+
+    - allow-jit / allow-unsigned-executable-memory: V8 (Electron) and bun both
+      JIT-compile; without these the process is killed on first JIT write.
+    - disable-library-validation: the app loads/spawns code (the openship-api
+      Mach-O, any native .node addons in the dashboard bundle) that Gatekeeper
+      would otherwise reject for not matching the main binary's team seal.
+    - allow-dyld-environment-variables: the desktop passes env at spawn
+      (ELECTRON_RUN_AS_NODE, OPENSHIP_*), and child runtimes read DYLD_* paths.
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+</dict>
+</plist>

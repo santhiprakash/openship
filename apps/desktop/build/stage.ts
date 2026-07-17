@@ -14,7 +14,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,6 +96,10 @@ function main(): void {
       ],
       { cwd: REPO_ROOT, stdio: "inherit" },
     );
+    // Set the exec bit HERE, before electron packages + signs the bundle. Doing
+    // it post-package (the old forge postPackage hook) mutated an already-signed
+    // .app and broke the code-signature seal on macOS. Windows doesn't use it.
+    if (!isWin) chmodSync(out, 0o755);
     process.stdout.write(`  ${API_BIN}: ${sizeOf(out)}\n`);
   });
 

@@ -30,7 +30,7 @@ const PLATFORM_MAP: Record<Platform, PlatformInfo> = {
     platform: "windows",
     label: "Download for Windows",
     icon: "windows",
-    fileName: "Openship-Setup.exe",
+    fileName: "Openship-win32-x64.zip",
   },
   linux: {
     platform: "linux",
@@ -46,20 +46,26 @@ const PLATFORM_MAP: Record<Platform, PlatformInfo> = {
   },
 };
 
-function detectPlatform(): Platform {
+async function detectPlatform(): Promise<Platform> {
   if (typeof navigator === "undefined") return "unknown";
 
+  const uaData = (navigator as { userAgentData?: any }).userAgentData;
   const ua = navigator.userAgent.toLowerCase();
-  const platform = (navigator as any).userAgentData?.platform?.toLowerCase() ?? navigator.platform?.toLowerCase() ?? "";
+  const platform = (uaData?.platform ?? navigator.platform ?? "").toLowerCase();
 
   if (platform.includes("mac") || ua.includes("macintosh")) {
-    // Check for Apple Silicon
-    // Safari on Apple Silicon reports correctly, Chrome can use userAgentData
-    const isArm =
-      (navigator as any).userAgentData?.architecture === "arm" ||
-      // Heuristic: post-2020 Macs running modern browsers
-      (ua.includes("macintosh") && !ua.includes("intel"));
-    return isArm ? "mac-arm" : "mac-intel";
+    // macOS freezes its UA to "Intel Mac OS X" even on Apple Silicon, so the UA
+    // string can NOT distinguish arm from intel (the old `!ua.includes("intel")`
+    // heuristic mis-served x64 to every M-series Mac). Use Client Hints where
+    // available (Chromium); otherwise default to Apple Silicon — every Mac since
+    // 2020 is arm, so that's the safe fallback for Safari/Firefox.
+    let arch = "";
+    try {
+      arch = (await uaData?.getHighEntropyValues?.(["architecture"]))?.architecture ?? "";
+    } catch {
+      /* Client Hints unsupported → fall through to the Apple Silicon default */
+    }
+    return arch === "x86" ? "mac-intel" : "mac-arm";
   }
 
   if (platform.includes("win") || ua.includes("windows")) return "windows";
@@ -72,8 +78,13 @@ export function usePlatform() {
   const [info, setInfo] = useState<PlatformInfo>(PLATFORM_MAP.unknown);
 
   useEffect(() => {
-    const detected = detectPlatform();
-    setInfo(PLATFORM_MAP[detected]);
+    let alive = true;
+    void detectPlatform().then((detected) => {
+      if (alive) setInfo(PLATFORM_MAP[detected]);
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   return {

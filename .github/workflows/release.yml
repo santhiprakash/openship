@@ -217,6 +217,16 @@ jobs:
     name: Build desktop installers (macOS arm64 + x64)
     if: github.event_name == 'push'
     runs-on: macos-14
+    # Apple signing/notarization creds (repo secrets). All optional: when unset,
+    # the signing + notarization steps below are skipped and the build is
+    # unsigned (same as before). See forge.config.js osxSign.
+    env:
+      APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -249,6 +259,30 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Import the Developer ID cert into a throwaway keychain so `electron-forge
+      # make` can sign (osxSign in forge.config.js activates when APPLE_IDENTITY
+      # is set). Skipped entirely when the secret is absent → unsigned build.
+      - name: Import Apple signing certificate
+        if: env.APPLE_IDENTITY != ''
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/openship-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          CERT="$RUNNER_TEMP/certificate.p12"
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERT"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          # Put our keychain first in the search list so codesign resolves the identity.
+          security list-keychains -d user -s "$KEYCHAIN" \
+            $(security list-keychains -d user | sed 's/"//g')
+          rm -f "$CERT"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
       # A single Apple-Silicon runner builds both dmgs: bun --compile --target
       # cross-compiles the x64 API binary and electron-packager fetches x64
       # Electron, so we don't depend on scarce macos-13 (Intel) runners.
@@ -260,6 +294,28 @@ jobs:
           bun run build
           bunx electron-forge make --arch=arm64
           bunx electron-forge make --arch=x64
+
+      # Notarize + staple each .dmg. notarytool scans the DMG contents, so the
+      # signed app inside is notarized too; stapling attaches the ticket so
+      # Gatekeeper clears the download without a "damaged"/"unidentified" prompt,
+      # even offline. Gated on APPLE_ID (the notary credential), separate from
+      # signing: set APPLE_IDENTITY only → signed-but-not-notarized (downloads
+      # still warn); add APPLE_ID/PASSWORD/TEAM_ID → clean notarized download.
+      - name: Notarize + staple DMGs
+        if: env.APPLE_ID != ''
+        run: |
+          set -euo pipefail
+          for arch in arm64 x64; do
+            dmg="apps/desktop/out/make/Openship-${arch}.dmg"
+            echo "▸ notarizing ${dmg}"
+            xcrun notarytool submit "${dmg}" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+            xcrun stapler staple "${dmg}"
+            xcrun stapler validate "${dmg}"
+          done
 
       - name: Collect dmgs
         shell: bash

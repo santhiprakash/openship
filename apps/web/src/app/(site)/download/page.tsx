@@ -41,7 +41,7 @@ type DownloadEntry = {
 const DOWNLOADS: DownloadEntry[] = [
   { platform: "mac-arm",   title: "macOS",   subtitle: "Apple Silicon (M1–M4)", icon: AppleIcon,   fileName: "Openship-arm64.dmg",   size: "84 MB" },
   { platform: "mac-intel", title: "macOS",   subtitle: "Intel x86_64",          icon: AppleIcon,   fileName: "Openship-x64.dmg",     size: "92 MB" },
-  { platform: "windows",   title: "Windows", subtitle: "Windows 10/11 · 64-bit", icon: WindowsIcon, fileName: "Openship-Setup.exe",   size: "76 MB" },
+  { platform: "windows",   title: "Windows", subtitle: "Windows 10/11 · 64-bit", icon: WindowsIcon, fileName: "Openship-win32-x64.zip", size: "76 MB" },
   { platform: "linux",     title: "Linux",   subtitle: "AppImage · x86_64",     icon: LinuxIcon,   fileName: "Openship.AppImage",    size: "98 MB" },
 ];
 
