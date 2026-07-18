@@ -91,6 +91,9 @@ Same interface regardless of where you deploy.
 
 A **REST API** and **MCP** (AI agent protocol) round it out for automation and tooling integration. Full command and API reference at [openship.io/docs](https://openship.io/docs).
 
+> [!NOTE]
+> The docs are still a work in progress — we're actively filling them out. If something's missing or unclear, [contributions](CONTRIBUTING.md) are hugely welcome and help us get there faster.
+
 ---
 
 ## Status
