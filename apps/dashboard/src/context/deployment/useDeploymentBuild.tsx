@@ -10,6 +10,7 @@ import { useGitHub } from "@/context/GitHubContext";
 import type { BuildLog } from "@/utils/deploymentPhaseDetector";
 import { useBuildStream } from "@/hooks/useSSEConnection";
 import { deployApi, projectsApi } from "@/lib/api";
+import { randomUUID } from "@/lib/random-uuid";
 import { invalidateProjectCaches } from "@/hooks/useProjectEndpoints";
 import { ApiError, getApiErrorMessage } from "@/lib/api/client";
 import { DeployCredentialModal } from "@/components/deployments/DeployCredentialModal";
@@ -990,7 +991,7 @@ export function useDeploymentBuild(
               }
 
               return {
-                id: crypto.randomUUID(),
+                id: randomUUID(),
                 port: endpoint.port || "",
                 targetPath: endpoint.targetPath || "",
                 domain: cleanDomain,

@@ -3,6 +3,7 @@ import type { FrameworkId, EnvironmentVariable } from "@/components/import-proje
 import type { PrepareComposeService, PrepareSingleAppCandidate } from "@/lib/api/deploy";
 import { getBuildImage, STACKS, type ProjectType, type BuildStrategy, type DeployTarget, type RuntimeMode, type StackId, type RoutingConfig } from "@repo/core";
 import type { BuildLog } from "@/utils/deploymentPhaseDetector";
+import { randomUUID } from "@/lib/random-uuid";
 
 // ─── Monorepo sub-app ────────────────────────────────────────────────────────
 
@@ -422,7 +423,7 @@ export function createPublicEndpoint(
   overrides: Partial<PublicEndpoint> = {},
 ): PublicEndpoint {
   return {
-    id: overrides.id ?? crypto.randomUUID(),
+    id: overrides.id ?? randomUUID(),
     port: overrides.port ?? "",
     targetPath: overrides.targetPath ?? "",
     domain: overrides.domain ?? "",

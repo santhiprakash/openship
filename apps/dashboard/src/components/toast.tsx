@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useState } from "react";
+import { randomUUID } from "@/lib/random-uuid";
 
 /* ── Types ────────────────────────────────────────────────────── */
 
@@ -33,7 +34,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const toast = useCallback((type: ToastType, message: string, title?: string) => {
-    const id = crypto.randomUUID();
+    const id = randomUUID();
     let added = false;
     setToasts((prev) => {
       // Skip an identical toast that's already on screen so the same
