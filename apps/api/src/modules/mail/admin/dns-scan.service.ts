@@ -238,7 +238,8 @@ async function checkSpf(domain: string, exp?: ExpectedRecord): Promise<DnsCheck 
   if (!exp?.value) return null;
   try {
     const txt = (await resolveTxt(domain)).map((parts) => parts.join(""));
-    const spf = txt.find((t) => /^v=spf1\b/i.test(t));
+    const spfRecords = txt.filter((t) => /^v=spf1\b/i.test(t));
+    const spf = spfRecords[0];
     if (!spf) {
       return {
         key: "spf",
@@ -251,6 +252,20 @@ async function checkSpf(domain: string, exp?: ExpectedRecord): Promise<DnsCheck 
         actual: "",
         message:
           "No SPF record found. Outbound mail will be marked as suspicious by most receivers.",
+      };
+    }
+    if (spfRecords.length > 1) {
+      return {
+        key: "spf",
+        label: "SPF record",
+        description: "Lets receivers verify this server is authorised to send for the domain.",
+        queriedName: domain,
+        recordType: "TXT",
+        status: "fail",
+        expected: exp.value,
+        actual: spfRecords.join(" | "),
+        message:
+          "Multiple SPF records found. A domain must publish exactly one v=spf1 TXT record or receivers treat SPF as invalid.",
       };
     }
     // We can't do a strict equality - operators sometimes add their own
