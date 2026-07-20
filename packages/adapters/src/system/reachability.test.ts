@@ -1,7 +1,41 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { createServer } from "node:net";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { probeTcp, probeHttp, waitForReady } from "./reachability";
+
+const tcpMock = vi.hoisted(() => ({ simulateTimeout: false }));
+
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:net")>();
+
+  return {
+    ...actual,
+    connect: (...args: unknown[]) => {
+      if (!tcpMock.simulateTimeout) {
+        return (actual.connect as (...params: unknown[]) => ReturnType<typeof actual.connect>)(...args);
+      }
+
+      const listeners = new Map<string, (() => void)[]>();
+      const socket = {
+        setTimeout: () => {
+          queueMicrotask(() => {
+            for (const listener of listeners.get("timeout") ?? []) listener();
+          });
+          return socket;
+        },
+        once: (event: string, listener: () => void) => {
+          const eventListeners = listeners.get(event) ?? [];
+          eventListeners.push(listener);
+          listeners.set(event, eventListeners);
+          return socket;
+        },
+        destroy: () => socket,
+      };
+
+      return socket as unknown as ReturnType<typeof actual.connect>;
+    },
+  };
+});
 
 /** Bind a throwaway TCP server on an ephemeral port and return {port, close}. */
 async function listenEphemeral(): Promise<{ port: number; close: () => void }> {
@@ -50,14 +84,15 @@ describe("probeTcp", () => {
     expect(await probeTcp("127.0.0.1", port, 1000)).toBe(false);
   });
 
-  test("resolves false (never throws) on an unroutable host within the timeout", async () => {
-    // TEST-NET-1 (192.0.2.0/24, RFC 5737) is guaranteed non-routable — the
-    // connect stalls and must hit our timeout, resolving false rather than hanging.
+  test("resolves false when the connection times out", async () => {
+    tcpMock.simulateTimeout = true;
     const start = Date.now();
-    const result = await probeTcp("192.0.2.1", 22, 600);
-    expect(result).toBe(false);
-    // Bounded by the timeout, not the OS default (~20s+).
-    expect(Date.now() - start).toBeLessThan(3000);
+    try {
+      expect(await probeTcp("example.test", 22, 600)).toBe(false);
+      expect(Date.now() - start).toBeLessThan(100);
+    } finally {
+      tcpMock.simulateTimeout = false;
+    }
   });
 });
 
