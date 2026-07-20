@@ -884,6 +884,18 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
     snapshot.branch,
   );
 
+  // Caller-supplied envVars win (and get persisted as the new project
+  // defaults below); when this deploy request didn't include any — the
+  // typical wizard/CLI "just redeploy" call — fall back to the project's
+  // already-saved env vars, the same way triggerDeployment's fresh-deploy
+  // path does. Without this, a bare/server-build deploy silently ships with
+  // no env at all even though `PATCH /api/projects/:id/env` succeeded.
+  let deploymentEnvVars = encryptEnvVars(envVars);
+  if (!deploymentEnvVars) {
+    const rawEnvMap = await repos.project.getEnvMap(project.id, env);
+    deploymentEnvVars = Object.keys(rawEnvMap).length > 0 ? rawEnvMap : null;
+  }
+
   const dep = await createQueuedDeployment({
     projectId: project.id,
     organizationId: project.organizationId,
@@ -893,7 +905,7 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
     environment: env,
     framework: snapshot.framework,
     meta: metaWithPrevious(snapshot, project),
-    envVars: encryptEnvVars(envVars),
+    envVars: deploymentEnvVars,
     rollbackStrategy,
     commitShaBefore,
   });
