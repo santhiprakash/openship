@@ -917,6 +917,12 @@ function buildDeployEnvironment(
                 const info = await runtime.getContainerInfo(containerId);
                 if (info?.hostPort) {
                   port = info.hostPort;
+                  // The app's hostPort is published on the HOST. When THIS
+                  // control-plane itself runs inside a container (self-hosted
+                  // docker compose), our own 127.0.0.1 is the API container, not
+                  // the host — so probe the host gateway instead. Falls back to
+                  // 127.0.0.1 for the bare/host-installed control plane.
+                  host = process.env.OPENSHIP_HEALTHCHECK_HOST || "host.docker.internal";
                 } else if (runtime.supports("containerIp")) {
                   const ip = await runtime.getContainerIp(containerId);
                   if (ip) host = ip;

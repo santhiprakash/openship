@@ -89,6 +89,12 @@ services:
     # bun user can talk to the daemon.
     group_add:
       - "110"
+    # The control-plane runs INSIDE a container, but app containers publish their
+    # port on the HOST (random hostPort on 0.0.0.0). Give the API a route to the
+    # host so its post-deploy health check can reach the app at
+    # host.docker.internal:<hostPort> instead of its own loopback.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
