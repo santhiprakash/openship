@@ -435,8 +435,16 @@ class MigrationOrchestratorImpl {
   ): Promise<void> {
     // Best-effort: tear down whatever landed on the target, then bring the
     // originals back up on the source. Never destroy the source.
+    //
+    // This must run for same-server migrations too: `listDeploymentContainers`
+    // scopes strictly by `openship.deployment=<deploymentId>` label, which
+    // never overlaps with the pre-migration `scannedContainerIds` restarted
+    // below, so it's safe regardless of source/target identity. Skipping it
+    // for same-server previously left the newly-deployed (and possibly
+    // port/name-colliding) containers running while the originals were also
+    // restarted on the same daemon.
     try {
-      if (deploymentId && !ctx.sameServer) {
+      if (deploymentId) {
         const rtB = await createServerDockerRuntime(ctx.targetServerId, ctx.organizationId);
         try {
           const containers = await rtB.listDeploymentContainers(deploymentId);
