@@ -186,8 +186,8 @@ export const BillingTopups: React.FC<BillingTopupsProps> = ({ state: _state }) =
         )}
 
         {error && packs && (
-          <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
-            <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+          <div className="mt-4 rounded-xl border border-danger-border bg-danger-bg px-4 py-3">
+            <p className="text-sm text-danger">{error}</p>
           </div>
         )}
       </div>

@@ -5,9 +5,17 @@ import { useRouter } from "next/navigation";
 import { usePlatform } from "@/context/PlatformContext";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { useToast } from "@/context/ToastContext";
-import { serviceKind, servicesApi, type Service, type ServiceContainer, type ServiceInput } from "@/lib/api/services";
+import {
+  serviceKind,
+  serviceUsesDeployPipeline,
+  serviceCanStartWithoutBuild,
+  servicesApi,
+  type Service,
+  type ServiceContainer,
+  type ServiceInput,
+} from "@/lib/api/services";
 import { deployApi } from "@/lib/api/deploy";
-import { resolveServiceHostnameLabel } from "@repo/core";
+import { resolveServiceHostnameLabel, internalServiceAddress } from "@repo/core";
 import {
   Play,
   Square,
@@ -110,6 +118,12 @@ export function ServiceDetailPanel({
   // Backup only applies to compose services (stateful containers) — never
   // monorepo sub-apps (source-built frontends).
   const supportsBackup = serviceKind(service) === "compose";
+
+  // Two-mode split (pipeline vs image app) + launchability — shared helpers so
+  // this classification can't drift from the other call sites. See services.ts.
+  const projectType = (projectData as { projectType?: string })?.projectType;
+  const usesDeployPipeline = serviceUsesDeployPipeline(service, projectType);
+  const canStartWithoutBuild = serviceCanStartWithoutBuild(service);
 
   // ── Tabs ─────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<ServiceTab>(() =>
@@ -258,6 +272,12 @@ export function ServiceDetailPanel({
       else if (action === "stop") await servicesApi.stop(projectId, service.id);
       else await servicesApi.restart(projectId, service.id);
       onRefresh();
+    } catch (err) {
+      showToast(
+        getApiErrorMessage(err, t.projectDetail.services.detail.toast.deployFailed),
+        "error",
+        service.name,
+      );
     } finally {
       setActionLoading(null);
     }
@@ -281,41 +301,35 @@ export function ServiceDetailPanel({
    * just skip it.
    */
   const handleDeployStart = async () => {
-    const activeDeploymentId = projectData?.activeDeploymentId;
-    if (!activeDeploymentId) {
-      showToast(t.projectDetail.services.detail.toast.deployFirstStart, "error", service.name);
-      return;
-    }
     setDeploying(true);
     try {
-      if (!service.enabled) {
-        await servicesApi.update(projectId, service.id, { enabled: true });
-      }
-      const res = await deployApi.buildRedeploy(activeDeploymentId);
+      // Start = provision + launch THIS service on its own (its own container /
+      // Oblien workspace), DECOUPLED from the project deploy — no build page, no
+      // one-deploy lock, never touches the main app. servicesApi.start
+      // provisions-if-missing server-side (and enables the service first).
+      const res = await servicesApi.start(projectId, service.id);
       if ((res as any)?.success === false) {
         setDeploying(false);
         showToast((res as any)?.error || t.projectDetail.services.detail.toast.deployFailed, "error", service.name);
         return;
       }
       showToast(interpolate(t.projectDetail.services.detail.toast.serviceStarting, { name: service.name }), "success", t.projectDetail.services.detail.toast.serviceTitle);
-      // Don't release `deploying` here - buildRedeploy returns immediately
-      // while the deploy runs asynchronously on the backend. The polling
-      // effect below releases the state once a container shows up.
+      setDeploying(false);
+      onRefresh();
     } catch (err) {
       setDeploying(false);
-      const msg = err instanceof Error ? err.message : t.projectDetail.services.detail.toast.deployFailed;
-      showToast(msg, "error", service.name);
+      showToast(
+        getApiErrorMessage(err, t.projectDetail.services.detail.toast.deployFailed),
+        "error",
+        service.name,
+      );
     }
   };
 
   /**
-   * Rebuild + redeploy ONLY this service, leaving the rest of the stack
-   * running untouched. This is the manual counterpart to smart-route: the API
-   * targets just `serviceIds`, builds only those, and carries every other
-   * enabled service forward on its existing container (compose/deploy.service
-   * carry-forward). Use it to retry a failed service or ship a single service's
-   * change without a full-stack rebuild. Lands on the build screen for the new
-   * deployment. Never sends `forceAll` (it would override the target subset).
+   * PIPELINE services only (compose stack / monorepo sub-app / source-built):
+   * rebuild + redeploy ONLY this service and land on the build screen. Image
+   * apps don't get this — they Start/Stop.
    */
   const handleRedeployService = async () => {
     const activeDeploymentId = projectData?.activeDeploymentId;
@@ -339,7 +353,11 @@ export function ServiceDetailPanel({
       router.push(newId ? `/build/${newId}` : `/projects/${projectId}/deployments`);
     } catch (err) {
       setRedeploying(false);
-      showToast(err instanceof Error ? err.message : t.projectDetail.services.detail.toast.redeployFailed, "error", service.name);
+      showToast(
+        getApiErrorMessage(err, t.projectDetail.services.detail.toast.redeployFailed),
+        "error",
+        service.name,
+      );
     }
   };
 
@@ -426,7 +444,7 @@ export function ServiceDetailPanel({
                   s.id === service.id ? (
                     <Check className="size-4 text-primary" />
                   ) : (
-                    <span className={`size-1.5 rounded-full ${s.enabled ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
+                    <span className={`size-1.5 rounded-full ${s.enabled ? "bg-success-solid" : "bg-muted-foreground/40"}`} />
                   ),
                 disabled: s.id === service.id,
                 onClick: () => switchService(s.id),
@@ -471,6 +489,23 @@ export function ServiceDetailPanel({
             <div className="bg-card rounded-2xl border border-border/50 p-5">
               <SectionHeader title={t.projectDetail.services.detail.network} icon={Network} />
               <div className="space-y-3">
+                {/* The stable address sibling services use — service name is the
+                    hostname (docker alias / cloud /etc/hosts), NOT the public
+                    subdomain. This is what goes in another service's DATABASE_URL. */}
+                {internalServiceAddress(service.name, service.ports as string[]) && (
+                  <div>
+                    <InfoCard
+                      label={t.projectDetail.services.detail.internalAddress}
+                      value={internalServiceAddress(service.name, service.ports as string[])}
+                      mono
+                      onCopy={() => copy(internalServiceAddress(service.name, service.ports as string[]), "internal")}
+                      copied={copied === "internal"}
+                    />
+                    <p className="mt-1 px-1 text-[11px] text-muted-foreground">
+                      {t.projectDetail.services.detail.internalAddressHint}
+                    </p>
+                  </div>
+                )}
                 {service.ports && service.ports.length > 0 && (
                   <InfoCard label={t.projectDetail.services.detail.ports} value={service.ports.join(", ")} onCopy={() => copy(service.ports!.join(", "), "ports")} copied={copied === "ports"} />
                 )}
@@ -478,7 +513,12 @@ export function ServiceDetailPanel({
                   <InfoCard label={t.projectDetail.services.detail.hostPort} value={String(container.hostPort)} onCopy={() => copy(String(container.hostPort), "hostPort")} copied={copied === "hostPort"} />
                 )}
                 {container?.ip && (
-                  <InfoCard label={t.projectDetail.services.detail.containerIp} value={container.ip} mono onCopy={() => copy(container.ip!, "ip")} copied={copied === "ip"} />
+                  <div>
+                    <InfoCard label={t.projectDetail.services.detail.currentIp} value={container.ip} mono onCopy={() => copy(container.ip!, "ip")} copied={copied === "ip"} />
+                    <p className="mt-1 px-1 text-[11px] text-muted-foreground">
+                      {t.projectDetail.services.detail.currentIpHint}
+                    </p>
+                  </div>
                 )}
                 {container?.containerId && (
                   <InfoCard
@@ -528,7 +568,7 @@ export function ServiceDetailPanel({
                       onClick={() => copy(vol, `vol-${vol}`)}
                       className="shrink-0 rounded p-1 opacity-0 transition-all hover:bg-muted group-hover:opacity-100"
                     >
-                      {copied === `vol-${vol}` ? <Check className="size-3 text-emerald-500" /> : <Copy className="size-3 text-muted-foreground" />}
+                      {copied === `vol-${vol}` ? <Check className="size-3 text-success" /> : <Copy className="size-3 text-muted-foreground" />}
                     </button>
                   </div>
                 ))}
@@ -619,28 +659,28 @@ export function ServiceDetailPanel({
                         <ActionButton icon={RotateCw} label={t.projectDetail.services.detail.restart} loading={actionLoading === "restart"} onClick={() => handleContainerAction("restart")} variant="warning" />
                       </>
                     )}
-                    {status === "stopped" && (
+                    {status !== "running" && (
                       <ActionButton icon={Play} label={t.projectDetail.services.detail.start} loading={actionLoading === "start"} onClick={() => handleContainerAction("start")} variant="success" />
                     )}
                   </>
                 ) : (
-                  // Disabled service with no container: first-run "Enable & start"
-                  // (flips enabled, then deploys). An enabled-but-not-running
-                  // service (e.g. a failed build) gets the per-service Redeploy
-                  // below instead.
-                  !service.enabled && (
+                  // No workspace/container yet → Start provisions + launches it
+                  // inline (its own container / Oblien workspace). No build page,
+                  // no redeploy. A source-built service (no image) can't launch
+                  // this way — it shows Redeploy (below) instead of Start.
+                  canStartWithoutBuild && (
                     <ActionButton
                       icon={Play}
-                      label={deploying ? t.projectDetail.services.detail.starting : t.projectDetail.services.detail.enableAndStart}
+                      label={deploying ? t.projectDetail.services.detail.starting : t.projectDetail.services.detail.start}
                       loading={deploying}
                       onClick={handleDeployStart}
                       variant="success"
                     />
                   )
                 )}
-                {/* Per-service rebuild — retry a failed service or ship its
-                    change without a full-stack redeploy. */}
-                {service.enabled && projectData?.activeDeploymentId && (
+                {/* Pipeline services (compose / monorepo / source-built) keep the
+                    per-service Redeploy → build page. Image apps never show it. */}
+                {usesDeployPipeline && service.enabled && projectData?.activeDeploymentId && (
                   <ActionButton
                     icon={Rocket}
                     label={redeploying ? t.projectDetail.services.detail.redeploying : t.projectDetail.services.detail.redeploy}
@@ -657,8 +697,8 @@ export function ServiceDetailPanel({
                   disabled={saving}
                   className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all disabled:opacity-50 ${
                     service.enabled
-                      ? "bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 ring-1 ring-red-500/10"
-                      : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 ring-1 ring-emerald-500/10"
+                      ? "bg-danger-bg text-danger hover:bg-danger-solid/20 ring-1 ring-danger-border"
+                      : "bg-success-bg text-success hover:bg-success-solid/20 ring-1 ring-success-border"
                   }`}
                 >
                   {saving ? <Loader2 className="size-4 animate-spin" /> : <Power className="size-4" />}
@@ -666,7 +706,7 @@ export function ServiceDetailPanel({
                 </button>
                 <button
                   onClick={() => setConfirmDelete(true)}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 ring-1 ring-red-500/10 transition-all"
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-danger-bg text-danger hover:bg-danger-solid/20 ring-1 ring-danger-border transition-all"
                 >
                   <Trash2 className="size-4" />
                   {t.projectDetail.services.detail.delete}
@@ -764,7 +804,7 @@ export function ServiceDetailPanel({
               <button
                 onClick={handleDeleteService}
                 disabled={deleting}
-                className="inline-flex h-10 items-center gap-2 rounded-xl bg-red-500 px-4 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+                className="inline-flex h-10 items-center gap-2 rounded-xl bg-danger-solid px-4 text-sm font-medium text-white transition-colors hover:bg-danger-solid/90 disabled:opacity-50"
               >
                 {deleting && <Loader2 className="size-4 animate-spin" />}
                 {t.projectDetail.services.detail.deleteConfirm}
@@ -795,11 +835,11 @@ function StatusBadge({ status }: { status: string }) {
   const { t } = useI18n();
   const labels = t.projectDetail.services.detail.status;
   const map: Record<string, { dot: string; badge: string; label: string }> = {
-    running: { dot: "bg-emerald-500", badge: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400", label: labels.running },
+    running: { dot: "bg-success-solid", badge: "bg-success-bg text-success", label: labels.running },
     stopped: { dot: "bg-muted-foreground/30", badge: "bg-muted/60 text-muted-foreground/70", label: labels.stopped },
     disabled: { dot: "bg-muted-foreground/20", badge: "bg-muted/40 text-muted-foreground/50", label: labels.disabled },
-    failed: { dot: "bg-red-500", badge: "bg-red-500/10 text-red-600 dark:text-red-400", label: labels.failed },
-    starting: { dot: "bg-amber-500", badge: "bg-amber-500/10 text-amber-600 dark:text-amber-400", label: labels.starting },
+    failed: { dot: "bg-danger-solid", badge: "bg-danger-bg text-danger", label: labels.failed },
+    starting: { dot: "bg-warning-solid", badge: "bg-warning-bg text-warning", label: labels.starting },
   };
   const s = map[status] ?? map.stopped;
   return (
@@ -814,9 +854,9 @@ function ActionButton({ icon: Icon, label, loading, onClick, variant }: {
   icon: React.ComponentType<{ className?: string }>; label: string; loading: boolean; onClick: () => void; variant: "success" | "danger" | "warning" | "primary";
 }) {
   const colors = {
-    success: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 ring-1 ring-emerald-500/10",
-    danger: "bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 ring-1 ring-red-500/10",
-    warning: "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 ring-1 ring-amber-500/10",
+    success: "bg-success-bg text-success hover:bg-success-solid/20 ring-1 ring-success-border",
+    danger: "bg-danger-bg text-danger hover:bg-danger-solid/20 ring-1 ring-danger-border",
+    warning: "bg-warning-bg text-warning hover:bg-warning-solid/20 ring-1 ring-warning-border",
     primary: "bg-primary/10 text-primary hover:bg-primary/20 ring-1 ring-primary/15",
   };
   return (
@@ -841,7 +881,7 @@ function InfoCard({ label, value, mono, onCopy, copied }: {
             onClick={onCopy}
             className="shrink-0 rounded p-1 opacity-0 transition-all hover:bg-muted group-hover:opacity-100"
           >
-            {copied ? <Check className="size-3 text-emerald-500" /> : <Copy className="size-3 text-muted-foreground" />}
+            {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3 text-muted-foreground" />}
           </button>
         )}
       </div>

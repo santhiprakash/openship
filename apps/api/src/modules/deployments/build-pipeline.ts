@@ -23,6 +23,8 @@ import {
   runDeployPipeline,
   isMultiServiceRuntime,
   waitForReady,
+  EdgeMigrateRequested,
+  runEdgeTakeover,
 } from "@repo/adapters";
 import { platform } from "../../lib/controller-helpers";
 import { webhookProxyTarget } from "../../config";
@@ -51,6 +53,7 @@ import { firePreDeployBackups } from "../backups/triggers/pre-deploy";
 import { buildBackgroundContext } from "../../lib/request-context";
 import * as sessionManager from "./session-manager";
 import { onFailure, onSuccess, onCancelled, setDeploymentStatus, type LifecycleContext } from "./deployment-lifecycle";
+import { auditPorts } from "./port-audit.service";
 import { createBuildConfig } from "./build-config";
 import { resolveClonePlan } from "./clone-plan";
 import { collapseTerminalLogs } from "./terminal-logs";
@@ -102,7 +105,16 @@ export async function resolveServicePipelineMode(
   useServicePipeline: boolean;
   servicePreflightServices: DeployableService[];
 }> {
-  if (snapshot.serviceDeploymentMode === "single") {
+  // A deploy that TARGETS specific service IDs is a per-service action — "add
+  // service", or redeploy one service. Those services are their own workspaces/
+  // containers, provisioned independently of the project's main app. Run the
+  // service pipeline for exactly them regardless of `serviceDeploymentMode`
+  // (even a static / single-app main app): the executor scopes the deploy to
+  // `targetServiceIds`, so the main app is never touched. This is the seam that
+  // separates ADDED services from a NORMAL app deploy.
+  const targetsSpecificServices = (snapshot.targetServiceIds?.length ?? 0) > 0;
+
+  if (snapshot.serviceDeploymentMode === "single" && !targetsSpecificServices) {
     return { useSingleAppPipeline: true, useServicePipeline: false, servicePreflightServices: [] };
   }
 
@@ -372,6 +384,22 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
   };
 
   try {
+    // Services are containers → they need the Docker runtime. If this deploy
+    // will run the service pipeline (targeted serviceIds, or the project has
+    // service rows) but the app is configured "bare", force Docker for it — the
+    // bare runtime literally can't run a service container (it would fail with
+    // "services not supported on the bare runtime"). Only the targeted
+    // service(s) deploy here; the app's own bare deploy is untouched. Compose
+    // projects are already Docker, so the `=== "bare"` guard skips them; a plain
+    // bare app deploy with no services never flips (useServicePipeline=false).
+    if (snapshot.runtimeMode === "bare") {
+      const willRunServices = (await resolveServicePipelineMode(project, snapshot)).useServicePipeline;
+      if (willRunServices) {
+        logger.log("→ Services require the Docker runtime — running this service deploy on Docker.\n");
+        snapshot.runtimeMode = "docker";
+      }
+    }
+
     const resolved = await resolveDeploymentPlatform(snapshot, {
       organizationId: dep.organizationId,
       basePlatform: plat,
@@ -511,22 +539,41 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
     const cloneOnServer = clonePlan.runsOnServer;
     const allowRelayFallback = clonePlan.relayEligible;
 
-    const gitCred = await resolveBuildGitToken({
-      ctx: buildBackgroundContext({
-        userId: actorUserId,
-        organizationId: dep.organizationId,
-        label: "build:resolve-git-token",
-      }),
-      projectId: project.id,
-      owner: project.gitOwner ?? undefined,
-      repo: project.gitRepo ?? undefined,
-      buildStrategy: clonePlan.cloneBuildStrategy,
-      allowRelayFallback,
-      // Docker clone-on-server can degrade to an api-host clone, so resolve
-      // gracefully (a LOCAL fallback credential, flagged apiHostFallback) instead
-      // of hard-failing at token resolution after the server is provisioned.
-      allowApiHostFallback: clonePlan.dockerClonesOnServer,
-    });
+    // Only resolve a git clone token when the deploy actually needs a SOURCE.
+    // A services deploy where every enabled service runs a registry IMAGE (no
+    // build / dockerfile / monorepo) clones nothing — so demanding a remote
+    // GitHub token there is wrong and hard-fails "No GitHub token available".
+    // This is the SAME exemption preflight applies (checkConfig.needsProjectSource),
+    // so the two can't disagree. One-click app installs (Convex, n8n, …) are
+    // exactly this case: image services, hasBuild=false. This is what makes the
+    // app-install and advanced-deploy paths converge on one behavior.
+    const enabledSvcs = (snapshot.composeServices ?? []).filter((s) => s.enabled !== false);
+    const needsGitSource =
+      enabledSvcs.length > 0
+        ? enabledSvcs.some((s) => s.kind === "monorepo" || !!s.build || !!s.dockerfile)
+        : snapshot.hasBuild !== false;
+
+    const gitCred: Awaited<ReturnType<typeof resolveBuildGitToken>> = needsGitSource
+      ? await resolveBuildGitToken({
+          ctx: buildBackgroundContext({
+            userId: actorUserId,
+            organizationId: dep.organizationId,
+            label: "build:resolve-git-token",
+          }),
+          projectId: project.id,
+          owner: project.gitOwner ?? undefined,
+          repo: project.gitRepo ?? undefined,
+          buildStrategy: clonePlan.cloneBuildStrategy,
+          // Only meaningful for an on-server clone — lets a per-server GitHub auth
+          // config (device token / PAT / SSH key) win for that server.
+          serverId: clonePlan.runsOnServer ? resolved.serverId : null,
+          allowRelayFallback,
+          // Docker clone-on-server can degrade to an api-host clone, so resolve
+          // gracefully (a LOCAL fallback credential, flagged apiHostFallback) instead
+          // of hard-failing at token resolution after the server is provisioned.
+          allowApiHostFallback: clonePlan.dockerClonesOnServer,
+        })
+      : {};
 
     // Clone-on-server needs a SHIPPABLE credential that can travel to the build
     // host: the desktop relay (gitCred.relay) or an App/PAT token (gitCred.token
@@ -537,7 +584,9 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
     // clones on the target and is gated by preflight separately, so this fallback
     // only changes DOCKER behavior.)
     const cloneCredentialAvailable =
-      gitCred.relay === true || (!!gitCred.token && !gitCred.apiHostFallback);
+      gitCred.relay === true ||
+      !!gitCred.ssh ||
+      (!!gitCred.token && !gitCred.apiHostFallback);
     const effectiveCloneOnServer =
       cloneOnServer && (runtime.name === "bare" || cloneCredentialAvailable);
     if (cloneOnServer && runtime.name !== "bare" && !cloneCredentialAvailable) {
@@ -573,6 +622,9 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
     // the relay (gitCredentialHelperPath, set once the relay is open) or the
     // short-lived token already on buildConfig.gitToken.
     buildConfig.cloneOnServer = effectiveCloneOnServer;
+    // Per-server SSH clone credential (ssh-server-key / ssh-deploy-key mode).
+    // Consumed by the adapter clone step (git@github.com + GIT_SSH_COMMAND).
+    if (gitCred.ssh) buildConfig.gitSsh = gitCred.ssh;
 
     // Desktop git-credential relay opener, shared by the single-app and compose
     // paths. Opens the reverse tunnel + remote helper (nothing persisted on the
@@ -662,6 +714,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
           runtimeResources: prodResources,
           gitToken: gitCred.token,
           gitCredentialHelperPath: composeRelay?.scriptPath,
+          gitSsh: gitCred.ssh,
           cloneOnServer: effectiveCloneOnServer,
         });
       } finally {
@@ -914,7 +967,33 @@ function buildDeployEnvironment(
               await system.ensureFeature("deploy", systemLog);
             }
             if (plannedDomains.length > 0) {
-              await system.ensureFeature("routing", systemLog);
+              // Routing needs OpenResty on 80/443. If a foreign proxy already
+              // holds them, HOLD the deploy and prompt (migrate / take over /
+              // cancel) — the same session prompt flow used for port conflicts —
+              // instead of hard-failing with EDGE_CONFLICT.
+              try {
+                await system.ensureFeature("routing", systemLog, { promptUser });
+              } catch (err) {
+                if (err instanceof EdgeMigrateRequested) {
+                  systemLog({
+                    message: `Migrating ${err.sites.length} site(s) from the existing proxy, then taking over 80/443...`,
+                    level: "warn",
+                  });
+                  const takeover = await runEdgeTakeover(
+                    targetExecutor,
+                    { status: err.status, sites: err.sites },
+                    systemLog,
+                  );
+                  for (const w of [...err.warnings, ...takeover.warnings]) {
+                    systemLog({ message: w, level: "warn" });
+                  }
+                  if (!takeover.ok) {
+                    throw new Error("Edge migration failed — rolled back to the previous proxy.");
+                  }
+                } else {
+                  throw err;
+                }
+              }
             }
             if (plannedDomains.some((d) => d.provisionSsl)) {
               await system.ensureFeature("ssl", systemLog);
@@ -990,7 +1069,9 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
     imageRef: buildResult.imageRef!,
     environment: dep.environment,
     port: snapshot.port,
-    startCommand: snapshot.startCommand,
+    // The build may override the start command once it knows the output shape
+    // (e.g. Next.js standalone → `node server.js` instead of `next start`).
+    startCommand: buildResult.startCommand ?? snapshot.startCommand,
     stack: snapshot.framework,
     envVars: envMap,
     resources: prodResources,
@@ -1193,22 +1274,45 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
     logger,
   });
 
+  // Advisory port check — confirm the app is actually listening on its exposed
+  // port(s) from INSIDE the instance. Runs after the deploy is live and never
+  // throws (auditPorts is fully guarded), so it can't fail or delay-revert the
+  // deploy; the result is pure metadata the dashboard uses to offer a "wrong
+  // port?" fix. Exposed ports = the same publicEndpoints→port set the firewall
+  // step uses. Static self-hosted has no listening process to probe.
+  const auditedPorts = Array.from(
+    new Set(
+      (deployConfig.publicEndpoints && deployConfig.publicEndpoints.length > 0
+        ? deployConfig.publicEndpoints
+        : [{ port: deployConfig.port }])
+        .map((endpoint) => endpoint.port ?? deployConfig.port)
+        .filter((port): port is number => Number.isFinite(port)),
+    ),
+  );
+  const portCheck =
+    isStaticSelfHosted || !deployResult.containerId
+      ? []
+      : await auditPorts(runtime, deployResult.containerId, auditedPorts, logger);
+
+  // `metaPatch` is spread into deployment.meta (persisted) and read back for the
+  // SSE payload in onSuccess, so both live + refresh see the same result.
+  const metaPatch: Record<string, unknown> = {};
+  if (portCheck.length > 0) metaPatch.portCheck = portCheck;
+  // Surface a free-domain edge-sync failure so the deploy doesn't read as cleanly
+  // green with a dead .opsh.io URL. `edgeUnsynced` is the structured signal the
+  // project status reads to flag "Action Required" + offer Retry routing;
+  // `deployWarning` is the human message (both cleared when routing later syncs).
+  if (postSync.warningMessage) {
+    metaPatch.deployWarning = postSync.warningMessage;
+    metaPatch.edgeUnsynced = true;
+  }
+
   await onSuccess(ctx, {
     containerId: deployResult.containerId!,
     url: deployResult.url,
     durationMs: buildResult.durationMs ?? 0,
-    // Surface a free-domain edge-sync failure so the deploy doesn't read as
-    // cleanly green with a dead .opsh.io URL. Live via SSE + persisted on meta
-    // so it survives a refresh (build-status reads meta.deployWarning).
-    ...(postSync.warningMessage
-      ? {
-          warningMessage: postSync.warningMessage,
-          // `edgeUnsynced` is the structured signal the project status reads to
-          // flag "Action Required" + offer Retry routing; `deployWarning` is the
-          // human message. Both cleared when routing later syncs (retry/redeploy).
-          metaPatch: { deployWarning: postSync.warningMessage, edgeUnsynced: true },
-        }
-      : {}),
+    ...(postSync.warningMessage ? { warningMessage: postSync.warningMessage } : {}),
+    ...(Object.keys(metaPatch).length > 0 ? { metaPatch } : {}),
   });
 
   // FINAL STEP (desktop-only, best-effort): mirror this project onto the

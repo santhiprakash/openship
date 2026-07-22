@@ -8,20 +8,17 @@
  * host answers, and deletes the record. Unreachable ones are left for the next
  * tick (attempts is bumped so the condition is observable).
  *
- * Runs hourly on a staggered minute (off the :00/:30 marks and the daily
- * prunes).
+ * `runOrphanSweep` is the action; scheduling is owned by the generic jobs
+ * module (registered as the "projects:orphan-gc" system job — see
+ * modules/jobs/job.registry.ts).
  */
 
 import { repos, type OrphanedResource } from "@repo/db";
 import { DockerRuntime, isRuntimeNotFoundError, type RuntimeAdapter } from "@repo/adapters";
 import { safeErrorMessage } from "@repo/core";
-import { getJobRunner } from "../../lib/job-runner";
 import { createReachabilityProbe } from "../../lib/server-reachability";
 import { isConnectionLoss } from "../../lib/remote-state";
 import { resolveTargetPlatform, resolveDeploymentPlatform } from "../../lib/deployment-runtime";
-
-const ORPHAN_GC_JOB_ID = "projects:orphan-gc";
-const ORPHAN_GC_CRON = "41 * * * *";
 
 /** Destroy one orphaned resource via the right adapter op; not-found = done. */
 async function destroyOrphanResource(runtime: RuntimeAdapter, o: OrphanedResource): Promise<void> {
@@ -115,22 +112,4 @@ export async function runOrphanSweep(): Promise<{ reclaimed: number; deferred: n
   }
 
   return { reclaimed, deferred };
-}
-
-export async function scheduleOrphanGc(): Promise<void> {
-  const runner = await getJobRunner();
-  await runner.scheduleRecurring({
-    jobId: ORPHAN_GC_JOB_ID,
-    cronExpression: ORPHAN_GC_CRON,
-    onTick: async () => {
-      try {
-        const { reclaimed, deferred } = await runOrphanSweep();
-        if (reclaimed > 0 || deferred > 0) {
-          console.log(`[orphan-gc] reclaimed ${reclaimed}, deferred ${deferred}`);
-        }
-      } catch (err) {
-        console.error("[orphan-gc] sweep failed", err);
-      }
-    },
-  });
 }

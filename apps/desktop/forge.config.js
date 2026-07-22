@@ -113,11 +113,39 @@ module.exports = {
       // and mangle framework symlinks, invalidating the signature.
       execFileSync("ditto", [appPath, path.join(staging, "Openship.app")]);
       execFileSync("ln", ["-s", "/Applications", path.join(staging, "Applications")]);
-      execFileSync(
-        "hdiutil",
-        ["create", "-volname", "Openship", "-srcfolder", staging, "-ov", "-format", "UDZO", dmgPath],
-        { stdio: "inherit" },
-      );
+      // hdiutil intermittently fails with "Resource busy" on CI macOS runners:
+      // Spotlight/APFS grabs the just-`ditto`'d staging folder as hdiutil tries
+      // to snapshot it, or a stale /Volumes/Openship mount lingers from a prior
+      // attempt. Detach any leftover volume and retry with a short backoff so
+      // the transient contention clears instead of failing the release.
+      const detachStale = () => {
+        try {
+          execFileSync("hdiutil", ["detach", "-force", "/Volumes/Openship"], { stdio: "ignore" });
+        } catch {
+          /* nothing mounted — fine */
+        }
+      };
+      let hdiutilErr;
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        detachStale();
+        try {
+          execFileSync(
+            "hdiutil",
+            ["create", "-volname", "Openship", "-srcfolder", staging, "-ov", "-format", "UDZO", dmgPath],
+            { stdio: "inherit" },
+          );
+          hdiutilErr = undefined;
+          break;
+        } catch (err) {
+          hdiutilErr = err;
+          if (attempt < 5) {
+            console.warn(`postMake: hdiutil create failed (attempt ${attempt}/5) — retrying in 3s`);
+            execFileSync("rm", ["-f", dmgPath]); // clear any partial image before retry
+            await new Promise((r) => setTimeout(r, 3000));
+          }
+        }
+      }
+      if (hdiutilErr) throw hdiutilErr;
       execFileSync("rm", ["-rf", staging]);
       return makeResults;
     },

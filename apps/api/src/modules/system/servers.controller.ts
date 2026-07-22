@@ -14,6 +14,7 @@ import { getRequestContext } from "../../lib/request-context";
 import { permission } from "../../lib/permission";
 import { audit, auditContextFrom } from "../../lib/audit";
 import { assertNotCloud } from "../../lib/controller-helpers";
+import { primeGeo, countryForIp } from "@/lib/geo-ip";
 
 /** Public shape - what the controller returns to clients (no SSH secrets). */
 function serializeServer(s: Awaited<ReturnType<typeof repos.server.get>>) {
@@ -29,6 +30,9 @@ function serializeServer(s: Awaited<ReturnType<typeof repos.server.get>>) {
     sshJumpHost: s.sshJumpHost,
     sshArgs: s.sshArgs,
     createdAt: s.createdAt,
+    // ISO country for the row's flag; null for hostnames/private IPs or until
+    // the geo DB is warmed (callers prime it via primeGeo before serializing).
+    country: countryForIp(s.sshHost),
   };
 }
 
@@ -39,7 +43,12 @@ export async function listServers(c: Context) {
   // Org-scoped: only the caller's org's servers.
   const ctx = getRequestContext(c);
   const all = await repos.server.listByOrganization(ctx.organizationId);
-  return c.json(all.map(serializeServer));
+  await primeGeo();
+  // Projects currently deployed to each server (active deployment → meta.serverId).
+  const projectCounts = await repos.project
+    .countActiveByServer(ctx.organizationId)
+    .catch(() => ({} as Record<string, number>));
+  return c.json(all.map((s) => ({ ...serializeServer(s), projectCount: projectCounts[s.id] ?? 0 })));
 }
 
 /** GET /servers/:id - get a single server. */
@@ -54,7 +63,27 @@ export async function getServer(c: Context) {
   const server = await repos.server.getInOrganization(id, ctx.organizationId);
   if (!server) return c.json({ error: "Server not found" }, 404);
 
+  await primeGeo();
   return c.json(serializeServer(server));
+}
+
+/**
+ * GET /servers/:id/reachability - lightweight liveness probe for the list view.
+ * Reuses sshManager.probeReachable (already-connected → instant true, else a
+ * short TCP probe behind the circuit breaker). Never throws — an unreachable
+ * host or transient failure is just `{ reachable: false }`.
+ */
+export async function probeReachability(c: Context) {
+  const cloudGuard = assertNotCloud(c); if (cloudGuard) return cloudGuard;
+
+  const id = c.req.param("id")!;
+  await permission.assert(getRequestContext(c), { resourceType: "server", resourceId: id, action: "read" });
+  const ctx = getRequestContext(c);
+  const server = await repos.server.getInOrganization(id, ctx.organizationId);
+  if (!server) return c.json({ error: "Server not found" }, 404);
+
+  const reachable = await sshManager.probeReachable(id).catch(() => false);
+  return c.json({ reachable });
 }
 
 /** POST /servers - create a new server */

@@ -1,6 +1,5 @@
 "use client";
 
-import { getApiOrigin } from "@/lib/api/urls";
 import { useI18n } from "@/components/i18n-provider";
 import type { StepProps } from "./step-props";
 
@@ -59,30 +58,22 @@ export function SelfhostChoiceStep({ onUpdate, onNext, onBack }: StepProps) {
         </p>
 
         <div className="ob-selfhost-choices">
-          {/* This Machine */}
+          {/* This Machine — not ready yet, disabled */}
           <button
-            className="ob-selfhost-choice-card"
-            onClick={() => {
-              onUpdate({
-                hostingMode: "local",
-                apiUrl: getApiOrigin(),
-                dashboardUrl: window.location.origin,
-                buildMode: "local",
-                ssh: undefined,
-              });
-              onNext();
-            }}
+            type="button"
+            className="ob-selfhost-choice-card is-disabled"
+            disabled
+            aria-disabled="true"
           >
             <div className="ob-selfhost-choice-icon"><MonitorIcon /></div>
             <div className="ob-selfhost-choice-content">
               <span className="ob-selfhost-choice-title">
-                {t.onboarding.selfhost.local.title} <span className="ob-badge-beta">{t.onboarding.selfhost.local.badge}</span>
+                {t.onboarding.selfhost.local.title} <span className="ob-badge-soon">{t.onboarding.selfhost.local.comingSoon}</span>
               </span>
               <span className="ob-selfhost-choice-desc">
-                {t.onboarding.selfhost.local.desc}
+                {t.onboarding.selfhost.local.comingSoonDesc}
               </span>
             </div>
-            <ChevronRight />
           </button>
 
           {/* Another Server */}

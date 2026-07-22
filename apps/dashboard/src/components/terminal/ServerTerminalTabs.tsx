@@ -220,7 +220,7 @@ export function ServerTerminalTabs({
                   <span
                     className={
                       "size-1.5 rounded-full transition-colors " +
-                      (isActive ? "bg-emerald-500" : "bg-muted-foreground/40")
+                      (isActive ? "bg-success-solid" : "bg-muted-foreground/40")
                     }
                   />
                   {shell.label}

@@ -81,7 +81,7 @@ export function CloudConnection() {
 
           {/* Status badge */}
           <div className="flex items-center justify-between">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-semibold rounded-full ring-1 ring-emerald-500/20">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-success-bg text-success text-xs font-semibold rounded-full ring-1 ring-success-border">
               <Check className="size-3" />
               {t.settings.cloud.connected}
             </div>

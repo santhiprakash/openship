@@ -12,7 +12,11 @@ import type { Database } from "../client";
 import { resourceGrant } from "../schema/resource-grant";
 
 export type ResourceGrantRow = typeof resourceGrant.$inferSelect;
-export type Permission = "read" | "write" | "admin";
+// "create" is a collection-only capability: it authorizes creating NEW rows of
+// a resource type (currently only project via a `{project,"*",[create]}` grant)
+// WITHOUT granting read/write/admin on existing rows. It never satisfies a
+// per-resource read/write/admin check — see permission.ts.
+export type Permission = "read" | "write" | "admin" | "create";
 export type ResourceType =
   | "project"
   | "server"
@@ -31,6 +35,7 @@ export type ResourceType =
   | "permissions"
   | "domain"
   | "settings"
+  | "job"
   | "terminal"
   | "cloud"
   | "notifications"
@@ -57,7 +62,7 @@ function rowToGrant(row: ResourceGrantRow): ResourceGrant {
     const parsed = JSON.parse(row.permissionsJson);
     if (Array.isArray(parsed)) {
       permissions = parsed.filter(
-        (p): p is Permission => p === "read" || p === "write" || p === "admin",
+        (p): p is Permission => p === "read" || p === "write" || p === "admin" || p === "create",
       );
     }
   } catch {

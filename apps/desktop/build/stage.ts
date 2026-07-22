@@ -165,6 +165,11 @@ function main(): void {
     }
   });
 
+  // NB: OpenResty Lua is NOT staged here. Unlike migrations/pglite (plain data
+  //   files), the .lua scripts are embedded as base64 in the API bundle itself
+  //   (packages/adapters/src/infra/lua-embedded.ts) so they travel inside the
+  //   compiled binary with no path to lose — see scripts/embed-lua.ts.
+
   process.stdout.write(
     `\n✓ Staged ${APP_NAME} v${APP_VERSION} for ${TARGET} → apps/desktop/resources\n`,
   );

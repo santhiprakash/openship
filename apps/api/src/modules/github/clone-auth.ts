@@ -21,6 +21,7 @@
 import { type BuildStrategy } from "@repo/core";
 import { tokenFor, requireTokenFor, type TokenContext } from "./github.token";
 import { isPublicRepo } from "./github.http";
+import { resolveServerGitCredential } from "./server-github.service";
 import type { RequestContext } from "../../lib/request-context";
 
 /**
@@ -43,6 +44,20 @@ export interface BuildGitCredential {
    * "shippable" only when this flag is absent.
    */
   apiHostFallback?: boolean;
+  /**
+   * SSH credential for cloning over git@github.com. Returned by a per-server
+   * config whose mode is ssh-server-key / ssh-deploy-key. Can't be a `token`
+   * (HTTPS-only), so it's carried here and consumed by the adapter clone step
+   * (GIT_SSH_COMMAND with a 0600 key + pinned known_hosts). Decrypted only at
+   * deploy time; never logged.
+   */
+  ssh?: {
+    keyKind: "server-key" | "deploy-key";
+    /** Decrypted OpenSSH private key. */
+    privateKey: string;
+    /** Pinned github.com host keys for StrictHostKeyChecking. */
+    knownHosts: string;
+  };
 }
 
 /** Resolve a credential for a clone that runs on THIS host (local gh, else the
@@ -68,6 +83,12 @@ export async function resolveBuildGitToken(opts: {
    *  authorization (so a member granted only repo X can build X). */
   repo?: string | null;
   buildStrategy: BuildStrategy;
+  /**
+   * Target server id (server deploys). When set, a per-server GitHub auth
+   * config wins for clones that run on THAT server (self-hosted only). Left
+   * unset for local/cloud clones.
+   */
+  serverId?: string | null;
   /**
    * Desktop-only: when a SERVER build has no remote token (no App / PAT),
    * signal `{ relay: true }` instead of throwing — set by the orchestrator only
@@ -104,10 +125,26 @@ export async function resolveBuildGitToken(opts: {
     return resolveLocalCredential(opts.ctx, tokenCtx);
   }
 
-  // SERVER / REMOTE build: the clone/build runs off this host. Prefer the
-  // SaaS-minted App installation token (short-lived, repo-scoped) or a PAT — gh
-  // is REFUSED in this chain (HIGH #7: never ship the operator's broad token
-  // off-host via the URL).
+  // SERVER / REMOTE build: the clone/build runs off this host.
+  //
+  // Per-server GitHub identity FIRST (self-hosted): if this deploy's target
+  // server has its own configured GitHub auth (device-flow token, per-server
+  // PAT, or an SSH key), it wins for clones that run on that server — the
+  // operator explicitly configured the host. Falls through to the shared chain
+  // (App / PAT / relay) when the server has none.
+  if (opts.serverId) {
+    const serverCred = await resolveServerGitCredential({
+      serverId: opts.serverId,
+      ctx: opts.ctx,
+      owner: opts.owner ?? null,
+      repo: opts.repo ?? null,
+    });
+    if (serverCred) return serverCred;
+  }
+
+  // Otherwise prefer the SaaS-minted App installation token (short-lived,
+  // repo-scoped) or a PAT — gh is REFUSED in this chain (HIGH #7: never ship
+  // the operator's broad token off-host via the URL).
   const r = await tokenFor(opts.ctx, "remote", tokenCtx);
   if (r?.token) return { token: r.token };
 

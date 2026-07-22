@@ -174,6 +174,60 @@ export interface MailStepResult {
 }
 
 /**
+ * Outbound SMTP relay (smarthost) for this mail server — the "split delivery"
+ * model. When enabled, Postfix relays ALL outbound mail through `host:port`
+ * with SASL auth instead of delivering direct-to-MX. This server still RECEIVES
+ * (port 25 + IMAP); only SENDING goes through the trusted relay — which fixes
+ * the #1 self-hosted problem (fresh-VPS IPs blocklisted, outbound :25 blocked).
+ *
+ * Amazon SES is the flagship (`provider:"ses"`, host derived from `region`);
+ * any SMTP relay works via `provider:"custom"`. Lives on the VPS (this file)
+ * because it configures THIS server's Postfix. `passwordEncrypted` is an
+ * AES-256-GCM blob via lib/encryption — same at-rest treatment + blast radius
+ * as `PlatformMailboxState.password`, and is NEVER returned to the client.
+ */
+export interface OutboundRelay {
+  enabled: boolean;
+  provider: "ses" | "custom";
+  /** SES region (ses provider) — derives host `email-smtp.<region>.amazonaws.com`. */
+  region?: string;
+  /** Relay SMTP host, e.g. `email-smtp.us-east-1.amazonaws.com`. */
+  host: string;
+  /** Relay submission port (587 STARTTLS / 465 implicit TLS / 2587). */
+  port: number;
+  /** Relay SASL username (SES SMTP username — NOT an AWS access key). */
+  username: string;
+  /** Encrypted SASL password blob (lib/encryption). Never returned to the client. */
+  passwordEncrypted: string;
+  /**
+   * Routing scope. `"all"` (or absent — back-compat) → a global Postfix
+   * `relayhost`: every domain sends via the relay. `"selected"` → only
+   * `domains` route through it (per-sender `sender_relayhost` rows) and the
+   * global relayhost is cleared so the rest deliver direct-to-MX.
+   */
+  scope?: "all" | "selected";
+  /** Envelope domains that route through the relay when scope="selected". */
+  domains?: string[];
+  /** Custom MAIL FROM subdomain for the PRIMARY domain (SPF alignment). */
+  mailFromDomain?: string;
+  /**
+   * SES identity DNS records for the PRIMARY domain, pasted from the AWS console
+   * (we never call the SES API — see the "paste-creds, no SDK" decision): the 3
+   * DKIM CNAMEs. Stored raw so the DNS surfaces rebuild without a re-paste.
+   * MAIL FROM records are derived from `mailFromDomain`.
+   */
+  sesDkim?: { name: string; value: string }[];
+  /**
+   * Per-ADDITIONAL-domain SES identity (SES verifies each domain separately).
+   * The primary domain uses the top-level `mailFromDomain`/`sesDkim`; every
+   * other relayed domain keys into here. Absent ⇒ SPF-include only for that
+   * domain (amavis DKIM still aligns through SES).
+   */
+  identities?: Record<string, { mailFromDomain?: string; sesDkim?: { name: string; value: string }[] }>;
+  updatedAt: string;
+}
+
+/**
  * One DNS record. Matches the shape `stepDkimKeys` emits and what
  * `DnsRecordsView` on the dashboard renders. Kept in the state module
  * so admin/domain-dns.service can import it without crossing module
@@ -202,6 +256,13 @@ export interface DnsRecordSet {
   spf: PersistedDnsRecord;
   dkim?: PersistedDnsRecord;
   dmarc: PersistedDnsRecord;
+  /**
+   * Extra records beyond the fixed set — the outbound-relay send-hop records
+   * (SES DKIM CNAMEs + MAIL FROM) when this domain routes through the relay.
+   * Rendered/scanned after the standard records; matches the primary domain's
+   * `dnsRecords.extraRecords`.
+   */
+  extraRecords?: PersistedDnsRecord[];
 }
 
 /**
@@ -315,6 +376,12 @@ export interface MailServerState {
    * platform credential is preserved; the two stores never alias.
    */
   testMailboxes?: Record<string, TestMailboxState>;
+  /**
+   * Outbound SMTP relay config (split-delivery). Absent = direct-to-MX (the
+   * legacy/default send path). Set by the relay setup step or the /emails admin
+   * toggle via `outbound-relay.service.ts`.
+   */
+  outboundRelay?: OutboundRelay;
 }
 
 // ─── I/O ─────────────────────────────────────────────────────────────────────

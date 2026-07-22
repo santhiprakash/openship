@@ -47,6 +47,7 @@ import {
 } from "./route-permission";
 import { authMiddleware } from "../middleware/auth";
 import { rateLimiterFor } from "../middleware/rate-limiter";
+import { localOnly } from "../middleware/local-only";
 
 export interface SecureRouterOptions {
   /**
@@ -144,6 +145,9 @@ export function secureRouter<T extends Hono>(
     // (so we reject ratelimited callers before doing a DB load). Public
     // routes mount the limiter first (no auth to wait for).
     const chain: (MiddlewareHandler | Handler)[] = [];
+    if (mergedSpec.localOnly) {
+      chain.push(localOnly);
+    }
     if (!isPublicSpec(mergedSpec) && !(mergedSpec as PermissionSpec).skipAuth) {
       chain.push(authMiddleware);
     }

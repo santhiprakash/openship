@@ -36,16 +36,18 @@ export const POLICIES: Record<PolicyId, RateLimitPolicy> = {
   /** Conservative default for unauthed routes. Per-IP. */
   "default-anon": {
     id: "default-anon",
-    limit: 100,
+    limit: 300,
     windowMs: MINUTE_MS,
     subject: "ip",
     description: "Default for public/unauthed routes (per-IP).",
   },
 
-  /** Default for authed routes. Per-user — far more accurate than IP. */
+  /** Default for authed routes. Per-user — far more accurate than IP.
+   *  ~50/s: a dashboard render fans out many concurrent reads (github/home,
+   *  session, health/env, org lists) so the per-user ceiling is generous. */
   "default-authed": {
     id: "default-authed",
-    limit: 600,
+    limit: 3000,
     windowMs: MINUTE_MS,
     subject: "user",
     description: "Default for authed routes (per-user).",

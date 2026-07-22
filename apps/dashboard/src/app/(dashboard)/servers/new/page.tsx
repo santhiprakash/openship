@@ -121,20 +121,30 @@ export default function AddServerPage() {
   useEffect(() => {
     (async () => {
       try {
-        // Edit a SPECIFIC server when `?edit=<id>` is present. Otherwise fall
-        // back to auto-editing the sole server when exactly one exists. (The
-        // detail page links its "Edit" button to /servers/<id>?edit=true; this
-        // remains for direct visits to /servers/new.)
+        // /servers/new is ADD-ONLY. Editing an existing server happens SOLELY
+        // via an explicit `?edit=<id>`. We must NEVER auto-load an existing
+        // server here — doing so put the form in edit mode and Save would PATCH
+        // (overwrite) that server instead of creating a new one. The only other
+        // reason to pre-load a server is reload-recovery of an install that's
+        // already running, which we key off the ACTIVE session — not "the only
+        // server that happens to exist".
         const editId =
           typeof window !== "undefined"
             ? new URLSearchParams(window.location.search).get("edit")
             : null;
+
+        let session: Awaited<ReturnType<typeof systemApi.getInstallSession>> | null = null;
+        try {
+          session = await systemApi.getInstallSession();
+        } catch {
+          /* no active session */
+        }
+
         let existing: ServerInfo | null = null;
         if (editId) {
           existing = await systemApi.getServerById(editId).catch(() => null);
-        } else {
-          const servers = await systemApi.listServers();
-          if (servers.length === 1) existing = servers[0]!;
+        } else if (session?.active && session.status === "running" && session.serverId) {
+          existing = await systemApi.getServerById(session.serverId).catch(() => null);
         }
 
         if (existing) {
@@ -142,20 +152,15 @@ export default function AddServerPage() {
           setExistingServerId(existing.id);
           setInitialServer(existing);
 
-          // Check if there's an active install session (page reload recovery)
-          try {
-            const session = await systemApi.getInstallSession();
-            if (
-              session.active &&
-              session.status === "running" &&
-              session.sessionId &&
-              session.serverId === existing.id
-            ) {
-              setStep("installing");
-              void setupStream.attachToSession(session.sessionId);
-            }
-          } catch {
-            // No active session, that's fine
+          // Resume the in-flight install stream after a reload.
+          if (
+            session?.active &&
+            session.status === "running" &&
+            session.sessionId &&
+            session.serverId === existing.id
+          ) {
+            setStep("installing");
+            void setupStream.attachToSession(session.sessionId);
           }
         }
       } catch {
@@ -291,6 +296,7 @@ export default function AddServerPage() {
               onSelect={(selectedMode) => {
                 void runSetupChecks(selectedMode);
               }}
+              onSkip={() => router.push(activeServerId ? `/servers/${activeServerId}` : "/servers")}
             />
           )}
 
@@ -395,8 +401,8 @@ export default function AddServerPage() {
           <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
             <div className="bg-card rounded-2xl border border-border/50">
               <div className="flex items-center gap-3 px-5 py-4 border-b border-border/50">
-                <div className="w-9 h-9 bg-violet-500/10 rounded-xl flex items-center justify-center">
-                  <Info className="size-[18px] text-violet-500" />
+                <div className="w-9 h-9 bg-warning-bg rounded-xl flex items-center justify-center">
+                  <Info className="size-[18px] text-warning" />
                 </div>
                 <div>
                   <h2 className="font-semibold text-foreground text-[15px]">
@@ -408,17 +414,17 @@ export default function AddServerPage() {
               <div className="p-5">
                 <ul className="space-y-3 text-sm text-muted-foreground">
                   <li className="flex items-start gap-2">
-                    <Network className="size-4 shrink-0 mt-0.5 text-blue-500" />
+                    <Network className="size-4 shrink-0 mt-0.5 text-muted-foreground" />
                     <span>
                       {t.servers.setup.needServer}
                     </span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <KeyRound className="size-4 shrink-0 mt-0.5 text-blue-500" />
+                    <KeyRound className="size-4 shrink-0 mt-0.5 text-muted-foreground" />
                     <span>{t.servers.setup.needAuth}</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <Server className="size-4 shrink-0 mt-0.5 text-blue-500" />
+                    <Server className="size-4 shrink-0 mt-0.5 text-muted-foreground" />
                     <span>
                       {t.servers.setup.needChecks}
                     </span>

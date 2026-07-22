@@ -31,6 +31,9 @@ export interface BackupDestinationSummary {
   isDefault: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Storage rollup for this destination (bytes stored, backups run, last run).
+   *  Present on the list endpoint; null when unavailable. */
+  stats: { storedBytes: number; runCount: number; lastRunAt: string | null } | null;
 }
 
 export interface CreateDestinationInput {
@@ -135,11 +138,36 @@ export interface BackupRun {
 
 // ─── API ─────────────────────────────────────────────────────────────────────
 
+/** One policy that targets a destination (destination detail "used by" view). */
+export interface DestinationUsagePolicy {
+  policyId: string;
+  sourceKind: string;
+  projectId: string | null;
+  projectName: string | null;
+  projectSlug: string | null;
+  serviceId: string | null;
+  serviceName: string | null;
+  mailServerId: string | null;
+  payloadKind: string;
+  cronExpression: string | null;
+  enabled: boolean;
+  lastRun:
+    | { id: string; status: string; startedAt: string; finishedAt: string | null; bytesTransferred: number | null }
+    | null;
+}
+
+export interface DestinationUsage {
+  destination: BackupDestinationSummary;
+  policies: DestinationUsagePolicy[];
+}
+
 export const backupDestinationsApi = {
   list: () =>
     api.get<{ data: BackupDestinationSummary[] }>(endpoints.backupDestinations.list),
   get: (id: string) =>
     api.get<{ data: BackupDestinationSummary }>(endpoints.backupDestinations.get(id)),
+  usage: (id: string) =>
+    api.get<{ data: DestinationUsage }>(endpoints.backupDestinations.usage(id)),
   create: (body: CreateDestinationInput) =>
     api.post<{ data: BackupDestinationSummary }>(
       endpoints.backupDestinations.create,
@@ -156,6 +184,13 @@ export const backupDestinationsApi = {
     api.post<{ data: { ok: boolean; reason?: string } }>(
       endpoints.backupDestinations.preflight(id),
     ),
+  /** Test an unsaved destination. Pass `id` to reuse stored secrets for
+   *  fields left blank (edit mode). Nothing is persisted. */
+  preflightDraft: (body: CreateDestinationInput & { id?: string }) =>
+    api.post<{ data: { ok: boolean; reason?: string } }>(
+      endpoints.backupDestinations.preflightDraft,
+      body,
+    ),
 };
 
 export const backupsApi = {
@@ -168,6 +203,7 @@ export const backupsApi = {
       destinationId: string;
       cronExpression?: string;
       triggerOnPreDeploy?: boolean;
+      enableWebhook?: boolean;
       retainCount?: number;
       retainDays?: number;
       payloadKind?: string;

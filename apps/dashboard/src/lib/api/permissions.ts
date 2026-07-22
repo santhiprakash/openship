@@ -7,7 +7,10 @@ import { endpoints } from "./endpoints";
  * token scoping. Keeps one definition instead of copies drifting across files.
  */
 
-export type Permission = "read" | "write" | "admin";
+// "create" is a collection-only capability used by the "projects it creates"
+// token scope: a {project,"*",[create]} grant. Not offered in the generic
+// resource picker — set only by that preset.
+export type Permission = "read" | "write" | "admin" | "create";
 
 export type ResourceType =
   | "project"

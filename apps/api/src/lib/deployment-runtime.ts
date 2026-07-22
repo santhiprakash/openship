@@ -1,5 +1,6 @@
 import {
   createPlatform,
+  DockerRuntime,
   type CommandExecutor,
   type DockerConnectionOptions,
   type Platform,
@@ -28,6 +29,22 @@ export interface DeploymentMeta {
   runtimeMode?: RuntimeMode;
   serverId?: string;
   /**
+   * Adopt an already-running, externally-supervised process instead of building
+   * + starting one. Set for the self-deployed control plane (the "openship"
+   * self-app): the deployment is real (row + activeDeploymentId + routes/SSL via
+   * the normal pipeline) but the bare runtime never starts a unit. Inert for
+   * `resolveEffectiveTarget`; only the runtime's deploy step reads it (via the
+   * `adopt` flag threaded onto DeployConfig).
+   */
+  adopt?: boolean;
+  /**
+   * Release/dist-source deploy: the semver version this deployment shipped
+   * (no leading "v"). Captured in the snapshot by `applyReleaseSourceToSnapshot`
+   * and promoted to the `deployment.release_version` column onSuccess — the
+   * drift banner's `current` anchor.
+   */
+  releaseVersion?: string;
+  /**
    * "local" | "server" — where the build runs. A local build targeting cloud
    * keeps the project LOCAL-canonical and uploads the output to a cloud
    * workspace (no promote/transfer); see resolveEffectiveTarget.
@@ -35,6 +52,48 @@ export interface DeploymentMeta {
   buildStrategy?: "local" | "server";
   /** Cloud workspace this deployment provisioned (cloud target only). */
   workspaceId?: string;
+  /**
+   * Advisory post-deploy port probe — one entry per exposed port (single-app)
+   * or exposed service (compose). Point-in-time; never gates the deploy. The
+   * dashboard raises a skippable "is that the right port?" modal for any entry
+   * that is `checked && !listening`.
+   */
+  portCheck?: PortCheckResult[];
+  /**
+   * Ports (single-app) or service ids (compose) the operator dismissed from the
+   * port advisory, so it doesn't re-nag after a refresh.
+   */
+  portCheckSkipped?: (number | string)[];
+}
+
+/** One exposed port's advisory probe outcome (persisted in `deployment.meta`). */
+export interface PortCheckResult {
+  /** The exposed/public port that was probed. */
+  port: number;
+  /** True if a listener was found inside the instance. */
+  listening: boolean;
+  /** False = probe inconclusive (runtime can't exec inside / probe errored) — no advisory. */
+  checked: boolean;
+  /** Compose only: which service this result belongs to. */
+  serviceId?: string;
+  serviceName?: string;
+  /** Set when the probe was intentionally not run for this target. */
+  skippedReason?: "not-exposed" | "no-exec" | "no-port";
+}
+
+/** Advisory static-output audit result — the file-side counterpart to
+ *  PortCheckResult. `path` is the routed targetPath ("/" or "/foo"). */
+export interface OutputCheckResult {
+  path: string;
+  /** The resolved on-disk/served location that was probed. */
+  servedPath?: string;
+  /** The served path exists. */
+  found: boolean;
+  /** A servable index is present (file, or dir with index.html). */
+  hasIndex: boolean;
+  /** False = probe inconclusive (runtime can't exec / errored) — no advisory. */
+  checked: boolean;
+  skippedReason?: "no-exec" | "no-output-dir";
 }
 
 export interface ResolvedDeploymentPlatform {
@@ -274,6 +333,29 @@ export async function resolveTargetPlatform(
       : undefined,
     provisionLock: createProvisionLock("provision:local"),
   });
+}
+
+/**
+ * Build a DockerRuntime pointed at an org server's Docker daemon over SSH, for
+ * READ-ONLY inspection (migrating an existing Docker deployment into Openship).
+ *
+ * Unlike `resolveTargetPlatform`, this skips routing/ssl/system managers and the
+ * provision lock — inspection never provisions. The dockerode calls multiplex
+ * over the server's pooled SSH connection. Callers MUST `await rt.dispose()` to
+ * tear down the loopback bridge; the pooled executor itself is owned by
+ * `sshManager` and is left intact.
+ */
+export async function createServerDockerRuntime(
+  serverId: string,
+  organizationId: string,
+): Promise<DockerRuntime> {
+  const server = await resolveOrgServer(serverId, organizationId);
+  const executor = await sshManager.acquire(server.id);
+  const ssh = server.sshHost ? await buildSshConfig(server) : null;
+  if (!ssh) {
+    throw new Error("Invalid SSH configuration. Check host, auth method, and credentials.");
+  }
+  return DockerRuntime.create(toDockerSshTransport(ssh, executor));
 }
 
 /** Map the shared SSH config → dockerode SSH transport options with pooled executor. */

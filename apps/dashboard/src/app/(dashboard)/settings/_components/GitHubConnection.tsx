@@ -9,9 +9,11 @@ import {
   Download,
   Terminal,
   Cloud,
-  AlertTriangle,
   ShieldCheck,
+  Key,
+  KeyRound,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import {
   useGitHub,
   type GitHubConnectionState,
@@ -37,6 +39,7 @@ export function GitHubConnection() {
   // Actions (connect/disconnect/connecting) still come from the shared context.
   const { connecting, connect: ctxConnect, disconnect: ctxDisconnect } = useGitHub();
   const { t } = useI18n();
+  const router = useRouter();
 
   const [state, setState] = useState<GitHubConnectionState>(EMPTY_STATE);
   const [accounts, setAccounts] = useState<GitHubAccount[]>([]);
@@ -255,7 +258,7 @@ export function GitHubConnection() {
                     t.settings.github.disconnectAppBody,
                   )
                 }
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 hover:text-red-700 bg-red-500/5 hover:bg-red-500/10 rounded-lg border border-red-500/15 hover:border-red-500/25 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-danger bg-danger-bg hover:bg-danger-bg rounded-lg border border-danger-border transition-colors"
               >
                 <Unplug className="size-3.5" />
                 {t.settings.github.disconnect}
@@ -267,7 +270,7 @@ export function GitHubConnection() {
              cloud minting tokens for them. Route them through the
              cloud-connect flow first; once cloud is connected the App
              card flips to the standard not-yet-OAuth'd state. */
-          <div className="space-y-3">
+          <div className="space-y-4">
             <p className="text-sm text-muted-foreground leading-relaxed">
               {t.settings.github.cloudExplainer}
             </p>
@@ -278,6 +281,33 @@ export function GitHubConnection() {
               <Cloud className="size-4" />
               {t.settings.github.connectCloud}
             </button>
+
+            {/* Escape hatches — clone private repos without cloud. SSH keys
+                attach per server (Servers → GitHub); a PAT works everywhere. */}
+            <div className="border-t border-border/40 pt-3.5">
+              <p className="text-xs font-medium text-muted-foreground/70 mb-2.5">
+                {t.settings.github.noCloudTitle}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => router.push("/servers")}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-foreground bg-muted/40 hover:bg-muted/60 rounded-lg border border-border/50 transition-colors"
+                >
+                  <KeyRound className="size-3.5" />
+                  {t.settings.github.useSshPerServer}
+                </button>
+                <button
+                  onClick={() => router.push("/settings?tab=tokens")}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-foreground bg-muted/40 hover:bg-muted/60 rounded-lg border border-border/50 transition-colors"
+                >
+                  <Key className="size-3.5" />
+                  {t.settings.github.usePat}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground/60 mt-2 leading-relaxed">
+                {t.settings.github.noCloudHint}
+              </p>
+            </div>
           </div>
         ) : (
           <div className="space-y-3">
@@ -355,24 +385,17 @@ function GhCliCard(props: {
       iconColor="text-foreground"
     >
       <div className="space-y-3">
-        {/* Capability + status badges */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <span
-            className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400"
-            title={t.settings.github.ghCli.localOnlyTitle}
-          >
-            <AlertTriangle className="size-2.5" />
-            {t.settings.github.ghCli.localOnly}
-          </span>
-          {active && (
+        {/* Status badge — only when gh CLI is actually the active source. */}
+        {active && (
+          <div className="flex items-center gap-2 flex-wrap">
             <span
               className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-primary/15 text-primary"
               title={t.settings.github.ghCli.usedForDeploysTitle}
             >
               {t.settings.github.ghCli.usedForDeploys}
             </span>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Auth identity row when authenticated */}
         {available && login && (
@@ -389,8 +412,8 @@ function GhCliCard(props: {
         {/* Active-source warning — remote deploys get refused.
             Fires when CLI is the ONLY source (no cloud connection).  */}
         {active && (
-          <p className="text-sm text-amber-600 dark:text-amber-400 leading-relaxed">
-            <span className="font-medium">{t.settings.github.ghCli.activeWarnStrong}</span>{" "}
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            <span className="font-medium text-foreground">{t.settings.github.ghCli.activeWarnStrong}</span>{" "}
             {t.settings.github.ghCli.activeWarnRest}
           </p>
         )}

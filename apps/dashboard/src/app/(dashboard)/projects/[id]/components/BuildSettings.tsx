@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Inbox, Layers, ArrowRight, Pencil, KeyRound, Cpu } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { isServicesFramework } from "@repo/core";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { encodeLocalSlug, encodeRepoSlug } from "@/utils/repoSlug";
@@ -21,10 +22,11 @@ import { EnvVarsEditor } from "./EnvVarsEditor";
 
 const ICON_TONES = {
   primary: "bg-primary/10 text-primary",
-  emerald: "bg-emerald-500/10 text-emerald-500",
+  emerald: "bg-success-bg text-success",
   orange: "bg-orange-500/10 text-orange-500",
-  amber: "bg-amber-500/10 text-amber-500",
-  red: "bg-red-500/10 text-red-500",
+  amber: "bg-warning-bg text-warning",
+  violet: "bg-violet-500/10 text-violet-500",
+  red: "bg-danger-bg text-danger",
   muted: "bg-muted/60 text-muted-foreground",
 } as const;
 
@@ -91,9 +93,15 @@ export const BuildSettings = () => {
   const isWebmail = projectData?.framework === "webmail";
   const isCloud = projectData?.deployTarget === "cloud";
   const services = servicesData.services;
-  const hasServices = services.length > 0;
   const monorepoCount = services.filter((s) => s.kind === "monorepo").length;
   const composeCount = services.length - monorepoCount;
+  // SERVICE-FIRST = the project itself is a set of services (a compose-stack
+  // project) or a monorepo of sub-apps — its config genuinely lives per-service.
+  // A single/static APP that merely had a sidecar service ADDED is NOT
+  // service-first: it keeps its own primary-app Configuration below. Keyed on
+  // the project's framework, never on "a service row exists" (which conflates
+  // the two — the whole point of this fix).
+  const isServiceFirst = monorepoCount > 0 || isServicesFramework(projectData?.framework);
 
   // Edit = the deploy wizard, rehydrated from this project. The single place
   // config is editable; this tab never mutates it.
@@ -134,8 +142,10 @@ export const BuildSettings = () => {
     );
   }
 
-  // ── Service-based project: config lives per-service in the Services tab. ──
-  if (hasServices) {
+  // ── Service-first project: config lives per-service in the Services tab.
+  //    (A single/static app with an added sidecar service falls through to the
+  //    single-app config below — it is NOT service-first.) ──
+  if (isServiceFirst) {
     const subAppsLabel = interpolate(
       monorepoCount === 1 ? t.projectSettings.build.services.subAppOne : t.projectSettings.build.services.subAppOther,
       { count: String(monorepoCount) },
@@ -223,7 +233,7 @@ export const BuildSettings = () => {
           (diff-merge; untouched secrets are never re-sent), NOT the wizard. */}
       <SectionCard
         icon={KeyRound}
-        iconTone="muted"
+        iconTone="violet"
         title={t.projectSettings.build.env.title}
         description={t.projectSettings.build.env.description}
         actions={

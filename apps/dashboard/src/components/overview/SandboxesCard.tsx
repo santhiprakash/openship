@@ -35,22 +35,22 @@ const SandboxesCard: React.FC<SandboxesCardProps> = ({ data, isLoading = false }
   const getStatusIcon = (status: 'running' | 'stopped' | 'error') => {
     switch (status) {
       case 'running':
-        return <Play className="w-3 h-3 text-emerald-500 fill-emerald-500" />;
+        return <Play className="w-3 h-3 text-success fill-current" />;
       case 'stopped':
-        return <Square className="w-3 h-3 text-gray-400" />;
+        return <Square className="w-3 h-3 text-neutral" />;
       case 'error':
-        return <AlertCircle className="w-3 h-3 text-rose-500" />;
+        return <AlertCircle className="w-3 h-3 text-danger" />;
     }
   };
 
   const getStatusColor = (status: 'running' | 'stopped' | 'error') => {
     switch (status) {
       case 'running':
-        return 'bg-emerald-50 text-emerald-700';
+        return 'bg-success-bg text-success';
       case 'stopped':
-        return 'bg-gray-50 text-gray-600';
+        return 'bg-neutral-bg text-neutral';
       case 'error':
-        return 'bg-rose-50 text-rose-700';
+        return 'bg-danger-bg text-danger';
     }
   };
 
@@ -135,11 +135,11 @@ const SandboxesCard: React.FC<SandboxesCardProps> = ({ data, isLoading = false }
       <div className="flex items-center justify-between pt-4 mt-auto border-t border-cyan-100">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5">
-            <div className="w-2 h-2 rounded-full bg-emerald-500" />
+            <div className="w-2 h-2 rounded-full bg-success-solid" />
             <span className="text-xs text-black/60">{interpolate(t.overview.sandboxes.runningCount, { count: String(data.active) })}</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="w-2 h-2 rounded-full bg-gray-300" />
+            <div className="w-2 h-2 rounded-full bg-neutral-solid" />
             <span className="text-xs text-black/60">{interpolate(t.overview.sandboxes.stoppedCount, { count: String(data.inactive) })}</span>
           </div>
         </div>

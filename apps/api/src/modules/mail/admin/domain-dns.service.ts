@@ -24,6 +24,7 @@ import { sshManager } from "../../../lib/ssh-manager";
 import { readState, mutateState } from "../mail-state";
 import type { DnsRecordSet, AdditionalDomainDns } from "../mail-state";
 import { buildSpfValue } from "../mail.service";
+import { withSesInclude } from "./outbound-relay.service";
 
 // ─── Record set construction ─────────────────────────────────────────────────
 
@@ -50,8 +51,12 @@ export function buildDomainDnsRecords(
   dkimValue?: string,
   ipv4?: string | null,
   ipv6?: string | null,
+  opts?: { sesInclude?: boolean },
 ): DnsRecordSet {
   const mailHost = `mail.${installDomain}`;
+  const spfValue = opts?.sesInclude
+    ? withSesInclude(buildSpfValue(ipv4, ipv6))
+    : buildSpfValue(ipv4, ipv6);
   return {
     mx: {
       type: "MX",
@@ -63,7 +68,7 @@ export function buildDomainDnsRecords(
     spf: {
       type: "TXT",
       name: newDomain,
-      value: buildSpfValue(ipv4, ipv6),
+      value: spfValue,
       required: true,
     },
     ...(dkimValue && {

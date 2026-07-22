@@ -26,7 +26,7 @@ function statusBadge(status: DeploymentStatus, hasWarning: boolean, t: Dictionar
   if (hasWarning) {
     return {
       label: s.warnings,
-      cls: "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20",
+      cls: "bg-warning-bg text-warning border-warning-border",
     };
   }
   if (status === "ready") {

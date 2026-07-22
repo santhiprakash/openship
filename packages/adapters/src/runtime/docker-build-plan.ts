@@ -1,4 +1,5 @@
 import type { BuildConfig } from "../types";
+import { packageManagerEnsureCommand } from "@repo/core";
 
 import { sq } from "./build-pipeline";
 import { normalizeDockerRootDirectory } from "./docker-paths";
@@ -65,9 +66,26 @@ function needsMultiStage(config: BuildConfig): boolean {
   return config.buildImage !== config.runtimeImage;
 }
 
+/** The monorepo workspace-prepare RUN line (root `pnpm install` etc.). This is
+ *  the FIRST pnpm/yarn invocation in the Dockerfile, so the corepack prelude
+ *  must lead it — otherwise the build image (corepack disabled) fails with
+ *  "pnpm: not found" before the per-app install line (which has its own prelude)
+ *  is ever reached. */
+function workspacePrepareRunLine(config: BuildConfig, envPrefix: string, workspacePrepare: string): string {
+  const pmEnsure = packageManagerEnsureCommand(config.packageManager);
+  const body = pmEnsure ? `${pmEnsure} && ${workspacePrepare}` : workspacePrepare;
+  return `RUN ${envPrefix}${body}`;
+}
+
 /** The install+build RUN line (with progress markers), or null if neither step. */
 function installBuildRunLine(config: BuildConfig, envPrefix: string): string | null {
   const steps: string[] = [];
+  // Ensure the package manager exists in the builder image before install
+  // (corepack for pnpm/yarn; no-op for npm/bun/non-node) — fixes "pnpm: not found".
+  const pmEnsure = packageManagerEnsureCommand(config.packageManager);
+  if (pmEnsure && (config.installCommand || config.buildCommand)) {
+    steps.push(pmEnsure);
+  }
   if (config.installCommand) {
     steps.push(`printf '${formatDockerBuildEvent("install", "running")}\\n'`);
     steps.push(buildRunCommand(config.installCommand, envPrefix));
@@ -180,7 +198,7 @@ function generateStaticDockerfile(config: BuildConfig): string {
     `COPY . /workspace`,
   ];
   if (workspacePrepare) {
-    lines.push(`RUN ${envPrefix}${workspacePrepare}`);
+    lines.push(workspacePrepareRunLine(config, envPrefix, workspacePrepare));
   }
   lines.push(`WORKDIR ${sourceDir}`);
   const stepsLine = installBuildRunLine(config, envPrefix);
@@ -238,7 +256,7 @@ export function generateDockerfile(config: BuildConfig): string {
     // envPrefix already ends with ` && ` when non-empty, so no extra
     // separator is needed — adding one would produce a stray double
     // space inside the Dockerfile RUN line.
-    lines.push(`RUN ${envPrefix}${workspacePrepare}`);
+    lines.push(workspacePrepareRunLine(config, envPrefix, workspacePrepare));
   }
 
   lines.push(`WORKDIR ${sourceDir}`);

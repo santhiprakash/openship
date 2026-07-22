@@ -356,6 +356,10 @@ export async function onSuccess(
   await repos.deployment.finishBuildSession(buildSessionId, "ready", result.durationMs, persistLogs());
   sessionManager.updateStatus(dep.id, "ready", {
     warningMessage: result.warningMessage,
+    // Advisory port-check results ride the live `complete` event so the dashboard
+    // can raise the "wrong port?" modal immediately; the same data is persisted in
+    // meta (above) for re-hydration on refresh.
+    portCheck: (mergedMeta as DeploymentMeta | null)?.portCheck ?? undefined,
   });
 
   notification.emit({

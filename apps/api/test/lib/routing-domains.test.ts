@@ -13,8 +13,20 @@ vi.mock("@repo/db", () => ({
 import {
   buildProjectRouteDomains,
   buildServiceRouteDomain,
+  buildServiceRouteDomains,
+  serviceCustomHostnames,
   getRoutingBaseDomain,
 } from "../../src/lib/routing-domains";
+
+const customSvc = {
+  id: "svc_web",
+  name: "web",
+  exposed: true,
+  exposedPort: "8080",
+  domainType: "custom",
+  customDomain: "api.example.com",
+  publicEndpoints: [],
+} as any;
 
 describe("buildProjectRouteDomains", () => {
   it("uses public endpoints as the only app routing source when they are provided", () => {
@@ -119,5 +131,62 @@ describe("buildProjectRouteDomains", () => {
     expect(planned?.hostname).toBe("api.example.com");
     expect(planned?.targetPort).toBe(8080);
     expect(planned?.domainType).toBe("custom");
+  });
+});
+
+describe("buildServiceRouteDomains — custom-domain SSL gate", () => {
+  const project = { slug: "my-app", name: "My App" } as any;
+
+  it("does NOT provision SSL for a custom domain with no verified row (pending)", () => {
+    // No domain map → row unknown → treated as unverified → no certbot attempt.
+    const [route] = buildServiceRouteDomains({
+      project,
+      service: customSvc,
+      runtimeName: "bare",
+      usesManagedRouting: true,
+    });
+    expect(route?.hostname).toBe("api.example.com");
+    expect(route?.domainType).toBe("custom");
+    expect(route?.provisionSsl).toBe(false);
+  });
+
+  it("provisions SSL only once the custom domain row is verified", () => {
+    const domainByHostname = new Map<string, any>([
+      ["api.example.com", { hostname: "api.example.com", verified: true }],
+    ]);
+    const [route] = buildServiceRouteDomains({
+      project,
+      service: customSvc,
+      runtimeName: "bare",
+      usesManagedRouting: true,
+      domainByHostname,
+    });
+    expect(route?.provisionSsl).toBe(true);
+  });
+
+  it("canonicalizes a scheme/slash-dressed custom domain to the stored host", () => {
+    const [route] = buildServiceRouteDomains({
+      project,
+      service: { ...customSvc, customDomain: "HTTPS://Api.Example.com/" },
+      runtimeName: "bare",
+      usesManagedRouting: true,
+    });
+    // Matches the normalized row key so verify/SSL/register all agree.
+    expect(route?.hostname).toBe("api.example.com");
+  });
+});
+
+describe("serviceCustomHostnames", () => {
+  it("returns configured custom hostnames regardless of exposed state", () => {
+    expect(serviceCustomHostnames(customSvc)).toEqual(["api.example.com"]);
+    // Unexposed but still configured → hostname is still reported (drives the
+    // config-based domain-row lifecycle, not routing state).
+    expect(serviceCustomHostnames({ ...customSvc, exposed: false })).toEqual(["api.example.com"]);
+  });
+
+  it("is empty for a free/host-managed service", () => {
+    expect(
+      serviceCustomHostnames({ ...customSvc, domainType: "free", customDomain: null, domain: "web" } as any),
+    ).toEqual([]);
   });
 });

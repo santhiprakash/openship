@@ -2,14 +2,22 @@
  * Service business logic - CRUD and compose sync.
  */
 
-import { normalizeRoutingFields, repos, composeSpecDiff, type Service } from "@repo/db";
-import { serviceStatusToContainerState } from "@repo/core";
-import type { LogEntry } from "@repo/adapters";
+import { normalizeRoutingFields, repos, composeSpecDiff, type Service, type ServicePublicEndpoint } from "@repo/db";
+import { serviceStatusToContainerState, isValidCustomHostname, ValidationError, type ServiceContainerState } from "@repo/core";
+import {
+  BuildLogger,
+  isMultiServiceRuntime,
+  type LogEntry,
+  type ContainerStatus,
+} from "@repo/adapters";
 import { encrypt, decrypt } from "../../lib/encryption";
 import { assertResourceInOrg, platform } from "../../lib/controller-helpers";
 import type { RequestContext } from "../../lib/request-context";
-import { resolveDeploymentRuntime } from "../../lib/deployment-runtime";
-import { buildServiceRouteDomain } from "../../lib/routing-domains";
+import { resolveDeploymentPlatform } from "../../lib/deployment-runtime";
+import { deployComposeServices } from "../deployments/compose/deploy.service";
+import type { DeploymentConfigSnapshot } from "../deployments/build.service";
+import { buildServiceRouteDomains, serviceCustomHostnames } from "../../lib/routing-domains";
+import { ensurePendingServiceDomain, removeServiceDomain } from "../domains/domain.service";
 import {
   reconcileProjectRoutes,
   type RouteRegister,
@@ -55,8 +63,24 @@ function normalizeRoutingPatch(input: Parameters<typeof normalizeRoutingFields>[
   domain: string | null;
   customDomain: string | null;
   domainType: "free" | "custom";
+  publicEndpoints: ServicePublicEndpoint[];
 } {
   const r = normalizeRoutingFields(input);
+  // Reject bogus custom hostnames (path / scheme / port / IP / single-label)
+  // before they're stored — the single-app POST /domains flow has this shape
+  // gate; service custom domains must match it so a bad value can't become an
+  // unservable vhost / unverifiable row.
+  const customHosts = [
+    ...(r.domainType === "custom" && r.customDomain ? [r.customDomain] : []),
+    ...r.publicEndpoints
+      .filter((e) => e.domainType === "custom" && e.customDomain)
+      .map((e) => e.customDomain as string),
+  ];
+  for (const host of customHosts) {
+    if (!isValidCustomHostname(host)) {
+      throw new ValidationError(`"${host}" is not a valid custom domain.`);
+    }
+  }
   return {
     ...r,
     domainType: r.domainType === "custom" ? "custom" : "free",
@@ -191,9 +215,10 @@ export async function createService(
     domain: data.domain,
     customDomain: data.customDomain,
     domainType: data.domainType ?? (monorepoDefaults ? "free" : undefined),
+    publicEndpoints: data.publicEndpoints,
   });
 
-  return repos.service.create({
+  const created = await repos.service.create({
     projectId,
     name,
     kind,
@@ -220,6 +245,16 @@ export async function createService(
     packageManager: kind === "monorepo" ? trimOrNull(data.packageManager) : null,
     buildImage: kind === "monorepo" ? trimOrNull(data.buildImage) : null,
   });
+
+  // Mint verifiable PENDING rows for any custom domain configured at create
+  // time, so the routing UI shows Verify/DNS/SSL immediately — parity with the
+  // edit path. Live route registration still happens through the deploy/add
+  // flow, not here.
+  for (const hostname of serviceCustomHostnames(created)) {
+    await ensurePendingServiceDomain({ projectId, serviceId: created.id, hostname });
+  }
+
+  return created;
 }
 
 export async function updateService(
@@ -272,9 +307,14 @@ export async function updateService(
     }
   }
 
-  const touchesRouting = ["exposed", "exposedPort", "domain", "customDomain", "domainType"].some(
-    (key) => key in patch,
-  );
+  const touchesRouting = [
+    "exposed",
+    "exposedPort",
+    "domain",
+    "customDomain",
+    "domainType",
+    "publicEndpoints",
+  ].some((key) => key in patch);
   const nameChanged = typeof patch.name === "string" && patch.name !== svc.name;
 
   if (touchesRouting) {
@@ -284,6 +324,9 @@ export async function updateService(
       domain: patch.domain ?? svc.domain,
       customDomain: patch.customDomain ?? svc.customDomain,
       domainType: patch.domainType ?? svc.domainType,
+      // Only fall back to the stored array when the caller didn't send one, so an
+      // explicit [] (or a single-route edit) can clear the extra routes.
+      publicEndpoints: "publicEndpoints" in patch ? patch.publicEndpoints : svc.publicEndpoints,
     });
 
     patch.exposed = normalized.exposed;
@@ -291,6 +334,7 @@ export async function updateService(
     patch.domain = normalized.domain ?? undefined;
     patch.customDomain = normalized.customDomain ?? undefined;
     patch.domainType = normalized.domainType;
+    patch.publicEndpoints = normalized.publicEndpoints;
   }
 
   await repos.service.update(serviceId, patch);
@@ -304,39 +348,57 @@ export async function updateService(
   if (updated && (enabledChanged || exposedChanged || touchesRouting || nameChanged)) {
     try {
       const runtimeName = platform().runtime.name;
-      const wasRoutable = svc.enabled && svc.exposed;
       // `enabled` / `exposed` are non-nullable DB columns - no need to
       // fall back to `svc.*` on the updated row.
       const isRoutable = updated.enabled && updated.exposed;
-      const oldRoute = buildServiceRouteDomain({ project, service: svc, runtimeName, usesManagedRouting: true });
-      const nextRoute = buildServiceRouteDomain({ project, service: updated, runtimeName, usesManagedRouting: true });
-      const oldHostname = oldRoute?.hostname.toLowerCase();
-      const nextHostname = nextRoute?.hostname.toLowerCase();
-      const routeDropped = wasRoutable && (!isRoutable || oldHostname !== nextHostname);
+      // Diff the SET of routes (a service can publish several ports). A hostname
+      // present before but gone now is removed; every current route is
+      // (re-)registered (register is additive/idempotent upstream).
+      const oldRoutes = buildServiceRouteDomains({ project, service: svc, runtimeName, usesManagedRouting: true });
+      const nextRoutes = isRoutable
+        ? buildServiceRouteDomains({ project, service: updated, runtimeName, usesManagedRouting: true })
+        : [];
+      const nextByHost = new Map(nextRoutes.map((route) => [route.hostname.toLowerCase(), route]));
 
-      const removes: RouteRemove[] =
-        routeDropped && oldRoute
-          ? [{ hostname: oldRoute.hostname, isCustomDomain: svc.domainType === "custom" }]
-          : [];
+      const removes: RouteRemove[] = oldRoutes
+        .filter((route) => !nextByHost.has(route.hostname.toLowerCase()))
+        .map((route) => ({ hostname: route.hostname, isCustomDomain: route.domainType === "custom" }));
 
-      const registers: RouteRegister[] = [];
-      if (isRoutable && nextRoute) {
-        // Self-hosted upstream = the active deployment's service-row IP; cloud
-        // ignores targetUrl and routes by port. Compute both; reconcile picks.
-        let targetUrl: string | undefined;
-        if (!project.cloudWorkspaceId && project.activeDeploymentId) {
-          const rows = await repos.service.listByDeployment(project.activeDeploymentId);
-          const row = rows.find((r) => r.serviceId === serviceId);
-          if (row?.ip) {
-            targetUrl = `http://${row.ip}:${updated.exposedPort || row.hostPort?.toString() || "80"}`;
-          }
+      // Self-hosted upstream = the active deployment's service-row IP; cloud
+      // ignores targetUrl and routes by port. Resolve the IP once, reuse per port.
+      let ip: string | undefined;
+      if (isRoutable && nextRoutes.length > 0 && !project.cloudWorkspaceId && project.activeDeploymentId) {
+        const rows = await repos.service.listByDeployment(project.activeDeploymentId);
+        ip = rows.find((r) => r.serviceId === serviceId)?.ip ?? undefined;
+      }
+      const registers: RouteRegister[] = nextRoutes.map((route) => ({
+        hostname: route.hostname,
+        targetUrl: ip && route.targetPort ? `http://${ip}:${route.targetPort}` : undefined,
+        port: route.targetPort,
+        isCustomDomain: route.domainType === "custom",
+      }));
+
+      // Mint a verifiable PENDING domain row for each custom service route, so
+      // it flows through the same DNS-preflight/verify/SSL pipe as a single-app
+      // custom domain (rather than only appearing — force-verified — at deploy).
+      for (const route of nextRoutes) {
+        if (route.domainType === "custom") {
+          await ensurePendingServiceDomain({
+            projectId: project.id,
+            serviceId,
+            hostname: route.hostname,
+            targetPort: route.targetPort,
+          });
         }
-        registers.push({
-          hostname: nextRoute.hostname,
-          targetUrl,
-          port: Number(updated.exposedPort) || nextRoute.targetPort,
-          isCustomDomain: updated.domainType === "custom",
-        });
+      }
+      // Drop the derived row for any custom hostname the service no longer
+      // CONFIGURES (cleared / renamed / switched to free) — keyed on config,
+      // not routing state, so a mere unexpose keeps a verified domain's row.
+      const stillConfigured = new Set(serviceCustomHostnames(updated));
+      for (const hostname of serviceCustomHostnames(svc)) {
+        if (!stillConfigured.has(hostname)) {
+          await removeServiceDomain({ serviceId, hostname });
+        }
       }
 
       // Single reused path: cloud → page/workspace primitives, self-hosted →
@@ -367,25 +429,28 @@ export async function deleteService(
     const serviceDeployment = serviceDeployments.find((row) => row.serviceId === serviceId);
 
     if (dep && serviceDeployment?.containerId) {
-      const { runtime } = await resolveDeploymentRuntime(dep);
-      await runtime.destroy(serviceDeployment.containerId).catch((err) => {
+      const { platform } = await resolveServicePlatform(project, dep);
+      await platform.runtime.destroy(serviceDeployment.containerId).catch((err: unknown) => {
         console.error(
           `[SERVICE] Failed to destroy service container ${serviceDeployment.containerId}:`,
           err,
         );
       });
+      await platform.runtime.dispose?.();
     }
   }
 
   if (svc.exposed) {
     try {
-      const route = buildServiceRouteDomain({
+      // Remove EVERY route the service published (a multi-port service has more
+      // than one hostname).
+      const routes = buildServiceRouteDomains({
         project,
         service: svc,
         runtimeName: platform().runtime.name,
         usesManagedRouting: true,
       });
-      if (route) {
+      if (routes.length > 0) {
         // Same single path as edit: cloud → page/workspace teardown, self-hosted
         // → the deployment's OWN routing (never the local singleton, which would
         // leave a remote vhost proxying a now-dead upstream → 502).
@@ -395,13 +460,20 @@ export async function deleteService(
             : null;
         await reconcileProjectRoutes(project, {
           deployment: dep,
-          removes: [{ hostname: route.hostname, isCustomDomain: svc.domainType === "custom" }],
+          removes: routes.map((route) => ({
+            hostname: route.hostname,
+            isCustomDomain: route.domainType === "custom",
+          })),
         });
       }
     } catch (err) {
       console.error(`[SERVICE] Failed to remove route for ${svc.name}:`, err);
     }
   }
+
+  // Clear any derived routing rows (custom-domain pending/verified rows minted
+  // for this service) so they don't outlive the service in the domains list.
+  await repos.domain.deleteByServiceId(serviceId);
 
   await repos.service.remove(serviceId);
 }
@@ -482,13 +554,87 @@ export async function getActiveServiceContainers(ctx: RequestContext, projectId:
   assertResourceInOrg(project, "Project", ctx.organizationId, projectId);
   if (!project.activeDeploymentId) return [];
   const rows = await repos.service.listByDeployment(project.activeDeploymentId);
-  // The persisted deploy status → the live-ish container state the UI renders.
-  // Shared with the rollup + dashboard badges via @repo/core so a
-  // successfully-deployed service can't render as "Stopped" again.
-  return rows.map((row) => ({ ...row, status: serviceStatusToContainerState(row.status) }));
+  if (rows.length === 0) return [];
+
+  // Reflect the REAL runtime state, not the deploy-time status column (written
+  // "success" once at deploy and never touched by stop/crash). The persisted
+  // status is the fallback for every row.
+  const persisted = () =>
+    rows.map((row) => ({ ...row, status: serviceStatusToContainerState(row.status) }));
+
+  const dep = await repos.deployment.findById(project.activeDeploymentId);
+  const runtime = dep
+    ? await resolveServicePlatform(project, dep)
+        .then((r) => r.platform.runtime)
+        .catch(() => null)
+    : null;
+  if (!runtime) return persisted();
+
+  try {
+    // FAST path: ONE label-filtered `docker ps` for the whole deployment
+    // instead of N per-service `docker inspect` round-trips over SSH (the
+    // latter made this endpoint take ~17s and time out the Services tab). The
+    // dashboard polls this, so it MUST be one call.
+    const live = await withLiveQueryTimeout(
+      (async () => {
+        if (runtime.supports("deploymentContainerQuery") && runtime.listDeploymentContainers) {
+          const containers = await runtime.listDeploymentContainers(dep!.id);
+          const byId = new Map(containers.map((c) => [c.containerId, c]));
+          return rows.map((row) => {
+            if (!row.containerId) return { ...row, status: serviceStatusToContainerState(row.status) };
+            const c = byId.get(row.containerId);
+            // A tracked container missing from `docker ps` is gone → stopped.
+            return { ...row, status: c ? containerStatusToServiceState(c.status) : "stopped" };
+          });
+        }
+        // Cloud (no batch query): per-workload lookup — bounded set, Oblien API
+        // (not SSH), and it also refreshes the live private IP.
+        if (runtime.supports("containerInfo")) {
+          return Promise.all(
+            rows.map(async (row) => {
+              const fb = serviceStatusToContainerState(row.status);
+              if (!row.containerId) return { ...row, status: fb };
+              const info = await runtime.getContainerInfo(row.containerId).catch(() => null);
+              return info
+                ? { ...row, status: containerStatusToServiceState(info.status), ip: info.ip ?? row.ip }
+                : { ...row, status: fb };
+            }),
+          );
+        }
+        return null; // runtime can't report → use persisted
+      })(),
+    );
+    return live ?? persisted();
+  } catch {
+    return persisted();
+  } finally {
+    await runtime.dispose?.();
+  }
+}
+
+/** Bound the live status query so a slow/hung runtime degrades to the persisted
+ *  status instead of hanging the (polled) containers endpoint. */
+function withLiveQueryTimeout<T>(p: Promise<T>): Promise<T | null> {
+  return Promise.race([
+    p,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+  ]);
 }
 
 // ─── Per-service container actions ───────────────────────────────────────────
+
+/** A service is a CONTAINER (Docker, on a server/local target) or an Oblien
+ *  WORKSPACE (cloud) — never the app's bare host process. Resolve the platform
+ *  with the runtime pinned to Docker so service start/stop/logs target the real
+ *  service runtime even when the project's app deploys "bare". Cloud stays on
+ *  CloudRuntime (runtimeMode is irrelevant there). */
+async function resolveServicePlatform(
+  project: { organizationId: string },
+  dep: { meta: unknown },
+) {
+  const snapshot = { ...(dep.meta as DeploymentConfigSnapshot), runtimeMode: "docker" as const };
+  return resolveDeploymentPlatform(snapshot, { organizationId: project.organizationId });
+}
 
 async function resolveServiceContainer(
   ctx: RequestContext,
@@ -506,8 +652,108 @@ async function resolveServiceContainer(
   const row = rows.find((r) => r.serviceId === serviceId);
   if (!row?.containerId) throw new Error("Service has no running container");
 
-  const { runtime, serverId } = await resolveDeploymentRuntime(dep);
-  return { runtime, containerId: row.containerId, serverId };
+  const resolved = await resolveServicePlatform(project, dep);
+  return {
+    runtime: resolved.platform.runtime,
+    containerId: row.containerId,
+    serverId: resolved.serverId,
+    row,
+  };
+}
+
+/** Map a live runtime ContainerStatus onto the UI's service state vocabulary.
+ *  Runtime truth (docker inspect / Oblien workload) — not the frozen deploy
+ *  status column — so a stopped/crashed/removed service reads correctly. */
+function containerStatusToServiceState(status: ContainerStatus): ServiceContainerState {
+  switch (status) {
+    case "running":
+      return "running";
+    case "failed":
+    case "cancelled":
+      return "failed";
+    case "queued":
+    case "building":
+    case "deploying":
+      return "starting";
+    default:
+      return "stopped"; // stopped | missing
+  }
+}
+
+/**
+ * Provision + launch ONE service on its OWN container/workspace, DECOUPLED from
+ * the project deploy pipeline: no build phase, no one-deploy-at-a-time lock, no
+ * single-app reap. Reuses the compose deploy scoped to this single service, so
+ * it takes the exact runtime path (Docker on a server, Oblien workspace on
+ * cloud) without touching the main app or the other services.
+ */
+async function provisionServiceContainer(
+  ctx: RequestContext,
+  projectId: string,
+  serviceId: string,
+) {
+  const project = await repos.project.findById(projectId);
+  assertResourceInOrg(project, "Project", ctx.organizationId, projectId);
+  if (!project.activeDeploymentId) {
+    throw new Error("Deploy the project first, then start its services.");
+  }
+  const dep = await repos.deployment.findById(project.activeDeploymentId);
+  if (!dep) throw new Error("Active deployment not found");
+
+  const service = (await repos.service.listByProject(projectId)).find((s) => s.id === serviceId);
+  if (!service) throw new Error("Service not found");
+  if (!service.image && !service.build) {
+    throw new Error("Service has no image or build configured.");
+  }
+  if (!service.enabled) {
+    await repos.service.update(serviceId, { enabled: true });
+  }
+
+  const resolved = await resolveServicePlatform(project, dep);
+  const runtime = resolved.platform.runtime;
+  if (!isMultiServiceRuntime(runtime)) {
+    throw new Error(`The ${runtime.name} runtime cannot run services — enable Docker on this target.`);
+  }
+
+  // Surface the per-service provisioning trace (and any Oblien failure reason)
+  // to the API log. A no-op logger here is why cloud add failures were opaque.
+  const logger = new BuildLogger((entry) => {
+    const line = entry.message.replace(/\n$/, "");
+    if (!line) return;
+    const tag = `[service-provision:${service.name}]`;
+    if (entry.level === "error" || entry.level === "warn") console.error(tag, line);
+    else console.log(tag, line);
+  });
+  try {
+    const result = await deployComposeServices(project, dep, runtime, logger, {
+      // Strictly scope to THIS service: carry live siblings forward as-is, but
+      // never (re)deploy or reap a service we weren't asked to touch. Without
+      // this, provisioning one service could re-deploy a freshly-added sibling
+      // (UNIQUE(deploymentId,serviceId) violation → 400) or bounce/reap an
+      // unrelated one. Full compose deploys (Mode 2) don't pass this flag.
+      targetServiceIds: new Set([serviceId]),
+      strictScope: true,
+      routing: resolved.platform.routing,
+      ssl: resolved.platform.ssl,
+      system: resolved.platform.system,
+      usesManagedRouting: resolved.usesManagedRouting,
+      serverId: resolved.serverId ?? undefined,
+    });
+    if (result.status === "failed") {
+      // A source-built service has no image to launch on the decoupled path
+      // (it only builds through the deploy pipeline) — steer to Redeploy.
+      if (service.build && !service.image) {
+        throw new Error(
+          `"${service.name}" builds from source — use Redeploy to build and start it.`,
+        );
+      }
+      throw new Error(result.error ?? "Failed to start service");
+    }
+    const svc = result.services.find((s) => s.serviceId === serviceId);
+    return { containerId: svc?.containerId ?? "", ip: svc?.ip };
+  } finally {
+    await runtime.dispose?.();
+  }
 }
 
 export async function startServiceContainer(
@@ -515,13 +761,21 @@ export async function startServiceContainer(
   projectId: string,
   serviceId: string,
 ) {
-  const { runtime, containerId } = await resolveServiceContainer(
-    ctx,
-    projectId,
-    serviceId,
-  );
-  await runtime.start(containerId);
-  return { containerId };
+  // Existing container → just start it. No container yet → provision it on its
+  // own (image → container/workspace), decoupled from the project deploy.
+  const existing = await resolveServiceContainer(ctx, projectId, serviceId).catch(() => null);
+  if (existing?.containerId) {
+    try {
+      await existing.runtime.start(existing.containerId);
+      await repos.service
+        .updateServiceDeployment(existing.row.id, { status: "success" })
+        .catch(() => {});
+      return { containerId: existing.containerId };
+    } finally {
+      await existing.runtime.dispose?.();
+    }
+  }
+  return provisionServiceContainer(ctx, projectId, serviceId);
 }
 
 export async function stopServiceContainer(
@@ -529,13 +783,20 @@ export async function stopServiceContainer(
   projectId: string,
   serviceId: string,
 ) {
-  const { runtime, containerId } = await resolveServiceContainer(
+  const { runtime, containerId, row } = await resolveServiceContainer(
     ctx,
     projectId,
     serviceId,
   );
-  await runtime.stop(containerId);
-  return { containerId };
+  try {
+    await runtime.stop(containerId);
+    // Persist the state change (partial update — preserves ip/imageRef) so
+    // every reader converges, not just the live-reconciled services panel.
+    await repos.service.updateServiceDeployment(row.id, { status: "stopped" }).catch(() => {});
+    return { containerId };
+  } finally {
+    await runtime.dispose?.();
+  }
 }
 
 export async function restartServiceContainer(
@@ -543,13 +804,18 @@ export async function restartServiceContainer(
   projectId: string,
   serviceId: string,
 ) {
-  const { runtime, containerId } = await resolveServiceContainer(
+  const { runtime, containerId, row } = await resolveServiceContainer(
     ctx,
     projectId,
     serviceId,
   );
-  await runtime.restart(containerId);
-  return { containerId };
+  try {
+    await runtime.restart(containerId);
+    await repos.service.updateServiceDeployment(row.id, { status: "success" }).catch(() => {});
+    return { containerId };
+  } finally {
+    await runtime.dispose?.();
+  }
 }
 
 export async function getServiceRuntimeLogs(
@@ -563,7 +829,11 @@ export async function getServiceRuntimeLogs(
     projectId,
     serviceId,
   );
-  return runtime.getRuntimeLogs(containerId, tail);
+  try {
+    return await runtime.getRuntimeLogs(containerId, tail);
+  } finally {
+    await runtime.dispose?.();
+  }
 }
 
 export async function streamServiceRuntimeLogs(
@@ -578,7 +848,16 @@ export async function streamServiceRuntimeLogs(
     projectId,
     serviceId,
   );
-  const cleanup = await runtime.streamRuntimeLogs(containerId, onLog, opts);
+  const stop = await runtime.streamRuntimeLogs(containerId, onLog, opts);
+  // Dispose the runtime transport (e.g. the SSH loopback bridge) when the
+  // stream is torn down — NOT before, or it would kill the live stream.
+  const cleanup = () => {
+    try {
+      stop();
+    } finally {
+      void runtime.dispose?.();
+    }
+  };
   return { cleanup, serverId };
 }
 

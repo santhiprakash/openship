@@ -192,10 +192,16 @@ export async function createDomain(
 
   let dnsWarning: string | undefined;
   try {
-    const { installDomain, dkimValue, dkimError, ipv4, ipv6 } =
+    const { installDomain, dkimValue, dkimError, ipv4, ipv6, relayInclude } =
       await sshManager.withExecutor(serverId, async (exec) => {
         const state = await readState(exec);
         const installDomain = state?.domain ?? null;
+        // A domain added while the relay routes ALL domains (scope="all", or a
+        // legacy relay with no scope) inherits the SES SPF include so it can
+        // send through the relay immediately. "selected"-scope relays don't
+        // auto-enroll new domains — the operator adds them in the Sending tab.
+        const relay = state?.outboundRelay;
+        const relayInclude = !!(relay?.enabled && relay.scope !== "selected");
         // Pull the same IPs step 11 detected for the primary install so
         // additional domains publish identical SPF shape: `mx ip4:… ip6:… -all`.
         // Falling back to mx-only SPF (no IPs) still passes, but the explicit
@@ -215,11 +221,12 @@ export async function createDomain(
             dkimError: undefined,
             ipv4,
             ipv6,
+            relayInclude,
           };
         }
         try {
           const dkimValue = await provisionDomainDkim(exec, domain);
-          return { installDomain, dkimValue, dkimError: undefined, ipv4, ipv6 };
+          return { installDomain, dkimValue, dkimError: undefined, ipv4, ipv6, relayInclude };
         } catch (err) {
           return {
             installDomain,
@@ -227,6 +234,7 @@ export async function createDomain(
             dkimError: safeErrorMessage(err),
             ipv4,
             ipv6,
+            relayInclude,
           };
         }
       });
@@ -240,6 +248,7 @@ export async function createDomain(
         dkimValue,
         ipv4,
         ipv6,
+        { sesInclude: relayInclude },
       );
       await recordDomainDns(serverId, domain, records, postmasterPassword);
       if (dkimError) {

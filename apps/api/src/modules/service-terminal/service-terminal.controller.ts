@@ -163,7 +163,11 @@ async function resolveServiceForOrg(
   let runtime: import("@repo/adapters").RuntimeAdapter;
   try {
     const resolved = await resolveDeploymentRuntime({
-      meta: dep.meta,
+      // A service is a CONTAINER, never the app's bare host process — pin the
+      // docker runtime so the terminal targets the real service runtime (as
+      // every other service action does via resolveServicePlatform), even when
+      // the project's app itself deploys "bare".
+      meta: { ...(dep.meta as Record<string, unknown> | null), runtimeMode: "docker" },
       organizationId: dep.organizationId,
     });
     runtime = resolved.runtime;

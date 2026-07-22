@@ -34,6 +34,38 @@ export function sortServicesByPublicFirst<T extends { exposed?: boolean | null }
   return [...services].sort((a, b) => Number(!!b.exposed) - Number(!!a.exposed));
 }
 
+/**
+ * Does this service go through the full build+deploy pipeline, or is it a pure
+ * IMAGE "app" that just launches? This is the single source of truth for the
+ * two-mode service UI split so call sites can't drift:
+ *   - PIPELINE (true): compose stack, monorepo sub-app, or anything that BUILDS
+ *     from source → keeps per-service Redeploy (build page) + reload-env.
+ *   - APP (false): an image app added to a normal/static project → Start/Stop,
+ *     internal IP, no Redeploy, no build page.
+ */
+export function serviceUsesDeployPipeline(
+  service: { kind?: "compose" | "monorepo" | string | null; build?: string | null },
+  projectType?: string | null,
+): boolean {
+  return (
+    projectType === "services" ||
+    projectType === "monorepo" ||
+    serviceKind(service) === "monorepo" ||
+    Boolean(service.build)
+  );
+}
+
+/**
+ * Can this service be launched by the decoupled Start path (pull image + run)?
+ * A source-built service with no image can't — it only builds through the
+ * deploy pipeline, so it must be started via Redeploy rather than Start.
+ */
+export function serviceCanStartWithoutBuild(
+  service: { build?: string | null; image?: string | null },
+): boolean {
+  return !(service.build && !service.image);
+}
+
 export interface Service {
   id: string;
   /** Discriminator. "compose" (default) or "monorepo" sub-app. */
@@ -55,6 +87,13 @@ export interface Service {
   domain: string | null;
   customDomain: string | null;
   domainType: "free" | "custom" | null;
+  /** Additional public routes (one per port). Entry[0] mirrors the scalars. */
+  publicEndpoints?: Array<{
+    port: number;
+    domainType: "free" | "custom";
+    domain?: string;
+    customDomain?: string;
+  }> | null;
   enabled: boolean;
   sortOrder: number;
   /* ── Monorepo sub-app fields (kind === "monorepo" only) ─────────── */
@@ -117,6 +156,13 @@ export type ServiceInput = {
   domain?: string;
   customDomain?: string;
   domainType?: "free" | "custom";
+  /** Additional public routes (one per port). Entry[0] mirrors the scalars. */
+  publicEndpoints?: Array<{
+    port?: number | string;
+    domain?: string;
+    customDomain?: string;
+    domainType?: "free" | "custom";
+  }>;
   enabled?: boolean;
   sortOrder?: number;
   /* ── Monorepo sub-app build settings (kind="monorepo" only) ─────────
@@ -212,9 +258,15 @@ export const servicesApi = {
       data,
     ),
 
-  /** Start a service container */
+  /** Start a service. If it has no container yet, this PROVISIONS it (pull image
+   *  + create the container/workspace) — which can take a while — so use a long
+   *  timeout. Decoupled from the project deploy pipeline (no build page). */
   start: (projectId: string | number, serviceId: string) =>
-    api.post<{ success: boolean }>(endpoints.services.start(projectId, serviceId)),
+    api.post<{ success: boolean; containerId?: string }>(
+      endpoints.services.start(projectId, serviceId),
+      undefined,
+      { timeout: 120_000 },
+    ),
 
   /** Stop a service container */
   stop: (projectId: string | number, serviceId: string) =>

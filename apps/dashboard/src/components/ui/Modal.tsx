@@ -82,19 +82,20 @@ export function Modal({
           show — override to the theme's own scrim value (`--th-overlay` = 60%
           black) + a stronger blur so the page frosts through instead. */}
       <div
-        className="absolute inset-0 bg-background/80 dark:bg-black/60 backdrop-blur-sm dark:backdrop-blur-md transition-opacity duration-300"
+        className="absolute inset-0 bg-background/70 dark:bg-black/55 dim:bg-black/55 backdrop-blur-lg dark:backdrop-blur-xl dim:backdrop-blur-xl transition-opacity duration-300"
         style={{ opacity: isVisible ? 1 : 0 }}
         onClick={handleBackdropDivClick}
       />
 
-      {/* Modal surface: the theme's SOLID card color (`--th-card-bg-solid`) —
-          opaque on purpose, so the blurred backdrop never bleeds through, and
-          it matches the app's cards instead of the lighter dropdown gray.
-          Border + shadow give it definition against the backdrop. */}
+      {/* Modal surface: a lightly-translucent frosted panel (card color at ~93%
+          + its own backdrop-blur) so it reads as elevated glass over the blurred
+          page — not a flat clone of the page cards. The inset ring adds a subtle
+          top-edge highlight; border + shadow give it definition. Still ~opaque
+          enough to keep dense content perfectly readable. */}
       <div
-        className="relative w-full border border-border/60 rounded-2xl shadow-2xl flex flex-col transition-all duration-300 !overflow-x-hidden"
+        className="relative w-full border border-border/60 ring-1 ring-inset ring-foreground/[0.06] rounded-2xl shadow-2xl backdrop-blur-2xl flex flex-col transition-all duration-300 !overflow-x-hidden"
         style={{
-          background: 'var(--th-card-bg-solid)',
+          background: 'color-mix(in oklab, var(--th-card-bg-solid) 93%, transparent)',
           width,
           overflow,
           maxWidth,

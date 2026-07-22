@@ -1,4 +1,4 @@
-import { eq, and, desc, inArray, isNull, ne, sql } from "drizzle-orm";
+import { eq, and, desc, gte, lte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { generateId } from "@repo/core";
 import type { Database } from "../client";
 import { deployment, buildSession } from "../schema";
@@ -173,6 +173,28 @@ export function createDeploymentRepo(db: Database) {
       });
     },
 
+    /**
+     * The most recent in-flight (queued/building/deploying) deployment for a
+     * given release version — the release-source analog of
+     * findInProgressByCommit. Suppresses the "new version available" banner
+     * while that version is already being deployed, and dedupes the release
+     * webhook against an in-flight deploy of the same tag.
+     */
+    async findInProgressByReleaseVersion(
+      projectId: string,
+      releaseVersion: string | null | undefined,
+    ) {
+      if (!releaseVersion) return undefined;
+      return db.query.deployment.findFirst({
+        where: and(
+          eq(deployment.projectId, projectId),
+          eq(deployment.releaseVersion, releaseVersion),
+          inArray(deployment.status, ["queued", "building", "deploying"]),
+        ),
+        orderBy: [desc(deployment.createdAt)],
+      });
+    },
+
     async updateStatus(id: string, status: string, extra?: Partial<NewDeployment>) {
       await db
         .update(deployment)
@@ -323,6 +345,25 @@ export function createDeploymentRepo(db: Database) {
       return out;
     },
 
+    /**
+     * Home-dashboard counts for a set of projects: total deployments and how
+     * many shipped. "Shipped" mirrors getNextReadyVersion — `ready` and
+     * `partial_failure` (a shipped-with-asterisk release) both count as success.
+     */
+    async statsByProjects(
+      projectIds: string[],
+    ): Promise<{ total: number; success: number }> {
+      if (projectIds.length === 0) return { total: 0, success: 0 };
+      const [row] = await db
+        .select({
+          total: sql<number>`count(*)`,
+          success: sql<number>`count(*) filter (where ${deployment.status} in ('ready', 'partial_failure'))`,
+        })
+        .from(deployment)
+        .where(inArray(deployment.projectId, projectIds));
+      return { total: Number(row?.total ?? 0), success: Number(row?.success ?? 0) };
+    },
+
     /** Bulk lookup by id — used by enrichProject batching. */
     async findManyById(ids: string[]): Promise<Map<string, Deployment>> {
       if (ids.length === 0) return new Map();
@@ -443,6 +484,26 @@ export function createDeploymentRepo(db: Database) {
         where: eq(buildSession.deploymentId, deploymentId),
         orderBy: [desc(buildSession.createdAt)],
       });
+    },
+
+    /**
+     * Total build time (ms) an org consumed in a window — sum of build-session
+     * `durationMs` for the org's deployments started in [from, to]. Openship's
+     * own metric (Oblien does not meter build separately). Bounded by period.
+     */
+    async sumBuildMillisForOrg(organizationId: string, from: Date, to: Date): Promise<number> {
+      const [row] = await db
+        .select({ total: sql<number>`coalesce(sum(${buildSession.durationMs}), 0)` })
+        .from(buildSession)
+        .innerJoin(deployment, eq(buildSession.deploymentId, deployment.id))
+        .where(
+          and(
+            eq(deployment.organizationId, organizationId),
+            gte(buildSession.startedAt, from),
+            lte(buildSession.startedAt, to),
+          ),
+        );
+      return Number(row?.total ?? 0);
     },
 
     async updateBuildSession(id: string, data: Partial<NewBuildSession>) {

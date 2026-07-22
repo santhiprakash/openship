@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, GitBranch, Globe, Server, FolderOpen, Cloud, HardDrive } from "lucide-react";
 import { type Project } from "@/constants/mock";
+import { AppLogo } from "@/components/AppLogo";
 import { getFrameworkConfig } from "@/components/import-project/Frameworks";
 import { getProjectStatus, PROJECT_STATUS_META, projectStatusLabel } from "@/utils/project-status";
 import { usePlatform } from "@/context/PlatformContext";
@@ -43,9 +44,15 @@ function getHostingLabel(
 
 interface Props {
   project: Project;
+  /** On the Apps page: show the catalog app's brand logo instead of the
+   *  framework/service fallback icon. */
+  preferAppLogo?: boolean;
+  /** Show an "update available" badge (fed by the update scan). Off by default
+   *  so the Projects page is unaffected. */
+  updateAvailable?: boolean;
 }
 
-const ProjectCard: React.FC<Props> = ({ project }) => {
+const ProjectCard: React.FC<Props> = ({ project, preferAppLogo, updateAvailable }) => {
   const router = useRouter();
   const { t } = useI18n();
   const { baseDomain } = usePlatform();
@@ -64,6 +71,7 @@ const ProjectCard: React.FC<Props> = ({ project }) => {
 
   const hosting = getHostingLabel(project.deployTarget, project.serverName, t);
   const hasFavicon = !!project.favicon && !faviconError;
+  const appTemplateId = (project as { appTemplateId?: string }).appTemplateId;
   const clickTarget = `/projects/${project.id}`;
 
   return (
@@ -71,9 +79,12 @@ const ProjectCard: React.FC<Props> = ({ project }) => {
       onClick={() => router.push(clickTarget)}
       className="flex items-center gap-4 px-5 py-3.5 hover:bg-muted/40 transition-colors cursor-pointer group"
     >
-      {/* Project icon - favicon with stack fallback */}
+      {/* Icon — on the Apps page show the catalog app's brand logo; otherwise
+          the project favicon, falling back to the framework/service glyph. */}
       <div className="w-10 h-10 rounded-xl bg-muted/60 flex items-center justify-center shrink-0 group-hover:bg-muted transition-colors overflow-hidden">
-        {hasFavicon ? (
+        {preferAppLogo && project.isApp ? (
+          <AppLogo appId={appTemplateId} className="w-6 h-6 object-contain" />
+        ) : hasFavicon ? (
           <img
             src={project.favicon!}
             alt=""
@@ -97,6 +108,11 @@ const ProjectCard: React.FC<Props> = ({ project }) => {
               v{project.activeVersion}
             </span>
           )}
+          {updateAvailable && (
+            <span className="shrink-0 rounded-md bg-warning-bg px-1.5 py-0.5 text-[10px] font-medium text-warning">
+              {t.projects.card.updateAvailable}
+            </span>
+          )}
         </div>
         {domain && <p className="text-xs text-muted-foreground truncate mt-0.5">{domain}</p>}
       </div>
@@ -107,6 +123,13 @@ const ProjectCard: React.FC<Props> = ({ project }) => {
         <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-muted/60 text-xs text-muted-foreground shrink-0">
           {fw.name}
         </span>
+
+        {/* App marker — catalog-installed (Convex, webmail, …) */}
+        {project.isApp && (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-primary/10 text-xs font-medium text-primary shrink-0">
+            {t.projects.card.appBadge}
+          </span>
+        )}
 
         {/* Hosting target */}
         {hosting && (
@@ -155,11 +178,10 @@ const ProjectCard: React.FC<Props> = ({ project }) => {
           {timeAgo(project.updatedAt || project.createdAt, t)}
         </span>
 
-        {/* Status pill */}
+        {/* Status pill (badge only — no dot) */}
         <span
-          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium ${statusMeta.badge}`}
+          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${statusMeta.badge}`}
         >
-          <span className={`w-1.5 h-1.5 rounded-full ${statusMeta.dot}`} />
           {projectStatusLabel(status, t)}
         </span>
 

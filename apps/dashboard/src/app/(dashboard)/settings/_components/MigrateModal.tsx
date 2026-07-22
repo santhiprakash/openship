@@ -309,7 +309,7 @@ function PathCard({
           {meta}
         </p>
         {warn && (
-          <p className="text-[11px] text-amber-500 mt-1 flex items-center gap-1">
+          <p className="text-[11px] text-warning mt-1 flex items-center gap-1">
             <AlertCircle className="size-3" /> {warn}
           </p>
         )}
@@ -593,8 +593,8 @@ function CloudForm({
 
   if (!cloudConnected) {
     return (
-      <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.04] p-4 space-y-2">
-        <div className="flex items-center gap-2 text-amber-500">
+      <div className="rounded-xl border border-warning-border bg-warning-bg p-4 space-y-2">
+        <div className="flex items-center gap-2 text-warning">
           <AlertCircle className="size-4" />
           <p className="text-sm font-medium">{t.settings.migrate.cloud.connectFirstTitle}</p>
         </div>
@@ -690,8 +690,8 @@ function TunnelForm({
 
   if (!cloudConnected) {
     return (
-      <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.04] p-4 space-y-2">
-        <div className="flex items-center gap-2 text-amber-500">
+      <div className="rounded-xl border border-warning-border bg-warning-bg p-4 space-y-2">
+        <div className="flex items-center gap-2 text-warning">
           <AlertCircle className="size-4" />
           <p className="text-sm font-medium">{t.settings.migrate.tunnel.connectFirstTitle}</p>
         </div>
@@ -763,8 +763,8 @@ function ResultStep({
   const { t } = useI18n();
   return (
     <div className="space-y-5">
-      <div className="flex items-start gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.05] p-4">
-        <CheckCircle2 className="size-5 text-emerald-500 shrink-0 mt-0.5" />
+      <div className="flex items-start gap-3 rounded-xl border border-success-border bg-success-bg p-4">
+        <CheckCircle2 className="size-5 text-success shrink-0 mt-0.5" />
         <div>
           <p className="text-sm font-medium text-foreground">{t.settings.migrate.result.complete}</p>
           <p className="text-xs text-muted-foreground mt-1">{detail}</p>
@@ -812,9 +812,9 @@ function CheckRow({
   return (
     <div className="flex items-start gap-2">
       {ok ? (
-        <CheckCircle2 className="size-4 text-emerald-500 shrink-0 mt-0.5" />
+        <CheckCircle2 className="size-4 text-success shrink-0 mt-0.5" />
       ) : (
-        <AlertCircle className="size-4 text-amber-500 shrink-0 mt-0.5" />
+        <AlertCircle className="size-4 text-warning shrink-0 mt-0.5" />
       )}
       <div className="flex-1 min-w-0">
         <p className="text-sm text-foreground">{label}</p>

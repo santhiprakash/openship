@@ -23,9 +23,11 @@ export interface ResourceConfig {
 
 /** Single source of truth - production/runtime resources (the free-tier limit).
  *  Deliberately small: a runtime doesn't need build-sized resources, and cloud
- *  runtimes are shrunk to this after the build so they don't hog the pool. */
+ *  runtimes are shrunk to this after the build so they don't hog the pool.
+ *  Matches the cloud "low" tier (cloud-resources.ts) so a tier-less / fallback
+ *  deploy lands at the same 0.5 vCPU · 512 MB as an explicit free-tier pick. */
 export const DEFAULT_RESOURCE_CONFIG: ResourceConfig = {
-  cpuCores: 1,
+  cpuCores: 0.5,
   memoryMb: 512,
   diskMb: 5120,
 };
@@ -38,6 +40,15 @@ export const DEFAULT_BUILD_RESOURCE_CONFIG: ResourceConfig = {
   memoryMb: 8192,
   diskMb: 10240,
 };
+
+/** Normalize a tier's vCPU value for the Oblien workspace payload. Oblien
+ *  accepts fractional `cpus`, so the value passes through verbatim — we only
+ *  guard the resource-schema floor (0.25) so a 0/negative never reaches the API.
+ *  (Previously this ceil'd to a whole integer to work around an Oblien API that
+ *  rejected fractions, which over-allocated the 0.25/0.5 tiers to a full core.) */
+export function cloudCpus(cpuCores: number): number {
+  return Math.max(0.25, cpuCores);
+}
 
 // ─── Build / Deploy types ────────────────────────────────────────────────────
 
@@ -148,6 +159,17 @@ export interface BuildConfig {
    */
   gitCredentialHelperPath?: string;
   /**
+   * SSH clone credential (per-server ssh-server-key / ssh-deploy-key mode). When
+   * set, the clone step rewrites the remote to `git@github.com:owner/repo.git`
+   * and runs git with `GIT_SSH_COMMAND` pointed at a 0600 key file + pinned
+   * known_hosts. No token in the URL. Mutually exclusive with `gitToken` /
+   * `gitCredentialHelperPath`.
+   */
+  gitSsh?: {
+    privateKey: string;
+    knownHosts: string;
+  };
+  /**
    * Clone the repo ON the remote build host instead of cloning on the
    * orchestrator and transferring the context. The Docker runtime honors this
    * for SSH (server) builds: it runs `git clone` in a remote host shell (using
@@ -207,6 +229,16 @@ export interface DeployConfig {
    * O(full_size + small_delta × N). Docker/Cloud ignore the field.
    */
   previousDeploymentId?: string;
+  /**
+   * Adopt an ALREADY-RUNNING process instead of starting one. When true, a
+   * runtime that supports adoption (currently Bare) skips build promotion and
+   * the supervisor start entirely — it only health-probes `port` and returns a
+   * running result. Used to model an externally-supervised process (e.g. the
+   * Openship control plane launched by `openship up`) as a real deployment so
+   * the normal routing/SSL pipeline owns it, without a second process binding
+   * the port. No-op for runtimes that don't advertise adoption.
+   */
+  adopt?: boolean;
 }
 
 export interface BuildResult {
@@ -217,6 +249,15 @@ export interface BuildResult {
   durationMs?: number;
   /** Human-readable error description when status is "failed" */
   errorMessage?: string;
+  /**
+   * Start command chosen BY THE BUILD (overrides the snapshot's when set).
+   * The snapshot's startCommand is fixed before the build runs, so a build that
+   * only learns the right command after producing output — e.g. detecting a
+   * Next.js `output:'standalone'` bundle and switching from `next start` to
+   * `node server.js` — reports it here. The orchestrator threads it into the
+   * deploy config.
+   */
+  startCommand?: string;
 }
 
 export interface DeploymentResult {
@@ -353,6 +394,14 @@ export interface StaticRouteConfig extends BaseRouteConfig {
 
 export type RouteConfig = ProxyRouteConfig | StaticRouteConfig;
 
+/** An operator-supplied certificate to install verbatim (no ACME). */
+export interface ManualCert {
+  /** PEM: leaf cert followed by any intermediates (the fullchain). */
+  certPem: string;
+  /** PEM: the matching private key. */
+  keyPem: string;
+}
+
 export interface SslResult {
   domain: string;
   /** ISO expiry of the issued cert. Empty when no valid cert was read. */
@@ -474,6 +523,9 @@ export interface CommandExecutor {
     options?: {
       excludes?: string[];
       includes?: string[];
+      /** Paths added on top of the git-truth list to ship gitignored build
+       *  output (e.g. `.next`). See `TarTransferOptions.alsoInclude`. */
+      alsoInclude?: string[];
     },
   ): Promise<void>;
 
@@ -534,13 +586,14 @@ export interface CommandExecutor {
 
   /**
    * Open a REVERSE tunnel: ask the remote to listen on an ephemeral
-   * `127.0.0.1` port and forward every connection back to `onConnection`
-   * (SSH `tcpip-forward` / ssh2 `forwardIn`). Used by the desktop git
-   * credential relay — a helper on the remote connects to the returned port
-   * to fetch a credential on demand. The caller owns the duplex stream.
+   * `127.0.0.1` port and forward every connection back to `onConnection`.
+   * Used by the git credential relay — a helper on the remote connects to the
+   * returned port to fetch a credential on demand — and reusable by any
+   * consumer needing a server→host callback path. The caller owns the stream.
    *
-   * Only available on SshExecutor (ssh2 path); LocalExecutor and the
-   * system-ssh path do not implement it.
+   * Implemented by both remote executors: `SshExecutor` (ssh2 `forwardIn`) and
+   * `SystemSshExecutor` (`ssh -O forward -R` over the ControlMaster). Absent on
+   * `LocalExecutor` (a same-host deploy never needs it).
    */
   reverseForward?(
     onConnection: (stream: Duplex) => void,

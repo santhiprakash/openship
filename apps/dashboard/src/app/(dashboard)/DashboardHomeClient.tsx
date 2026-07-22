@@ -11,15 +11,15 @@ import {
   Clock,
   BookOpen,
   Boxes,
+  Plus,
   GitBranch,
   Settings,
   Activity,
-  TrendingUp,
   CheckCircle2,
 } from "lucide-react";
 import { projectsApi } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import HomeTipCard from "@/components/overview/HomeTipCard";
+import UpdatesBlock from "@/components/overview/UpdatesBlock";
 import HomeWelcome from "@/components/overview/HomeWelcome";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { getProjectStatus, PROJECT_STATUS_META, projectStatusLabel } from "@/utils/project-status";
@@ -27,6 +27,7 @@ import type { Dictionary } from "@/i18n";
 import { PageContainer } from "@/components/ui/PageContainer";
 import ProjectCard from "./projects/components/ProjectCard";
 import { type Project } from "@/constants/mock";
+import { AppLogo } from "@/components/AppLogo";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                             */
@@ -64,6 +65,10 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
   const router = useRouter();
   
   const { projects, numbers, loading } = useDashboardHome(initialData);
+
+  // Split catalog apps out of the projects list — they get their own box.
+  const userProjects = projects.filter((p) => !p.isApp);
+  const appProjects = projects.filter((p) => p.isApp);
 
   /* ---------- greeting ---------- */
   const hour = new Date().getHours();
@@ -111,10 +116,10 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
                       {loading
                         ? t.dashboard.home.loading
                         : interpolate(
-                            projects.length === 1
+                            userProjects.length === 1
                               ? t.dashboard.home.projectCountOne
                               : t.dashboard.home.projectCountOther,
-                            { count: String(projects.length) },
+                            { count: String(userProjects.length) },
                           )}
                     </p>
                   </div>
@@ -140,19 +145,19 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
                     </div>
                   ))}
                 </div>
-              ) : projects.length === 0 ? (
+              ) : userProjects.length === 0 ? (
                 <HomeWelcome />
               ) : (
                 <div className="divide-y divide-border/50">
-                  {projects.slice(0, 6).map((p) => (
+                  {userProjects.slice(0, 6).map((p) => (
                     <ProjectCard key={p.id} project={p} />
                   ))}
-                  {projects.length > 6 && (
+                  {userProjects.length > 6 && (
                     <Link
                       href="/projects"
                       className="block px-5 py-3 text-center text-sm text-muted-foreground/70 hover:text-foreground hover:bg-muted/40 transition-colors"
                     >
-                      {interpolate(t.dashboard.home.viewAllProjects, { count: String(projects.length) })}
+                      {interpolate(t.dashboard.home.viewAllProjects, { count: String(userProjects.length) })}
                     </Link>
                   )}
                 </div>
@@ -192,7 +197,7 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
                 <p className="text-xs text-muted-foreground mt-0.5">{t.dashboard.home.settingsCardDesc}</p>
               </Link>
               <a
-                href="https://docs.openship.io"
+                href="https://openship.io/docs"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="bg-card border border-border/50 rounded-xl p-4 hover:bg-muted/40 hover:border-border transition-all group"
@@ -248,88 +253,118 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
                 
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-4 text-emerald-500" />
+                    <CheckCircle2 className="size-4 text-success" />
                     <span className="text-sm text-muted-foreground">{t.dashboard.home.successRate}</span>
                   </div>
-                  <span className={`text-sm font-medium ${successRate >= 80 ? 'text-emerald-500' : successRate >= 50 ? 'text-amber-500' : 'text-red-500'}`}>
+                  <span className={`text-sm font-medium ${successRate >= 80 ? 'text-success' : successRate >= 50 ? 'text-warning' : 'text-danger'}`}>
                     {loading ? "–" : `${successRate}%`}
                   </span>
                 </div>
               </div>
             </div>
 
-            <HomeTipCard projectCount={projects.length} loading={loading} />
+            <UpdatesBlock projectCount={projects.length} loading={loading} />
 
-            {/* Recent Activity */}
+            {/* Apps — compact, colorful. Install is the fancy + in the header; the
+                empty state is a small colorful vector, no big button. */}
             <div className="bg-card rounded-2xl border border-border/50 p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <Clock className="size-4 text-muted-foreground" />
-                <h3 className="font-semibold text-foreground text-sm">{t.dashboard.home.recentTitle}</h3>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Boxes className="size-4 text-primary" />
+                  <h3 className="font-semibold text-foreground text-sm">{t.dashboard.pages.apps.title}</h3>
+                </div>
+                <div className="flex items-center gap-0.5">
+                  <Link
+                    href="/apps/new"
+                    aria-label={t.dashboard.pages.apps.createButton}
+                    className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                  >
+                    <Plus className="size-4" />
+                  </Link>
+                  <Link
+                    href="/apps"
+                    aria-label={t.dashboard.home.viewAll}
+                    className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                  >
+                    <ArrowRight className="size-4" />
+                  </Link>
+                </div>
               </div>
-              
+
               {loading ? (
-                <div className="space-y-3">
-                  {[...Array(3)].map((_, i) => (
-                    <div key={i} className="flex items-center gap-3 animate-pulse">
-                      <div className="w-2 h-2 rounded-full bg-muted" />
-                      <div className="flex-1 h-4 bg-muted rounded" />
-                    </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {[...Array(2)].map((_, i) => (
+                    <div key={i} className="h-[72px] rounded-xl bg-muted/40 animate-pulse" />
                   ))}
                 </div>
-              ) : projects.length === 0 ? (
-                <div className="text-center py-4">
-                  <div className="w-10 h-10 rounded-xl bg-muted/50 flex items-center justify-center mx-auto mb-3">
-                    <Clock className="size-4 text-muted-foreground/50" />
+              ) : appProjects.length === 0 ? (
+                <div className="flex flex-col items-center pt-0 pb-2 text-center">
+                  {/* Abstract "chain of app cards" — monochrome/on-theme, single
+                      primary accent. Grows UPWARD (negative top margin into the
+                      header gap) rather than pushing the copy + 6-logo stack down.
+                      Real (colorful) logos live in the bottom stack. */}
+                  <svg className="-mt-1 mb-2 h-14" viewBox="0 0 130 64" fill="none">
+                    <circle cx="65" cy="32" r="22" fill="hsl(var(--primary))" fillOpacity="0.06" />
+                    <path d="M42 32h8" stroke="var(--th-on-12)" strokeWidth="2" strokeDasharray="3 3" strokeLinecap="round" />
+                    <path d="M80 32h8" stroke="var(--th-on-12)" strokeWidth="2" strokeDasharray="3 3" strokeLinecap="round" />
+                    <rect x="16" y="20" width="26" height="26" rx="8" fill="var(--th-sf-04)" stroke="var(--th-bd-default)" strokeWidth="1" />
+                    <rect x="24" y="28" width="10" height="10" rx="3" fill="var(--th-on-16)" />
+                    <rect x="50" y="13" width="30" height="38" rx="9" fill="var(--th-card-bg)" stroke="var(--th-bd-default)" strokeWidth="1" />
+                    <rect x="57" y="20" width="9" height="9" rx="3" fill="hsl(var(--primary))" />
+                    <rect x="57" y="33" width="16" height="3.5" rx="1.75" fill="var(--th-on-12)" />
+                    <rect x="57" y="40" width="11" height="3.5" rx="1.75" fill="var(--th-on-08)" />
+                    <rect x="88" y="20" width="26" height="26" rx="8" fill="var(--th-sf-04)" stroke="var(--th-bd-default)" strokeWidth="1" />
+                    <path d="M101 29v8M97 33h8" stroke="hsl(var(--primary))" strokeWidth="2" strokeLinecap="round" />
+                    <circle cx="9" cy="13" r="3" fill="var(--th-on-10)" />
+                    <circle cx="121" cy="51" r="4" fill="var(--th-on-08)" />
+                  </svg>
+                  <p className="text-sm font-medium text-foreground">{t.dashboard.home.appsEmptyTitle}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground/70">{t.dashboard.home.appsEmptyDesc}</p>
+                  {/* Overlapping logo stack — the full catalog at a glance, on-theme. */}
+                  <div className="mt-3.5 flex items-center justify-center">
+                    {["convex", "n8n", "ghost", "uptime-kuma", "vaultwarden", "metabase"].map((id, i) => (
+                      <div
+                        key={id}
+                        className={`flex size-7 items-center justify-center rounded-full border border-border/60 bg-card ${
+                          i > 0 ? "-ml-2" : ""
+                        }`}
+                      >
+                        <AppLogo appId={id} className="size-3.5" />
+                      </div>
+                    ))}
                   </div>
-                  <p className="text-xs text-muted-foreground/70">
-                    {t.dashboard.home.activityEmpty}
-                  </p>
                 </div>
               ) : (
-                <div className="space-y-2.5">
-                  {projects.slice(0, 4).map((p) => {
+                <div className="overflow-hidden rounded-xl border border-border/50 bg-muted/10">
+                  {appProjects.slice(0, 6).map((p, i) => {
                     const status = getProjectStatus(p);
                     const statusMeta = PROJECT_STATUS_META[status];
-                    const statusLabel = projectStatusLabel(status, t);
-
                     return (
-                      <div
+                      <button
                         key={p.id}
+                        type="button"
                         onClick={() => router.push(`/projects/${p.id}`)}
-                        className="flex items-center gap-3 cursor-pointer group"
+                        className={`group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/40 ${
+                          i > 0 ? "border-t border-border/50" : ""
+                        }`}
                       >
-                        <span className={`w-2 h-2 rounded-full shrink-0 ${statusMeta.dot}`} />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-foreground truncate group-hover:text-primary transition-colors">
-                            {p.name}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {statusLabel} • {timeAgo(p.updatedAt || p.createdAt, t.dashboard.home.time)}
-                          </p>
+                        <div className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border/50 bg-background">
+                          <AppLogo appId={p.appTemplateId ?? undefined} className="size-5" />
                         </div>
-                      </div>
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground transition-colors group-hover:text-primary">
+                          {p.name}
+                        </span>
+                        <span
+                          className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${statusMeta.badge}`}
+                        >
+                          {projectStatusLabel(status, t)}
+                        </span>
+                      </button>
                     );
                   })}
                 </div>
               )}
             </div>
-
-            {/* Usage Notice */}
-            {!loading && (numbers.total_active_projects ?? 0) > 0 && (
-              <div className="bg-card rounded-2xl border border-border/50 p-5">
-                <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">
-                    <TrendingUp className="size-4 text-blue-500" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-foreground">{t.dashboard.home.allSystemsOperational}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {t.dashboard.home.runningSmoothly}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </div>
     </PageContainer>

@@ -8,7 +8,7 @@ import ignore from "ignore";
 import type { BuildConfig, LogCallback } from "../types";
 
 import { getTarCreateEnv, prepareSourceTarArgs } from "../archive";
-import { injectGitToken } from "./build-pipeline";
+import { injectGitToken, toGitHubSshUrl } from "./build-pipeline";
 import { generateDockerfile } from "./docker-build-plan";
 import { resolveDockerfileCandidates, resolveDockerRootDirectory } from "./docker-paths";
 
@@ -39,7 +39,7 @@ const GIT_CHECKOUT_IDLE_TIMEOUT_MS = 60_000;
  */
 function spawnGit(
   args: string[],
-  opts: { timeoutMs: number; onLog?: LogCallback },
+  opts: { timeoutMs: number; onLog?: LogCallback; env?: Record<string, string> },
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, {
@@ -48,6 +48,7 @@ function spawnGit(
         ...process.env,
         GIT_TERMINAL_PROMPT: "0",
         GIT_ASKPASS: "/bin/echo",
+        ...opts.env,
       },
     });
 
@@ -207,38 +208,54 @@ async function cloneGitSource(
   targetPath: string,
   onLog?: LogCallback,
 ): Promise<void> {
-  const cloneUrl = injectGitToken(config.repoUrl, config.gitToken);
-  await spawnGit(
-    [
-      "-c",
-      "credential.helper=",
-      "clone",
-      "--progress",
-      "--depth",
-      config.commitSha ? "50" : "1",
-      "--branch",
-      config.branch,
-      cloneUrl,
-      targetPath,
-    ],
-    { timeoutMs: GIT_CLONE_IDLE_TIMEOUT_MS, onLog },
-  );
+  // SSH mode (per-server key / deploy key): clone over git@github.com with a
+  // 0600 key + pinned known_hosts in a local temp dir (removed in finally).
+  // Normally SSH clones run ON the server; this is the orchestrator fallback.
+  let cloneUrl: string;
+  let gitEnv: Record<string, string> | undefined;
+  let sshDir: string | null = null;
+  if (config.gitSsh) {
+    sshDir = await mkdtemp(join(tmpdir(), "opsh-ghkey-"));
+    const keyFile = join(sshDir, "id");
+    const knownHostsFile = join(sshDir, "known_hosts");
+    await writeFile(keyFile, config.gitSsh.privateKey, { mode: 0o600 });
+    await writeFile(knownHostsFile, config.gitSsh.knownHosts, { mode: 0o600 });
+    gitEnv = {
+      GIT_SSH_COMMAND: `ssh -i ${keyFile} -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${knownHostsFile}`,
+    };
+    cloneUrl = toGitHubSshUrl(config.repoUrl);
+  } else {
+    cloneUrl = injectGitToken(config.repoUrl, config.gitToken);
+  }
 
-  if (config.commitSha) {
+  try {
     await spawnGit(
       [
         "-c",
         "credential.helper=",
-        "-C",
+        "clone",
+        "--progress",
+        "--depth",
+        config.commitSha ? "50" : "1",
+        "--branch",
+        config.branch,
+        cloneUrl,
         targetPath,
-        "checkout",
-        config.commitSha,
       ],
-      { timeoutMs: GIT_CHECKOUT_IDLE_TIMEOUT_MS, onLog },
+      { timeoutMs: GIT_CLONE_IDLE_TIMEOUT_MS, onLog, env: gitEnv },
     );
-  }
 
-  await rm(join(targetPath, ".git"), { recursive: true, force: true });
+    if (config.commitSha) {
+      await spawnGit(
+        ["-c", "credential.helper=", "-C", targetPath, "checkout", config.commitSha],
+        { timeoutMs: GIT_CHECKOUT_IDLE_TIMEOUT_MS, onLog, env: gitEnv },
+      );
+    }
+
+    await rm(join(targetPath, ".git"), { recursive: true, force: true });
+  } finally {
+    if (sshDir) await rm(sshDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export interface DockerBuildContext {

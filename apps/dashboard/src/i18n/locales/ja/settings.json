@@ -74,6 +74,10 @@
     "disconnectAppBody": "これにより Openship の OAuth アカウント行が削除されます。GitHub App のインストールは、GitHub 上でアンインストールするまで残ります。",
     "cloudExplainer": "Openship GitHub App は openship.io が所有しています。インスタンスを Openship Cloud に接続すると、プライベートリポジトリのクローンにスコープ付きのインストールトークンを使用できます（ローカルおよびリモートの両方のデプロイで機能します）。",
     "connectCloud": "Openship Cloud に接続",
+    "noCloudTitle": "クラウドなしでプライベートリポジトリをクローン",
+    "useSshPerServer": "サーバーごとのSSHキー",
+    "usePat": "アクセストークン",
+    "noCloudHint": "各サーバーでSSHキーを設定するか（サーバー → GitHub）、ローカルとリモートの両方のデプロイで使えるパーソナルアクセストークンを追加します。",
     "linkExplainer": "GitHub アカウントをリンクすると、リポジトリのインポート、プッシュ時の自動デプロイの有効化、ダッシュボードからのブランチ管理が直接行えます。",
     "connecting": "接続中…",
     "connect": "GitHub を接続",
@@ -282,6 +286,14 @@
       "saveLabel": "アクセスを保存"
     },
     "confirmRemove": "このメンバーを組織から削除しますか？",
+    "workspace": {
+      "deleteWorkspace": "ワークスペースを削除",
+      "leaveWorkspace": "ワークスペースから退出",
+      "deleteBody": "このワークスペースとその中のすべてを完全に削除します。",
+      "leaveBody": "このワークスペースから退出します — 戻るには新しい招待が必要です。",
+      "deleteConfirm": "このワークスペースを削除しますか？プロジェクト、メンバー、設定が全員から削除されます。元に戻せません。",
+      "leaveConfirm": "このワークスペースから退出しますか？再度招待されるまでアクセスできなくなります。"
+    },
     "toast": {
       "teamNameRequired": "チーム名は必須です",
       "teamCreated": "チーム \"{name}\" を作成しました — 切り替え中…",
@@ -291,7 +303,12 @@
       "removeFailed": "削除に失敗しました",
       "cancelFailed": "キャンセルに失敗しました",
       "accessUpdated": "アクセスを更新しました",
-      "loadGrantsFailed": "付与の読み込みに失敗しました"
+      "loadGrantsFailed": "付与の読み込みに失敗しました",
+      "deleteFailed": "ワークスペースを削除できませんでした",
+      "deleteBillingActive": "削除する前に、このワークスペースの有効なサブスクリプションを解約してください。",
+      "deleted": "ワークスペースを削除しました",
+      "leaveFailed": "ワークスペースから退出できませんでした",
+      "left": "ワークスペースから退出しました"
     }
   },
   "inviteMember": {
@@ -318,6 +335,7 @@
     "toast": {
       "failedSend": "招待の送信に失敗しました",
       "invitationSent": "{email} に招待を送信しました",
+      "personalOrgBlocked": "個人用ワークスペースではメンバーを招待できません。まずチーム組織を作成してから招待を送信してください。",
       "updateMailSourceFailed": "メールソースの更新に失敗しました"
     }
   },
@@ -328,7 +346,8 @@
     "currentMode": "現在のモード",
     "singleUserLocal": "シングルユーザー（ローカル）",
     "migrate": "移行",
-    "ownerOnlyTitle": "移行できるのはワークスペースのオーナーだけです"
+    "ownerOnlyTitle": "移行できるのはワークスペースのオーナーだけです",
+    "comingSoon": "リモートインスタンスへの直接リンクは近日公開予定です。"
   },
   "cloud": {
     "checking": "確認中…",

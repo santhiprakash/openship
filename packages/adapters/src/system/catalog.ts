@@ -85,6 +85,30 @@ function rsyncInstallPlan(profile: EnvironmentProfile): InstallPlan {
   };
 }
 
+/**
+ * Shell that writes /etc/apt/sources.list.d/openresty.list with a codename
+ * openresty.org actually publishes. openresty.org ships LTS-only repos (newest
+ * ubuntu=noble, debian=bookworm), so a non-LTS or not-yet-published codename —
+ * e.g. Ubuntu 26.04 "resolute" — has no Release file and breaks `apt-get update`
+ * (and every later apt step in the same run). We probe the live repo for the
+ * detected codename, then walk down to the nearest supported LTS, warning when we
+ * deviate. Expects $REPO set to "ubuntu" or "debian"; assumes wget is installed.
+ */
+const OPENRESTY_APT_SOURCES: string[] = [
+  // `|| REPO_CODENAME=""` so a failed substitution (no lsb_release AND no
+  // /etc/os-release, e.g. a stripped container) doesn't trip `set -e` before
+  // the empty-var fallback below can pick a default.
+  'REPO_CODENAME="$(lsb_release -sc 2>/dev/null || { . /etc/os-release 2>/dev/null && echo "$VERSION_CODENAME"; })" || REPO_CODENAME=""',
+  'if [ "$REPO" = debian ]; then OR_FALLBACKS="bookworm bullseye"; else OR_FALLBACKS="noble jammy focal"; fi',
+  'OR_CODENAME=""',
+  'for c in $REPO_CODENAME $OR_FALLBACKS; do',
+  '  if wget -q --spider --tries=2 --timeout=15 "http://openresty.org/package/$REPO/dists/$c/Release"; then OR_CODENAME="$c"; break; fi',
+  'done',
+  'if [ -z "$OR_CODENAME" ]; then case "$REPO" in debian) OR_CODENAME=bookworm ;; *) OR_CODENAME=noble ;; esac; fi',
+  '[ "$OR_CODENAME" = "$REPO_CODENAME" ] || echo "[openresty] apt repo has no codename $REPO_CODENAME; using nearest supported LTS $OR_CODENAME" >&2',
+  'echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] http://openresty.org/package/$REPO $OR_CODENAME main" > /etc/apt/sources.list.d/openresty.list',
+];
+
 function openrestyInstallPlan(profile: EnvironmentProfile): InstallPlan {
   if (profile.os !== "linux") {
     return {
@@ -98,12 +122,18 @@ function openrestyInstallPlan(profile: EnvironmentProfile): InstallPlan {
   if (profile.packageManager === "apt") {
     const distro = profile.distro === "debian" ? "debian" : "ubuntu";
     installCommand = [
+      "set -e",
+      // Heal a stale/bad openresty.list left by a prior run (e.g. the #86
+      // 'resolute' pin) BEFORE the first apt-get update reads it — otherwise
+      // set -e aborts here and the repo never gets rewritten.
+      "rm -f /etc/apt/sources.list.d/openresty.list",
       "apt-get update -qq && apt-get install -y -qq wget gnupg2 lsb-release",
       "wget -qO /tmp/openresty-pubkey.gpg https://openresty.org/package/pubkey.gpg",
       "gpg --yes --dearmor -o /usr/share/keyrings/openresty.gpg /tmp/openresty-pubkey.gpg",
-      `echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] http://openresty.org/package/${distro} $(lsb_release -sc) main" > /etc/apt/sources.list.d/openresty.list`,
-      'apt-get update -qq && apt-get install -y -qq openresty',
-    ].join(" && ");
+      `REPO=${distro}`,
+      ...OPENRESTY_APT_SOURCES,
+      "apt-get update -qq && apt-get install -y -qq openresty",
+    ].join("\n");
   } else if (profile.packageManager === "dnf") {
     const distro = profile.distro === "fedora" ? "fedora" : "centos";
     installCommand = `wget -qO /etc/yum.repos.d/openresty.repo https://openresty.org/package/${distro}/openresty.repo && dnf install -y openresty`;
@@ -123,13 +153,14 @@ function openrestyInstallPlan(profile: EnvironmentProfile): InstallPlan {
     installCommand = [
       "set -e",
       "if command -v apt-get >/dev/null 2>&1; then",
-      "  apt-get update -qq && apt-get install -y -qq wget gnupg2 lsb-release \\",
-      "  && wget -qO /tmp/openresty-pubkey.gpg https://openresty.org/package/pubkey.gpg \\",
-      "  && gpg --yes --dearmor -o /usr/share/keyrings/openresty.gpg /tmp/openresty-pubkey.gpg \\",
-      '  && DISTRO=$(. /etc/os-release 2>/dev/null && echo "$ID" || echo "ubuntu") \\',
-      '  && case "$DISTRO" in debian) REPO=debian ;; *) REPO=ubuntu ;; esac \\',
-      '  && echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] http://openresty.org/package/$REPO $(lsb_release -sc) main" > /etc/apt/sources.list.d/openresty.list \\',
-      '  && apt-get update -qq && apt-get install -y -qq openresty',
+      "  rm -f /etc/apt/sources.list.d/openresty.list",
+      "  apt-get update -qq && apt-get install -y -qq wget gnupg2 lsb-release",
+      "  wget -qO /tmp/openresty-pubkey.gpg https://openresty.org/package/pubkey.gpg",
+      "  gpg --yes --dearmor -o /usr/share/keyrings/openresty.gpg /tmp/openresty-pubkey.gpg",
+      '  DISTRO=$(. /etc/os-release 2>/dev/null && echo "$ID" || echo "ubuntu")',
+      '  case "$DISTRO" in debian) REPO=debian ;; *) REPO=ubuntu ;; esac',
+      ...OPENRESTY_APT_SOURCES.map((l) => "  " + l),
+      "  apt-get update -qq && apt-get install -y -qq openresty",
       "elif command -v dnf >/dev/null 2>&1; then",
       "  wget -qO /etc/yum.repos.d/openresty.repo https://openresty.org/package/centos/openresty.repo && dnf install -y openresty",
       "elif command -v yum >/dev/null 2>&1; then",

@@ -9,7 +9,7 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import type { RoutingConfig } from "@repo/core";
+import type { RoutingConfig, ReleaseSource } from "@repo/core";
 import { organization } from "./organization";
 import { service } from "./service";
 
@@ -22,7 +22,7 @@ import { service } from "./service";
  * table remains the deployable environment instance that owns deployments,
  * domains, env vars, logs, analytics, and runtime settings.
  */
-export const projectApp = pgTable("project_app", {
+export const projectGroup = pgTable("project_app", {
   id: text("id").primaryKey(), // "app_..."
   /** Org that owns this app — THE access primitive. Creator info lives
    *  in audit_event (event_type='project.create'). */
@@ -67,9 +67,9 @@ export const project = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
-    appId: text("app_id")
+    groupId: text("app_id")
       .notNull()
-      .references(() => projectApp.id, { onDelete: "cascade" }),
+      .references(() => projectGroup.id, { onDelete: "cascade" }),
 
     /** Display name (e.g. "My Next App") */
     name: text("name").notNull(),
@@ -84,18 +84,33 @@ export const project = pgTable(
     /** Environment class */
     environmentType: text("environment_type").notNull().default("production"),
 
+    /* ── App marker ───────────────────────────────────────────────────────── */
+    /**
+     * True when this project was created from the one-click Apps catalog
+     * (Convex, WordPress, webmail, …) rather than as a user code deployment.
+     * Purely a classification: it moves the project to the Apps tab and shows a
+     * catalog logo/badge — the project internals are unchanged. Distinct from
+     * `groupId`, which is the FK to the project_app grouping row.
+     */
+    isApp: boolean("is_app").notNull().default(false),
+    /** Catalog template id this app was installed from (e.g. "convex", "mail-webmail"). */
+    appTemplateId: text("app_template_id"),
+
     /* ── Source ───────────────────────────────────────────────────────────── */
     /** Absolute path on disk for locally-imported projects */
     localPath: text("local_path"),
 
     /* ── Git source ─────────────────────────────────────────────────────── */
     /**
-     * Source discriminator: "github" | "gitlab" | "bitbucket" | "local" | "upload".
+     * Source discriminator: "github" | "gitlab" | "bitbucket" | "local" | "upload" | "release".
+     * (Free-text; canonical set = SOURCE_PROVIDERS in @repo/core.)
      *   - "local"  → folder on a filesystem the API can read (desktop/self-hosted),
      *                path in `localPath`.
      *   - "upload" → source came from a browser folder-upload; no durable origin
      *                (re-upload to redeploy). Can be switched to "github" later via
      *                the repo-link flow, becoming a normal git project.
+     *   - "release" → a prebuilt DIST (no repo, no build). Redeploys track a
+     *                VERSION, not a commit. Config lives in `releaseSource`.
      */
     gitProvider: text("git_provider").default("github"),
     /** Owner/org on the git provider */
@@ -118,6 +133,14 @@ export const project = pgTable(
     cloneTokenEncrypted: text("clone_token_encrypted"),
     /** Timestamp of last update (for UI "last set X ago"). Null if cleared. */
     cloneTokenSetAt: timestamp("clone_token_set_at"),
+
+    /**
+     * Release/dist source config (only when gitProvider === "release"). Either a
+     * GitHub-Releases asset (repo + assetTemplate) or an external HTTPS tarball
+     * (distUrl + sha256). `trackReleases` opts the project into release-webhook
+     * auto-deploy. See ReleaseSource in @repo/core.
+     */
+    releaseSource: jsonb("release_source").$type<ReleaseSource | null>(),
 
     /* ── Build configuration ────────────────────────────────────────────── */
     /** Detected framework (nextjs, vite, node, static, etc.) */
@@ -304,7 +327,7 @@ export const project = pgTable(
   },
   (table) => [
     uniqueIndex("uq_project_app_environment_slug_active")
-      .on(table.appId, table.environmentSlug)
+      .on(table.groupId, table.environmentSlug)
       .where(sql`${table.deletedAt} IS NULL`),
     // One local project per Oblien workspace. Two project rows pointing
     // at the same workspace would race on deploy + confuse drift

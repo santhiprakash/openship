@@ -1,42 +1,32 @@
 "use client";
 
 /**
- * `useCloneStrategyGate` — hook reporting whether the unified
- * `<DeployCredentialModal>` should prompt the user before this deploy.
+ * `useCloneStrategyGate` — reads the two saved signals the deploy sidebar needs
+ * to resolve HOW a repo gets cloned for a self-hosted server deploy:
  *
- * The actual UI lives in
- * `@/components/deployments/DeployCredentialModal`. This file used to
- * also export `CloneStrategyModalContent`; that was merged into the
- * unified modal and removed.
+ *   - `preference`     — the persisted clone-strategy choice
+ *                        (`userSettings.cloneStrategyPreference`). "local" means
+ *                        the user explicitly chose to build on the API host.
+ *   - `hasGlobalToken` — whether a custom global PAT is saved.
  *
- * Scope:
- *   - deployTarget === "server" → may prompt
- *   - deployTarget === "cloud"  → never prompts (Opshcloud handles its
- *                                  own connect-account flow via
- *                                  requireCloud)
- *   - deployTarget === "local"  → never prompts (no remote clone)
- *
- * The choice is persisted on `userSettings.cloneStrategyPreference`.
- * Once anything but "prompt" is on the user, `needsPrompt` is false on
- * every subsequent deploy. `<DeployCredentialModal>` writes that
- * preference for us when `trigger="preflight-gate"`.
+ * The sidebar combines these with live GitHub availability (gh CLI / Openship
+ * App) to pick ONE path deterministically — it does not prompt when the answer
+ * is knowable. The only UI is `<DeployCredentialModal>`, shown by the sidebar
+ * solely for the genuine no-credential dead-end; that modal writes
+ * `cloneStrategyPreference` back when the user picks.
  */
 
 import { useEffect, useState } from "react";
 import { settingsApi, type CloneStrategyPreference } from "@/lib/api";
 
 interface CloneStrategyGateResult {
-  /** True when this deploy SHOULD prompt before continuing. */
-  needsPrompt: boolean;
   /** Latest preference value (null while initial fetch is in flight). */
   preference: CloneStrategyPreference | null;
   /** True if the user has already saved a global PAT. */
   hasGlobalToken: boolean;
 }
 
-export function useCloneStrategyGate(
-  deployTarget: "local" | "server" | "cloud" | null | undefined,
-): CloneStrategyGateResult {
+export function useCloneStrategyGate(): CloneStrategyGateResult {
   const [preference, setPreference] = useState<CloneStrategyPreference | null>(null);
   const [hasGlobalToken, setHasGlobalToken] = useState(false);
 
@@ -49,7 +39,8 @@ export function useCloneStrategyGate(
         setPreference(res.cloneStrategyPreference);
         setHasGlobalToken(res.cloneToken.hasToken);
       } catch {
-        // Silent — gate is purely informational.
+        // Silent — these signals are advisory; the sidebar falls back to live
+        // GitHub availability and, ultimately, the recovery modal.
       }
     })();
     return () => {
@@ -57,10 +48,5 @@ export function useCloneStrategyGate(
     };
   }, []);
 
-  // ONLY self-hosted server deploys see the prompt. Opshcloud has its
-  // own connect-account flow via `requireCloud`; we don't need a clone
-  // token there. Local builds never need a remote clone credential.
-  const needsPrompt = deployTarget === "server" && preference === "prompt";
-
-  return { needsPrompt, preference, hasGlobalToken };
+  return { preference, hasGlobalToken };
 }

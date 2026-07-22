@@ -71,7 +71,7 @@ const DnsConfiguration: React.FC<DnsConfigurationProps> = ({ domain, records, mo
                       className="p-1 hover:bg-muted rounded-md transition-colors shrink-0"
                     >
                       {copied === `${i}-host` ? (
-                        <Check className="size-3.5 text-emerald-500" />
+                        <Check className="size-3.5 text-success" />
                       ) : (
                         <Copy className="size-3.5 text-muted-foreground" />
                       )}
@@ -87,7 +87,7 @@ const DnsConfiguration: React.FC<DnsConfigurationProps> = ({ domain, records, mo
                       className="p-1 hover:bg-muted rounded-md transition-colors shrink-0"
                     >
                       {copied === `${i}-value` ? (
-                        <Check className="size-3.5 text-emerald-500" />
+                        <Check className="size-3.5 text-success" />
                       ) : (
                         <Copy className="size-3.5 text-muted-foreground" />
                       )}

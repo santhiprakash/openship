@@ -4,6 +4,26 @@
     "save": "保存",
     "cancel": "キャンセル"
   },
+  "appSettings": {
+    "modeApp": "アプリ設定",
+    "modeDeployment": "デプロイ",
+    "saveChanges": "変更を保存",
+    "saving": "保存中…",
+    "saved": "設定を保存しました",
+    "saveHint": "変更を保存すると、次回アプリをデプロイしたときに適用されます。",
+    "applyNow": "今すぐ適用",
+    "applying": "適用中…",
+    "applied": "変更を適用しています",
+    "restartNote": "今すぐ適用すると新しい設定でアプリが再起動します。適用しない場合は次回のデプロイ時に反映されます。",
+    "redeployNote": "これらの変更を適用するとアプリが再作成されます。適用後、ダッシュボードや CLI で再認証が必要になる場合があります。",
+    "advancedShow": "詳細設定を表示",
+    "advancedHide": "詳細設定を非表示",
+    "secretSet": "設定済み — 現在の値を保持するには空欄のままにします",
+    "loadError": "アプリ設定を読み込めませんでした。",
+    "saveFailed": "設定を保存できませんでした。",
+    "applyFailed": "変更を適用できませんでした。",
+    "unmanaged": "このアプリにはまだ設定できる項目がありません。"
+  },
   "advanced": {
     "projectInfo": {
       "title": "プロジェクト情報",

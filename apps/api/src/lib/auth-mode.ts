@@ -31,8 +31,13 @@ let cached: string | null = null;
 export async function getAuthMode(): Promise<"none" | "cloud" | "local"> {
   if (cached !== null) return cached as "none" | "cloud" | "local";
 
+  // Zero-auth ("none") is a desktop-only convenience. A CLI-managed instance
+  // (OPENSHIP_REQUIRE_AUTH) or a publicly-served one (OPENSHIP_PUBLIC_URL)
+  // always defaults to requiring login — the loopback zero-auth shortcut is
+  // unsafe once the box is CLI-deployed / network-reachable via the proxy.
+  const requireAuth = !!env.OPENSHIP_REQUIRE_AUTH || !!env.OPENSHIP_PUBLIC_URL;
   const fallback: "none" | "local" =
-    env.DEPLOY_MODE === "desktop" ? "none" : "local";
+    env.DEPLOY_MODE === "desktop" && !requireAuth ? "none" : "local";
 
   try {
     const { repos } = await import("@repo/db");

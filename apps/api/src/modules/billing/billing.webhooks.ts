@@ -439,11 +439,10 @@ async function handleCheckoutSessionCompleted(
       return;
     }
 
-    // Pack credits live in milli-credits. The shared wrapper in
-    // billing-oblien-quota.ts (also used by the anniversary cron and
-    // billing-hardcap) writes Oblien quotas in the same units as
-    // PLANS[].monthlyCredits (milli), so we forward the pack's
-    // credits_milli directly — no conversion.
+    // Pack credits live in milli-credits — the same unit as
+    // PLANS[].monthlyCredits. The quota wrapper (billing-oblien-quota.ts) owns
+    // the single milli→Oblien-credit boundary (÷1000 + clamp) on the addQuota
+    // write, so we forward the pack's credits_milli directly here.
     await addQuota(orgId, pack.credits_milli);
     return;
   }
@@ -526,12 +525,10 @@ async function handleSubscriptionUpdated(sub: Stripe.Subscription): Promise<void
   const priceChanged = !!prev && prev.stripePriceId !== newPriceId;
   const newStatus = mapStripeStatusToCanonical(sub.status);
   // Dunning recovery: prior local row was `past_due` and Stripe is now
-  // reporting active/trialing. The quota was never lowered on payment
-  // failure (Oblien suspend lives on the depleted path, not the dunning
-  // path), but the local subscription_status flip needs a paired quota
-  // refresh so any half-applied stale state is normalized — and so the
-  // restoreFromExhausted side effect inside setQuotaForTier lifts any
-  // namespace suspend the hard-cap path engaged in parallel.
+  // reporting active/trialing. The local subscription_status flip needs a
+  // paired quota refresh (setQuotaForTier) so the tier ceiling is re-asserted
+  // after recovery. Oblien owns any workspace stop/start via its overdraft
+  // gate — we don't suspend/activate on this path.
   const recoveredFromPastDue =
     !!prev && prev.status === "past_due" && newStatus === "active";
 
@@ -675,10 +672,9 @@ async function handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
  *
  * Critically: NO Oblien call here. Payment failure is a billing UX state,
  * not a quota state — the user still has whatever allowance they had a
- * second ago. Suspending the namespace on every transient card decline
- * would punish customers for issuer-side flakiness. The hard-cap path
- * (driven by Oblien's `credits.depleted` webhook into namespaces.suspend)
- * is the only thing that should stop workloads.
+ * second ago. The only thing that stops workloads is Oblien itself, when
+ * credit usage crosses the quota overdraft (`onOverdraftAction:
+ * "stop_workspaces"`) — openship never suspends namespaces for billing.
  */
 async function handleInvoicePaymentFailed(invoice: Stripe.Invoice): Promise<void> {
   const subRef = (invoice as unknown as { subscription?: string | { id: string } })

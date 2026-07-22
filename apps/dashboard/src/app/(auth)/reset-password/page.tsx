@@ -74,8 +74,8 @@ function ResetPasswordForm() {
     return (
       <AuthShell>
         <div className="text-center">
-          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-emerald-500/10">
-            <CheckCircle2 className="size-6 text-emerald-500" />
+          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-success-bg">
+            <CheckCircle2 className="size-6 text-success" />
           </div>
           <h1 className="text-xl font-semibold tracking-tight text-foreground">
             {t.auth.resetPassword.doneTitle}

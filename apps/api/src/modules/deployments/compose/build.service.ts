@@ -133,6 +133,8 @@ export async function buildComposeImages(opts: {
   gitToken?: string;
   /** Relay helper path on the build host — desktop clone-on-server credential. */
   gitCredentialHelperPath?: string;
+  /** Per-server SSH clone credential (ssh-server-key / deploy-key mode). */
+  gitSsh?: { privateKey: string; knownHosts: string };
   /** Clone each service on the remote build host instead of transferring. */
   cloneOnServer?: boolean;
   /** Smart (partial) redeploy: build ONLY these services. Undefined = build
@@ -304,6 +306,7 @@ export async function buildComposeImages(opts: {
     if (opts.gitCredentialHelperPath) {
       buildConfig.gitCredentialHelperPath = opts.gitCredentialHelperPath;
     }
+    if (opts.gitSsh) buildConfig.gitSsh = opts.gitSsh;
 
     return { service, buildConfig, serviceLogger };
   };

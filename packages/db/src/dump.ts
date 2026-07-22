@@ -114,8 +114,8 @@ type ScopeResolver =
   // Resolved by reading a column on the ROOT project row, then
   // selecting THIS table where id = that value. Used to bring along
   // FK-target rows the project depends on (e.g. project_app via
-  // project.appId). The walker fetches the root project on demand.
-  | { in: "project"; via: "from-root-project"; sourceColumn: "appId" }
+  // project.groupId). The walker fetches the root project on demand.
+  | { in: "project"; via: "from-root-project"; sourceColumn: "groupId" }
   // Whole-instance only.
   | { in: "instance"; via: "all-rows" };
 
@@ -163,17 +163,17 @@ const TABLES: ReadonlyArray<TableSpec> = [
 
   // ── Project subgraph (also part of organization scope) ─────────────────────
   //
-  // project_app is the parent of project (project.appId NOT NULL FK).
+  // project_app is the parent of project (project.groupId NOT NULL FK).
   // For project scope we MUST include it — restore would otherwise fail
-  // its FK check at COMMIT time. Resolver walks project.appId off the
+  // its FK check at COMMIT time. Resolver walks project.groupId off the
   // root project row and selects the matching project_app row.
   {
     sqlName: "project_app",
-    table: schema.projectApp,
+    table: schema.projectGroup,
     scopes: [
       { in: "instance", via: "all-rows" },
       { in: "organization", via: "organizationId" },
-      { in: "project", via: "from-root-project", sourceColumn: "appId" },
+      { in: "project", via: "from-root-project", sourceColumn: "groupId" },
     ],
     hasOrganizationId: true,
   },

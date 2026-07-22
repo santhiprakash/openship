@@ -12,53 +12,36 @@ import {
   Server,
   Loader2,
   Pencil,
-  Star,
-  KeyRound,
+  Star,  Database,
+  Clock,
+  ArrowRight,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import {
   backupDestinationsApi,
   type BackupDestinationSummary,
   getApiErrorMessage,
 } from "@/lib/api";
+import { formatBytes } from "@/lib/formatBytes";
 import { PageContainer } from "@/components/ui/PageContainer";
 import { Modal } from "@/components/ui/Modal";
 import DropdownMenu, { type MenuAction } from "@/components/ui/DropdownMenu";
 import { useToast } from "@/context/ToastContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { CreateDestinationModal } from "./_components/CreateDestinationModal";
-
-const KIND_ICONS: Record<
-  BackupDestinationSummary["kind"],
-  React.ComponentType<{ className?: string }>
-> = {
-  s3_compatible: Cloud,
-  sftp: Server,
-  openship_server: Server,
-  local: HardDrive,
-  http_upload: Cloud,
-};
-
-// Kinds the create/edit form can configure. Others (e.g. http_upload) may exist
-// via the API but must NOT offer "Edit" — the form has no UI for them and would
-// drop into the create picker, risking a wrong-kind overwrite.
-const EDITABLE_KINDS = new Set<BackupDestinationSummary["kind"]>([
-  "s3_compatible",
-  "sftp",
-  "openship_server",
-  "local",
-]);
+import {
+  KIND_ICONS,
+  EDITABLE_KINDS,
+  kindLabel,
+  describeDestination,
+  describeCredentials,
+} from "@/components/backup/destinationDisplay";
 
 export default function BackupsPage() {
   const { showToast } = useToast();
   const { t } = useI18n();
+  const router = useRouter();
   const m = t.misc.backups;
-  const kindLabels: Record<BackupDestinationSummary["kind"], string> = {
-    s3_compatible: m.kindS3,
-    sftp: m.kindSftp,
-    openship_server: m.kindServer,
-    local: m.kindLocal,
-    http_upload: m.kindHttp,
-  };
   const [items, setItems] = useState<BackupDestinationSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -166,7 +149,11 @@ export default function BackupsPage() {
       ) : items.length === 0 ? (
         <EmptyState onAdd={() => setModalOpen(true)} />
       ) : (
-        <div className="bg-card rounded-2xl border border-border/50 overflow-hidden">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_340px]">
+        {/* Left: destinations list. No overflow-hidden — it clipped the row's
+            ⋮ dropdown; corners stay crisp via first/last row rounding below. */}
+        <div className="min-w-0">
+        <div className="bg-card rounded-2xl border border-border/50">
           <ul className="divide-y divide-border/50">
             {items.map((row) => {
               const Icon = KIND_ICONS[row.kind] ?? Cloud;
@@ -198,71 +185,86 @@ export default function BackupsPage() {
               return (
                 <li
                   key={row.id}
-                  className="flex items-start justify-between gap-4 px-6 py-4 transition-colors hover:bg-foreground/[0.02]"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => router.push(`/backups/${row.id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      router.push(`/backups/${row.id}`);
+                    }
+                  }}
+                  className="group flex cursor-pointer items-center gap-4 px-6 py-4 transition-colors hover:bg-foreground/[0.03] first:rounded-t-2xl last:rounded-b-2xl"
                 >
-                  <div className="flex min-w-0 flex-1 items-start gap-3">
-                    <div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.05] border border-border/40">
-                      <Icon className="size-4 text-foreground/70" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="truncate text-sm font-medium text-foreground">
-                          {row.name}
-                        </p>
-                        {row.isDefault && (
-                          <span
-                            className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
-                            title={m.defaultTitle}
-                          >
-                            <Star className="size-3 fill-current" />
-                            {m.defaultBadge}
-                          </span>
-                        )}
-                        <span className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                          {kindLabels[row.kind]}
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted/50 text-muted-foreground">
+                    <Icon className="size-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-sm font-medium text-foreground">{row.name}</p>
+                      {row.isDefault && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
+                          title={m.defaultTitle}
+                        >
+                          <Star className="size-3 fill-current" />
+                          {m.defaultBadge}
                         </span>
-                        {verifyingIds.has(row.id) ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                            <Loader2 className="size-3 animate-spin" />
-                            {m.verifyingBadge}
-                          </span>
-                        ) : row.lastVerifiedAt ? (
-                          <span
-                            className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400"
-                            title={interpolate(m.lastVerified, { date: new Date(row.lastVerifiedAt).toLocaleString() })}
-                          >
-                            <CheckCircle2 className="size-3" />
-                            {m.verifiedBadge}
-                          </span>
-                        ) : row.lastVerifyError ? (
-                          <span
-                            className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-600 dark:text-red-400"
-                            title={row.lastVerifyError}
-                          >
-                            <AlertCircle className="size-3" />
-                            {m.failedBadge}
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-foreground/[0.04] px-2 py-0.5 text-[11px] font-medium text-muted-foreground/70">
-                            {m.notVerifiedBadge}
-                          </span>
-                        )}
-                      </div>
-                      <p className="mt-1 truncate font-mono text-xs text-muted-foreground/80">
-                        {describeDestination(row, m)}
-                      </p>
-                      <p className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground/60">
-                        <KeyRound className="size-3" />
-                        {describeCredentials(row, m)}
-                        {row.lastVerifyError && !row.lastVerifiedAt && (
-                          <span className="ms-1 truncate text-red-500/80" title={row.lastVerifyError}>
-                            · {row.lastVerifyError}
-                          </span>
-                        )}
-                      </p>
+                      )}
+                      {verifyingIds.has(row.id) ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                          <Loader2 className="size-3 animate-spin" />
+                          {m.verifyingBadge}
+                        </span>
+                      ) : row.lastVerifiedAt ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-success-bg px-2 py-0.5 text-[11px] font-medium text-success"
+                          title={interpolate(m.lastVerified, { date: new Date(row.lastVerifiedAt).toLocaleString() })}
+                        >
+                          <CheckCircle2 className="size-3" />
+                          {m.verifiedBadge}
+                        </span>
+                      ) : row.lastVerifyError ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-danger-bg px-2 py-0.5 text-[11px] font-medium text-danger"
+                          title={row.lastVerifyError}
+                        >
+                          <AlertCircle className="size-3" />
+                          {m.failedBadge}
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-foreground/[0.04] px-2 py-0.5 text-[11px] font-medium text-muted-foreground/70">
+                          {m.notVerifiedBadge}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 truncate font-mono text-xs text-muted-foreground/80">
+                      {describeDestination(row, m)}
+                    </p>
+                    {/* One tidy meta line: kind · credentials · storage rollup.
+                        min-w-0 + truncate keeps long values inside the row. */}
+                    <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground/70">
+                      <span className="font-medium text-muted-foreground/90">{kindLabel(row.kind, m)}</span>
+                      <span className="text-muted-foreground/30">·</span>
+                      <span className="min-w-0 truncate">{describeCredentials(row, m)}</span>
+                      {row.stats && row.stats.runCount > 0 ? (
+                        <>
+                          <span className="text-muted-foreground/30">·</span>
+                          <span className="text-foreground/70">{formatBytes(row.stats.storedBytes)} {m.statsStored}</span>
+                          <span className="text-muted-foreground/30">·</span>
+                          <span>{row.stats.runCount} {m.statsBackups}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-muted-foreground/30">·</span>
+                          <span className="italic text-muted-foreground/50">{m.statsNoRuns}</span>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1">
+                  {/* Actions stop row navigation; the arrow signals the row opens
+                      the destination's detail page. */}
+                  <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={() => handleVerify(row)}
                       disabled={verifyingIds.has(row.id)}
@@ -276,11 +278,30 @@ export default function BackupsPage() {
                       )}
                     </button>
                     <DropdownMenu align="right" actions={actions} />
+                    <ArrowRight className="size-4 text-muted-foreground/30 transition-colors group-hover:text-muted-foreground/60 rtl:rotate-180" />
                   </div>
                 </li>
               );
             })}
           </ul>
+        </div>
+        </div>
+
+        {/* Right: sticky storage status widget (app's right-rail pattern —
+            list on the left, status on the right). */}
+        <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+          <div className="rounded-2xl border border-border/50 bg-card p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <HardDrive className="size-4 text-muted-foreground" />
+              <h3 className="text-sm font-semibold text-foreground">{m.summaryTitle}</h3>
+            </div>
+            <div className="space-y-3">
+              <StatRow icon={Database} label={m.summaryStored} value={formatBytes(items.reduce((n, d) => n + (d.stats?.storedBytes ?? 0), 0))} />
+              <StatRow icon={Clock} label={m.summaryBackups} value={String(items.reduce((n, d) => n + (d.stats?.runCount ?? 0), 0))} />
+              <StatRow icon={Server} label={m.summaryDestinations} value={String(items.length)} />
+            </div>
+          </div>
+        </div>
         </div>
       )}
 
@@ -314,8 +335,8 @@ export default function BackupsPage() {
         >
           <div className="p-6">
             <div className="flex items-start gap-3">
-              <div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl bg-red-500/10">
-                <Trash2 className="size-5 text-red-500" />
+              <div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl bg-danger-bg">
+                <Trash2 className="size-5 text-danger" />
               </div>
               <div className="min-w-0">
                 <h2 className="text-base font-semibold text-foreground">
@@ -339,7 +360,7 @@ export default function BackupsPage() {
               <button
                 onClick={confirmDelete}
                 disabled={deleteBusy}
-                className="h-10 inline-flex items-center gap-2 rounded-xl bg-red-500 px-5 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+                className="h-10 inline-flex items-center gap-2 rounded-xl bg-danger-solid px-5 text-sm font-medium text-white transition-colors hover:bg-danger-solid/90 disabled:opacity-50"
               >
                 {deleteBusy ? (
                   <Loader2 className="size-4 animate-spin" />
@@ -353,6 +374,26 @@ export default function BackupsPage() {
         </Modal>
       )}
     </PageContainer>
+  );
+}
+
+function StatRow({
+  label,
+  value,
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  icon: React.ComponentType<{ className?: string }>;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+        <Icon className="size-4 shrink-0" />
+        <span className="truncate">{label}</span>
+      </div>
+      <span className="shrink-0 text-sm font-semibold text-foreground">{value}</span>
+    </div>
   );
 }
 
@@ -538,44 +579,3 @@ function KindCard({
   );
 }
 
-function describeCredentials(
-  row: BackupDestinationSummary,
-  m: Record<string, string>,
-): string {
-  switch (row.kind) {
-    case "s3_compatible":
-      return row.hasAccessKeyId && row.hasSecretAccessKey
-        ? m.credAccessKeyStored
-        : m.credNone;
-    case "sftp":
-      return row.hasSftpPrivateKey
-        ? m.credPrivateKeyStored
-        : row.hasSftpPassword
-          ? m.credPasswordStored
-          : m.credNone;
-    case "openship_server":
-      return m.credReusesServer;
-    case "local":
-      return m.credNoneNeeded;
-    case "http_upload":
-      return "—";
-  }
-}
-
-function describeDestination(
-  row: BackupDestinationSummary,
-  m: Record<string, string>,
-): string {
-  switch (row.kind) {
-    case "s3_compatible":
-      return `${row.bucket ?? "?"}${row.region ? ` · ${row.region}` : ""}${row.endpoint ? ` · ${row.endpoint}` : ""}`;
-    case "sftp":
-      return `${row.sshUser ?? "?"}@${row.sshHost ?? "?"}:${row.sshPort ?? 22}${row.pathPrefix ? `:${row.pathPrefix}` : ""}`;
-    case "openship_server":
-      return `${m.serverPrefix}${row.serverId?.slice(0, 8) ?? "?"}…${row.pathPrefix ? ` · ${row.pathPrefix}` : ""}`;
-    case "local":
-      return row.endpoint ?? "?";
-    case "http_upload":
-      return row.endpoint ?? "?";
-  }
-}

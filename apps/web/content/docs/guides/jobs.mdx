@@ -1,0 +1,74 @@
+---
+title: Scheduled jobs
+description: Run maintenance on a schedule — the built-in system jobs Openship manages for you, plus your own scheduled commands.
+---
+
+Jobs are tasks that run on a **schedule** on your instance: the maintenance
+Openship does for you automatically, and any commands you want to run yourself.
+Find them in the dashboard under **Jobs**.
+
+<Callout title="Self-hosted only" type="info">
+Jobs live on a self-hosted instance. On Openship Cloud the platform handles this
+maintenance for you, so there's no Jobs tab.
+</Callout>
+
+Every run is recorded — when it last ran, whether it succeeded, how long it took,
+and its output.
+
+## Built-in jobs
+
+Openship ships a set of system jobs and keeps them running for you — nothing to
+set up:
+
+| Job | What it does | Default schedule |
+|---|---|---|
+| SSL certificate renewal | Renews Let's Encrypt certificates before they expire | daily |
+| Orphaned resource cleanup | Reclaims leftovers from a failed teardown | hourly |
+| Backup retention prune | Deletes backups past their retention window | daily |
+| Audit log prune | Trims old audit entries per your retention setting | daily |
+| Deployment reconcile | Settles deploys interrupted by a connection blip | every 10 min |
+
+For any of them you can **change the schedule**, **enable/disable** it,
+**Run now**, and see its **run history**. You can't delete a built-in job (it's
+part of Openship) — disable it instead.
+
+## Your own jobs
+
+Need a nightly database dump, a cache warm, or a cleanup script? Create a custom
+job:
+
+1. In **Jobs**, click **New job**.
+2. Give it a **name**, pick the **server** it runs on, enter the **command**, and
+   a **schedule** (cron).
+3. Save. It runs on that schedule, and you can **Run now** any time.
+
+While a job runs you can watch its **live output**, and every run is kept in
+history with its result.
+
+## Schedules (cron), in plain terms
+
+A schedule is a standard 5-field cron string:
+
+```
+┌───────── minute (0–59)
+│ ┌─────── hour (0–23)
+│ │ ┌───── day of month (1–31)
+│ │ │ ┌─── month (1–12)
+│ │ │ │ ┌─ day of week (0–6, Sun=0)
+* * * * *
+```
+
+| Cron | When |
+|---|---|
+| `0 3 * * *` | every day at 03:00 |
+| `*/15 * * * *` | every 15 minutes |
+| `0 * * * *` | every hour, on the hour |
+| `0 2 * * 0` | every Sunday at 02:00 |
+| `30 4 1 * *` | 04:30 on the 1st of each month |
+
+Openship validates the cron when you save and shows the **next run time**.
+
+<Callout title="Run now is recorded too">
+Triggering a job manually with **Run now** is saved in history just like a
+scheduled run, marked as manual — so you always have a full record.
+</Callout>

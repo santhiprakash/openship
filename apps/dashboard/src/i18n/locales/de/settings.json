@@ -74,6 +74,10 @@
     "disconnectAppBody": "Dadurch wird der Openship-OAuth-Kontoeintrag entfernt. Die Installation der GitHub-App bleibt bestehen, bis du sie auf GitHub deinstallierst.",
     "cloudExplainer": "Die Openship GitHub-App gehört openship.io. Verbinde deine Instanz mit Openship Cloud, um scoped Installations-Tokens zum Klonen privater Repos zu verwenden (funktioniert für lokale UND entfernte Deployments).",
     "connectCloud": "Openship Cloud verbinden",
+    "noCloudTitle": "Private Repos ohne Cloud klonen",
+    "useSshPerServer": "SSH-Schlüssel pro Server",
+    "usePat": "Zugriffstoken",
+    "noCloudHint": "Konfiguriere einen SSH-Schlüssel pro Server (Server → GitHub) oder füge einen Personal Access Token hinzu, der für lokale und Remote-Deployments funktioniert.",
     "linkExplainer": "Verknüpfe dein GitHub-Konto, um Repositories zu importieren, Auto-Deploy beim Push zu aktivieren und Branches direkt im Dashboard zu verwalten.",
     "connecting": "Wird verbunden…",
     "connect": "GitHub verbinden",
@@ -282,6 +286,14 @@
       "saveLabel": "Zugriff speichern"
     },
     "confirmRemove": "Dieses Mitglied aus der Organisation entfernen?",
+    "workspace": {
+      "deleteWorkspace": "Arbeitsbereich löschen",
+      "leaveWorkspace": "Arbeitsbereich verlassen",
+      "deleteBody": "Diesen Arbeitsbereich und alles darin dauerhaft entfernen.",
+      "leaveBody": "Diesen Arbeitsbereich verlassen — für die Rückkehr brauchst du eine neue Einladung.",
+      "deleteConfirm": "Diesen Arbeitsbereich löschen? Seine Projekte, Mitglieder und Einstellungen werden für alle entfernt. Das kann nicht rückgängig gemacht werden.",
+      "leaveConfirm": "Diesen Arbeitsbereich verlassen? Du verlierst den Zugriff, bis du erneut eingeladen wirst."
+    },
     "toast": {
       "teamNameRequired": "Teamname ist erforderlich",
       "teamCreated": "Team \"{name}\" erstellt — es wird jetzt gewechselt…",
@@ -291,7 +303,12 @@
       "removeFailed": "Entfernen fehlgeschlagen",
       "cancelFailed": "Abbrechen fehlgeschlagen",
       "accessUpdated": "Zugriff aktualisiert",
-      "loadGrantsFailed": "Berechtigungen konnten nicht geladen werden"
+      "loadGrantsFailed": "Berechtigungen konnten nicht geladen werden",
+      "deleteFailed": "Arbeitsbereich konnte nicht gelöscht werden",
+      "deleteBillingActive": "Kündige das aktive Abo dieses Arbeitsbereichs, bevor du ihn löschst.",
+      "deleted": "Arbeitsbereich gelöscht",
+      "leaveFailed": "Arbeitsbereich konnte nicht verlassen werden",
+      "left": "Arbeitsbereich verlassen"
     }
   },
   "inviteMember": {
@@ -318,6 +335,7 @@
     "toast": {
       "failedSend": "Einladung konnte nicht gesendet werden",
       "invitationSent": "Einladung an {email} gesendet",
+      "personalOrgBlocked": "In persönlichen Arbeitsbereichen können keine Mitglieder eingeladen werden. Erstelle zuerst eine Team-Organisation und sende dann Einladungen.",
       "updateMailSourceFailed": "Mailquelle konnte nicht aktualisiert werden"
     }
   },
@@ -328,7 +346,8 @@
     "currentMode": "Aktueller Modus",
     "singleUserLocal": "Einzelbenutzer (lokal)",
     "migrate": "Migrieren",
-    "ownerOnlyTitle": "Nur der Eigentümer des Arbeitsbereichs kann migrieren"
+    "ownerOnlyTitle": "Nur der Eigentümer des Arbeitsbereichs kann migrieren",
+    "comingSoon": "Die direkte Verbindung zu einer entfernten Instanz kommt bald."
   },
   "cloud": {
     "checking": "Wird geprüft…",

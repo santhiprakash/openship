@@ -157,7 +157,7 @@ function MailServerCard({
             {mailHost && (
               <span className="text-muted-foreground/70 group-hover:text-foreground transition-colors shrink-0">
                 {copied ? (
-                  <Check className="size-3.5 text-emerald-500" />
+                  <Check className="size-3.5 text-success" />
                 ) : (
                   <Copy className="size-3.5" />
                 )}
@@ -320,7 +320,7 @@ function MailStatsCard({ serverId }: { serverId: string }) {
       {loading ? (
         <StatsSkeleton />
       ) : error ? (
-        <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
+        <p className="text-xs text-danger">{error}</p>
       ) : stats ? (
         <div className="space-y-3">
           <StatRow

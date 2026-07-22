@@ -58,8 +58,46 @@ const envSchema = z.object({
    */
   OPENSHIP_LOCAL_DASHBOARD_URL: z.string().optional(),
 
+  /**
+   * Set when this instance is served on a PUBLIC URL (e.g. `openship up
+   * --public-url https://ops.example.com` on a VPS). Two security effects:
+   *   - zero-auth is refused outright (a network-exposed control plane must
+   *     require login — the loopback guard is meaningless once a same-box
+   *     reverse proxy forwards remote traffic as loopback), and
+   *   - the default auth mode for a fresh install becomes "local".
+   * Presence, not the value, is the signal.
+   */
+  OPENSHIP_PUBLIC_URL: z.string().optional(),
+
+  /**
+   * Force login (no zero-auth) even in desktop DEPLOY_MODE. The CLI sets this
+   * for every `openship up` — a CLI-managed instance always requires a real
+   * admin account (created by the CLI's setup), unlike the Electron desktop app
+   * which keeps loopback zero-auth. Presence, not value, is the signal.
+   */
+  OPENSHIP_REQUIRE_AUTH: envBool("false"),
+
+  /**
+   * Managed edge: at boot, install OpenResty + certbot on THIS machine and
+   * route OPENSHIP_PUBLIC_URL's host → the local dashboard with a free Let's
+   * Encrypt cert (reusing the app-deploy route/SSL pipes). Set by the CLI
+   * wizard's "managed edge" path; off = bring-your-own reverse proxy.
+   */
+  OPENSHIP_MANAGED_EDGE: envBool("false"),
+  /** Loopback dashboard port the managed edge proxies to (defaults 3001). */
+  OPENSHIP_DASHBOARD_PORT: z.coerce.number().int().positive().catch(3001),
+  /** Let's Encrypt contact email for the managed edge (defaults to the admin). */
+  OPENSHIP_ACME_EMAIL: z.string().optional(),
+
   /* ---------- Mode ---------- */
   CLOUD_MODE: envBool("false"),
+  /**
+   * Openship Cloud only: hard cap on projects per user (a cloud org maps 1:1
+   * to its owning SaaS user, so per-org == per-user here). Enforced at project
+   * create + ensure. Self-hosted ignores this and uses the high
+   * SYSTEM.PROJECTS.MAX_PER_USER safety cap instead. Default 2 for now.
+   */
+  CLOUD_MAX_PROJECTS_PER_USER: z.coerce.number().int().min(1).default(2),
   /**
    * Deployment mode - determines the runtime + infrastructure combination:
     *   - "docker"  (default) → Docker runtime + OpenResty routing/SSL (self-hosted)
@@ -169,11 +207,12 @@ const envSchema = z.object({
   OBLIEN_CLIENT_ID: z.string().optional(),
   OBLIEN_CLIENT_SECRET: z.string().optional(),
   /**
-   * Shared secret returned by Oblien when we register a webhook via
-   * `webhooks.create`. Used to verify the `X-Webhook-Signature` HMAC on
-   * inbound deliveries to /api/billing/oblien-webhook. Missing → handler
-   * rejects every request (CLOUD_MODE only — self-hosted never registers
-   * Oblien webhooks).
+   * Shared secret we hand Oblien when registering our webhook via
+   * `webhooks.create` (see `ensureOblienWebhook`). Oblien signs each delivery
+   * as `X-Webhook-Signature = HMAC-SHA256(secret, rawBody)` (hex, body only —
+   * no timestamp). The receiver at /api/billing/oblien-webhook verifies it in
+   * constant time; missing secret → 503 (never silently accept unverified
+   * traffic). CLOUD_MODE only — self-hosted never registers Oblien webhooks.
    */
   OBLIEN_WEBHOOK_SECRET: z.string().optional(),
 
@@ -379,6 +418,29 @@ if (env.BETTER_AUTH_COOKIE_DOMAIN) {
   validateCookieDomain(env.BETTER_AUTH_COOKIE_DOMAIN);
 }
 
+// ─── OPENSHIP_PUBLIC_URL validation ───────────────────────────────────────
+//
+// It's used to build absolute callback URLs handed to external services
+// (GitHub webhooks) and injected into trustedOrigins. A malformed value would
+// register a dead webhook and pollute the CORS allowlist with a junk origin, so
+// fail-loud at boot instead of silently later (mirrors the cookie-domain guard).
+if (env.OPENSHIP_PUBLIC_URL) {
+  const raw = env.OPENSHIP_PUBLIC_URL.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(
+      `OPENSHIP_PUBLIC_URL="${raw}" is not a valid absolute URL (expected e.g. https://ops.example.com).`,
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      `OPENSHIP_PUBLIC_URL must use http or https (got "${parsed.protocol}" in "${raw}").`,
+    );
+  }
+}
+
 function validateCookieDomain(raw: string): void {
   const value = raw.trim();
   if (!value.startsWith(".")) {
@@ -430,12 +492,14 @@ function validateCookieDomain(raw: string): void {
 if (!env.CLOUD_MODE) {
   // GITHUB_APP_SLUG is intentionally NOT in this list — it IS consumed
   // on self-hosted (by getInstallUrl in github.auth.ts to build the
-  // install link the dashboard shows). The other vars are App-private
-  // credentials that have moved to api.openship.io exclusively.
+  // install link the dashboard shows). GITHUB_WEBHOOK_SECRET is also NOT
+  // listed: it's no longer REQUIRED (webhooks now mint + persist a
+  // per-project signing secret), but it stays a valid LEGACY FALLBACK the
+  // webhook verifier still accepts — so we don't nag operators to remove it.
+  // The vars below ARE App-private credentials that moved to api.openship.io.
   const stale = [
     env.GITHUB_APP_ID && "GITHUB_APP_ID",
     (env.GITHUB_PRIVATE_KEY || env.GITHUB_PRIVATE_KEY_BASE64) && "GITHUB_PRIVATE_KEY",
-    env.GITHUB_WEBHOOK_SECRET && "GITHUB_WEBHOOK_SECRET",
   ].filter(Boolean);
   if (stale.length > 0) {
     console.warn(
@@ -460,6 +524,10 @@ export const trustedOrigins = [
   ...new Set([
     runtimeTarget.dashboard,
     runtimeTarget.api,
+    // Public serving (openship up --public-url): the browser's origin is the
+    // operator's public URL, so it must be trusted for CORS, the origin guard,
+    // and Better Auth's login CSRF check — otherwise remote login is rejected.
+    ...(env.OPENSHIP_PUBLIC_URL ? [env.OPENSHIP_PUBLIC_URL.replace(/\/+$/, "")] : []),
     ...extraTrustedOrigins,
     ...(env.NODE_ENV === "production"
       ? []

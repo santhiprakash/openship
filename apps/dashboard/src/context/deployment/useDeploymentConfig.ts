@@ -920,6 +920,10 @@ export function useDeploymentConfig() {
             // buildPreparedConfig (shared with detection) doesn't load production
             // env — overlay the saved values we fetched above.
             envVars,
+            // Repo-less catalog app: deploys from its saved service rows with no
+            // git source (the deploy guards treat this like local/upload).
+            isApp: Boolean((project as { isApp?: boolean }).isApp),
+            appTemplateId: (project as { appTemplateId?: string }).appTemplateId,
           };
         });
 

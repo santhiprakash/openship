@@ -1,0 +1,186 @@
+{
+  "backups": {
+    "section": "Backup schedules",
+    "sectionDesc": "Automatic backups scheduled per project or service. Managed under each project's Backups tab.",
+    "projectDefault": "Project default",
+    "mailServer": "Mail server",
+    "manage": "Manage in Backups",
+    "badge": "Backup",
+    "never": "Never run",
+    "status": {
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "running": "Running"
+    }
+  },
+  "title": "Jobs",
+  "subtitle": "Built-in maintenance and custom commands running on your servers.",
+  "empty": "No scheduled jobs yet.",
+  "searchPlaceholder": "Search jobs…",
+  "noResults": "No jobs match your filters.",
+  "overview": {
+    "title": "At a glance",
+    "subtitle": "Jobs on this instance",
+    "all": "All jobs",
+    "running": "Running",
+    "failed": "Failed",
+    "scheduled": "Scheduled",
+    "disabled": "Disabled"
+  },
+  "loadFailed": "Failed to load jobs.",
+  "kind": {
+    "system": "System",
+    "custom": "Custom"
+  },
+  "fields": {
+    "schedule": "Schedule",
+    "nextRun": "Next run",
+    "lastRun": "Last run",
+    "never": "Never run",
+    "notScheduled": "Not scheduled"
+  },
+  "status": {
+    "success": "Success",
+    "failed": "Failed",
+    "running": "Running"
+  },
+  "actions": {
+    "run": "Run now",
+    "running": "Running…",
+    "edit": "Edit schedule",
+    "save": "Save",
+    "cancel": "Cancel",
+    "enable": "Enable",
+    "disable": "Disable",
+    "viewLogs": "Logs"
+  },
+  "cronHint": "Standard 5-field cron (minute hour day month weekday), UTC.",
+  "toast": {
+    "ran": "{label} started.",
+    "ranFailed": "Failed to run {label}.",
+    "saved": "Schedule updated for {label}.",
+    "saved2": "Job updated.",
+    "saveFailed": "Failed to update {label}.",
+    "enabled": "{label} enabled.",
+    "disabled": "{label} disabled.",
+    "toggleFailed": "Failed to update {label}.",
+    "title": "Jobs",
+    "created": "Job created.",
+    "createFailed": "Failed to create job.",
+    "deleted": "Job deleted.",
+    "deleteFailed": "Failed to delete job."
+  },
+  "newJob": "New job",
+  "sections": {
+    "system": "System jobs",
+    "systemDesc": "Built-in maintenance on this instance.",
+    "custom": "Custom jobs",
+    "customDesc": "Commands you run on your servers, on a schedule."
+  },
+  "customEmpty": {
+    "title": "No custom jobs yet",
+    "desc": "Run a command on one of your servers — on a schedule, once, or on an event — with retry, secrets, live logs and notifications.",
+    "cta": "Create job",
+    "docs": "Docs"
+  },
+  "create": {
+    "title": "New job",
+    "name": "Name",
+    "namePlaceholder": "Nightly DB vacuum",
+    "server": "Server",
+    "servers": "Servers",
+    "noServers": "No servers connected yet — add one first.",
+    "command": "Command",
+    "commandPlaceholder": "pg_dump ... > /backups/db.sql",
+    "commandHint": "Runs over SSH on the selected server(s). A `docker run --rm image cmd` works too.",
+    "scheduleType": "When to run",
+    "scheduleTypes": {
+      "recurring": "On a schedule",
+      "once": "Once",
+      "manual": "Manual"
+    },
+    "sections": {
+      "basics": "Basics",
+      "schedule": "Schedule",
+      "servers": "Target servers",
+      "reliability": "Reliability",
+      "environment": "Environment",
+      "triggers": "Dependencies & triggers",
+      "notifications": "Notifications"
+    },
+    "schedule": "Schedule (cron)",
+    "runAt": "Run at",
+    "manualHint": "Runs only when triggered — Run Now, a dependency, or an event.",
+    "timeout": "Timeout (s)",
+    "retryAttempts": "Max attempts",
+    "retryBackoff": "Backoff (s)",
+    "advanced": "Advanced",
+    "env": "Environment variables",
+    "addVar": "Add variable",
+    "secrets": "Secrets",
+    "addSecret": "Add secret",
+    "replaceSecrets": "Replace secrets",
+    "secretsSet": "secret(s) set",
+    "noSecrets": "No secrets set.",
+    "dependencies": "Run after",
+    "dependenciesHint": "This job runs after the selected job(s) succeed.",
+    "triggers": "Event triggers",
+    "notifications": "Notifications",
+    "noChannels": "No notification channels yet — add one in Settings → Notifications.",
+    "notificationsHint": "Overrides the global notification settings for this job.",
+    "submit": "Create job",
+    "creating": "Saving…",
+    "cancel": "Cancel",
+    "needServer": "Connect a server first",
+    "pasteEnv": "Paste .env",
+    "uploadEnv": "Upload .env",
+    "envPasteEmpty": "No variables found",
+    "comingSoon": "Soon",
+    "setupChannel": "Set up a channel",
+    "customTriggerSoon": "Custom trigger",
+    "docsLink": "Learn about jobs",
+    "docsBody": "Schedules, retries, secrets & notifications",
+    "summary": {
+      "title": "Summary",
+      "command": "Command",
+      "schedule": "Schedule",
+      "targets": "Targets",
+      "retry": "Retry",
+      "timeout": "Timeout",
+      "notify": "Notifications",
+      "none": "—",
+      "retryOff": "None"
+    }
+  },
+  "edit": {
+    "title": "Edit job",
+    "action": "Edit",
+    "save": "Save changes"
+  },
+  "detail": {
+    "back": "Back to jobs",
+    "tabs": {
+      "overview": "Overview",
+      "runs": "Runs"
+    },
+    "servers": "Servers",
+    "retry": "Retry",
+    "retryValue": "{n} attempts, {s}s backoff",
+    "notifyValue": "{c} channel(s) on {s}",
+    "onceAt": "Once at",
+    "noRuns": "No runs yet."
+  },
+  "delete": {
+    "action": "Delete",
+    "confirm": "Delete this job?",
+    "deleting": "Deleting…"
+  },
+  "logs": {
+    "title": "Run logs",
+    "streaming": "Streaming…",
+    "empty": "No output yet.",
+    "close": "Close",
+    "exit": "Exit code {code}"
+  }
+}

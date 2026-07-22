@@ -1,5 +1,6 @@
 import { AlertTriangle, KeyRound, RefreshCw, Settings2, Wifi, WifiOff } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { classifyConnectivityError, type ConnectivityCode } from "@repo/core";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 
 export type ConnectionErrorKind =
@@ -8,29 +9,37 @@ export type ConnectionErrorKind =
   | "no_server"     // no server row / invalid config
   | "unknown";
 
+/** Map the unified ConnectivityCode down to the banner's coarser kinds. */
+const CODE_TO_KIND: Record<ConnectivityCode, ConnectionErrorKind> = {
+  reachable: "unknown",
+  auth_failed: "auth",
+  unreachable: "unreachable",
+  timeout: "unreachable",
+  protocol_error: "unknown",
+  permission_denied: "unknown",
+  misconfigured: "no_server",
+  unknown: "unknown",
+};
+
 /**
  * Classify an SSH check error into something the UI can show actionable copy
- * for. The server returns shaped errors via `ApiError.body`, but we also
- * fall back to substring matching the message so genuine ECONNREFUSED /
- * ETIMEDOUT strings get the right kind even when the server skipped the tag.
+ * for. Prefers an explicit `code` from the unified connectivity result; else
+ * falls back to the shared core classifier over the legacy `error` tag +
+ * message (single source of truth, shared with the backend).
  */
 export function classifyConnectionError(
   body: unknown,
   message: string,
 ): ConnectionErrorKind {
+  const code = (body && typeof body === "object" && "code" in body)
+    ? ((body as { code?: ConnectivityCode }).code)
+    : undefined;
+  if (code) return CODE_TO_KIND[code] ?? "unknown";
+
   const tag = (body && typeof body === "object" && "error" in body)
     ? ((body as { error?: unknown }).error as string | undefined)
     : undefined;
-  if (tag === "auth_failed") return "auth";
-  if (tag === "no_server") return "no_server";
-  if (tag === "connection_failed") return "unreachable";
-
-  const lower = message.toLowerCase();
-  if (/(econnrefused|etimedout|enotfound|ehostunreach|connection reset|connection refused|connection timed out|host unreachable|no route to host)/i.test(lower)) {
-    return "unreachable";
-  }
-  if (/(auth|permission denied|publickey|password)/i.test(lower)) return "auth";
-  return "unknown";
+  return CODE_TO_KIND[classifyConnectivityError(message, tag).code] ?? "unknown";
 }
 
 export function ConnectionBanner(props: {
@@ -80,11 +89,11 @@ export function ConnectionBanner(props: {
   })();
 
   const tone = copy.tone === "red"
-    ? "bg-red-500/[0.06] border-red-500/25 text-red-700 dark:text-red-400"
-    : "bg-amber-500/[0.06] border-amber-500/25 text-amber-700 dark:text-amber-400";
+    ? "bg-danger-bg border-danger-border text-danger"
+    : "bg-warning-bg border-warning-border text-warning";
   const iconBg = copy.tone === "red"
-    ? "bg-red-500/10 text-red-600 dark:text-red-400"
-    : "bg-amber-500/10 text-amber-600 dark:text-amber-400";
+    ? "bg-danger-bg text-danger"
+    : "bg-warning-bg text-warning";
 
   return (
     <div className={`rounded-2xl border p-4 mb-6 ${tone}`}>

@@ -33,7 +33,8 @@
     "sourceLocal": "محلي",
     "services": "الخدمات",
     "static": "ثابت",
-    "standalone": "مستقل"
+    "standalone": "مستقل",
+    "updateAvailable": "Update"
   },
   "hosting": {
     "cloud": "السحابة",
@@ -108,6 +109,7 @@
     "production": "الإنتاج",
     "lastDeploy": "آخر نشر",
     "tabs": {
+      "appSettings": "الإعدادات",
       "overview": "نظرة عامة",
       "services": "التطبيقات والخدمات",
       "domains": "النطاقات",
@@ -185,7 +187,8 @@
     "topPaths": "أهم المسارات",
     "requestCount": "{count} طلب",
     "statusActive": "مفعّل",
-    "statusOff": "معطّل"
+    "statusOff": "معطّل",
+    "server": "الخادم"
   },
   "stats": {
     "serverRequests": "طلبات الخادم",
@@ -266,6 +269,10 @@
     "newCommitTitle": "التزام جديد متاح",
     "newCommitOn": "على",
     "newCommitDeployedOn": "— أنت منشور على",
+    "newVersionTitle": "إصدار جديد متاح",
+    "newVersionAvailable": "يتوفر إصدار أحدث:",
+    "newVersionDeployed": "— أنت منشور على",
+    "deployVersion": "نشر الإصدار الجديد",
     "deploying": "جارٍ النشر…",
     "redeployLatest": "إعادة نشر الأحدث",
     "deployLatestTitle": "نشر أحدث التغييرات",

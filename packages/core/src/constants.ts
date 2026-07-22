@@ -113,10 +113,19 @@ export const PLANS: Record<PlanTierId, PlanDefinition> = {
   free: {
     id: "free",
     name: "Free",
-    description: "Get started with 500 credits per month",
+    description: "Get started for free",
     price: { monthly: 0, annual: 0 },
     stripePriceId: { monthly: null, annual: null },
-    monthlyCredits: 500_000, // milli-credits
+    // Public dollar `price` on the paid tiers is `null` — the UI renders
+    // "coming soon" and the Subscribe CTA stays disabled. Cloud pricing is
+    // intentionally NOT published yet. `monthlyCredits` (the CPU-time/credit
+    // quota pushed to Oblien) is real so tiers still enforce — it's an internal
+    // number, never shown as a price. NOTE (tune before launch): these credit
+    // numbers are placeholders sized to Oblien's 10,000,000-credit ceiling; the
+    // true credit-per-$/per-cpu-minute rate is Oblien-configured. 1 openship
+    // credit = 1 Oblien credit = 1000 milli (the wrapper divides by 1000 at the
+    // Oblien boundary). Self-hosted is free and surfaces none of these numbers.
+    monthlyCredits: 500_000, // 500 credits — free-tier allowance
     oblienLimits: {
       max_workspaces: 1,
       max_vcpus: 2,
@@ -124,7 +133,6 @@ export const PLANS: Record<PlanTierId, PlanDefinition> = {
       max_disk_gb: 10,
     },
     features: [
-      "500 credits/mo",
       "1 workspace",
       "Community support",
     ],
@@ -135,12 +143,12 @@ export const PLANS: Record<PlanTierId, PlanDefinition> = {
     id: "pro",
     name: "Pro",
     description: "For solo builders shipping production workloads",
-    price: { monthly: 20_00, annual: 192_00 }, // cents (20% annual discount)
+    price: { monthly: null, annual: null }, // coming soon — pricing not published
     stripePriceId: {
       monthly: process.env.STRIPE_PRICE_PRO_MONTHLY ?? "price_pro_monthly_placeholder",
       annual: process.env.STRIPE_PRICE_PRO_ANNUAL ?? "price_pro_annual_placeholder",
     },
-    monthlyCredits: 5_000_000,
+    monthlyCredits: 10_000_000, // 10,000 credits/mo (placeholder — tune before launch)
     oblienLimits: {
       max_workspaces: 10,
       max_vcpus: 16,
@@ -148,7 +156,6 @@ export const PLANS: Record<PlanTierId, PlanDefinition> = {
       max_disk_gb: 100,
     },
     features: [
-      "5,000 credits/mo",
       "Up to 10 workspaces",
       "Email support",
     ],
@@ -159,12 +166,12 @@ export const PLANS: Record<PlanTierId, PlanDefinition> = {
     id: "team",
     name: "Team",
     description: "For teams collaborating on shared infra",
-    price: { monthly: 50_00, annual: 480_00 },
+    price: { monthly: null, annual: null }, // coming soon — pricing not published
     stripePriceId: {
       monthly: process.env.STRIPE_PRICE_TEAM_MONTHLY ?? "price_team_monthly_placeholder",
       annual: process.env.STRIPE_PRICE_TEAM_ANNUAL ?? "price_team_annual_placeholder",
     },
-    monthlyCredits: 25_000_000,
+    monthlyCredits: 60_000_000, // 60,000 credits/mo (placeholder — tune before launch)
     oblienLimits: {
       max_workspaces: 50,
       max_vcpus: 64,
@@ -172,7 +179,6 @@ export const PLANS: Record<PlanTierId, PlanDefinition> = {
       max_disk_gb: 500,
     },
     features: [
-      "25,000 credits/mo",
       "Up to 50 workspaces",
       "Team collaboration",
       "Priority email support",

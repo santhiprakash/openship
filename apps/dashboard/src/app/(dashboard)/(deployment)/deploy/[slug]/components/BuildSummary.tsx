@@ -6,7 +6,8 @@ import { useDeployment } from "@/context/DeploymentContext";
 import { getPublicEndpointHosts, usesServiceDeployment } from "@/context/deployment/types";
 import { usePlatform } from "@/context/PlatformContext";
 import { getFrameworkConfig } from "@/components/import-project/Frameworks";
-import { STACKS, STACK_ICONS } from "@repo/core";
+import { STACKS } from "@repo/core";
+import { DockerMark } from "@/components/icons/DockerMark";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 
 const BuildSummary: React.FC = () => {
@@ -19,7 +20,6 @@ const BuildSummary: React.FC = () => {
 
   const fw = isApp ? getFrameworkConfig(config.framework) : null;
   const stackDef = STACKS[config.framework as keyof typeof STACKS];
-  const dockerIcon = STACK_ICONS["docker"];
 
   const services = config.services || [];
   const exposedServices = services.filter((s) => s.exposed);
@@ -143,11 +143,17 @@ const BuildSummary: React.FC = () => {
         {!isApp && (
           <div className="rounded-lg border border-border/40 bg-background/40 p-3 space-y-2">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-7 h-7 rounded-md bg-muted/60 flex items-center justify-center overflow-hidden shrink-0">
-                {dockerIcon && !isServices ? (
-                  <img src={dockerIcon} alt="Docker" className="w-4 h-4" />
-                ) : isServices ? (
-                  <Layers className="size-3.5 text-muted-foreground" />
+              <div
+                className={`w-7 h-7 rounded-md flex items-center justify-center overflow-hidden shrink-0 ${
+                  isServices || isDocker
+                    ? "bg-[#2496ED]/12 ring-1 ring-inset ring-[#2496ED]/25"
+                    : "bg-muted/60"
+                }`}
+              >
+                {isServices || isDocker ? (
+                  // Docker / Compose: the whale in its brand blue on a faint
+                  // tinted chip — a light brand touch, not the full logo lockup.
+                  <DockerMark className="size-4 text-[#2496ED]" />
                 ) : (
                   <Container className="size-3.5 text-muted-foreground" />
                 )}

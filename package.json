@@ -1,6 +1,6 @@
 {
   "name": "openship",
-  "version": "0.1.11",
+  "version": "0.2.1",
   "description": "Open-source, self-hostable deployment platform",
   "license": "Apache-2.0",
   "repository": {
@@ -15,18 +15,21 @@
     "build": "turbo run build",
     "build:desktop": "bun run --cwd apps/desktop make",
     "build:cli": "bun run --cwd apps/cli build",
+    "cli": "bun run --cwd apps/cli cli",
     "build:server": "bun run --cwd apps/api build-release",
     "build:email": "bun run --cwd apps/email build",
+    "update:geoip": "node scripts/update-geoip.mjs",
     "start:desktop": "node apps/desktop/build/run.mjs",
-    "dev": "turbo run dev --concurrency=20",
+    "dev:all": "turbo run dev --concurrency=20",
     "dev:api": "turbo run dev --filter=@repo/api...",
-    "dev:local": "turbo run dev --filter=@repo/api --filter=@repo/dashboard --concurrency=10",
+    "dev": "turbo run dev --filter=@repo/api --filter=@repo/dashboard --concurrency=10",
     "dev:saas": "turbo run dev:saas --filter=@repo/api --filter=@repo/dashboard --concurrency=10",
+    "dev:local-saas": "turbo run dev:local-saas --filter=@repo/api --filter=@repo/dashboard --concurrency=10",
     "dev:dashboard": "turbo run dev --filter=@repo/dashboard",
     "dev:desktop": "turbo run dev --filter=@repo/desktop",
     "dev:web": "turbo run dev --filter=@repo/web",
     "dev:email": "turbo run dev --filter=@repo/email",
-    "dev:all": "turbo run dev",
+    "dev:turbo": "turbo run dev",
     "dev:clean": "ps -A -o pid,command 2>/dev/null | grep -E 'src/index\\.ts|next/dist/bin/next' | grep -v grep | awk '{print $1}' | xargs -I {} kill -9 {} 2>/dev/null; for p in 4000 4100 3001 3002; do pid=$(lsof -ti tcp:$p 2>/dev/null); [ -n \"$pid\" ] && kill -9 $pid 2>/dev/null; done; echo 'cleaned'",
     "lint": "turbo run lint",
     "test": "turbo run test",
@@ -36,7 +39,8 @@
     "db:migrate": "turbo run db:migrate --filter=@repo/db",
     "clean": "turbo run clean && rm -rf node_modules",
     "clean:modules": "find apps packages -name node_modules -type d -prune -exec rm -rf {} + && rm -rf node_modules",
-    "release": "bun scripts/release.ts"
+    "release": "bun scripts/release.ts",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "devDependencies": {
     "prettier": "^3.8.1",

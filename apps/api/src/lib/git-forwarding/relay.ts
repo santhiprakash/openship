@@ -189,10 +189,12 @@ function handleConnection(
 }
 
 /**
- * Open a credential relay for a session. Returns `null` when the server's
- * executor can't host the reverse tunnel (system-ssh / agent-auth path) —
- * forwarding then cleanly no-ops and the caller proceeds without it (HTTPS
- * relay is the only forwarding path; SSH-protocol git is not covered).
+ * Open a credential relay for a session. Both remote executors host the reverse
+ * tunnel: ssh2 (`SshExecutor`, in-process channels) and system-ssh
+ * (`SystemSshExecutor`, `ssh -O forward -R` over the ControlMaster — agent
+ * auth). Returns `null` only when the executor exposes no `reverseForward` at
+ * all (e.g. `LocalExecutor`, which never needs a relay) — forwarding then
+ * cleanly no-ops and the caller proceeds without it.
  */
 export async function openRelay(opts: {
   serverId: string;
@@ -206,7 +208,7 @@ export async function openRelay(opts: {
   expectedRepo?: string;
 }): Promise<GitCredentialRelay | null> {
   const executor = await sshManager.acquire(opts.serverId);
-  if (typeof executor.reverseForward !== "function") return null; // ssh2 path only
+  if (typeof executor.reverseForward !== "function") return null; // no tunnel (e.g. LocalExecutor)
 
   sshManager.retain(opts.serverId);
   const nonce = randomBytes(32).toString("base64url");

@@ -50,14 +50,14 @@ export const DeploymentHeader: React.FC<DeploymentHeaderProps> = ({ stats, proje
 
         {/* Success */}
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0">
-            <CheckCircle2 className="size-4 text-emerald-500" />
+          <div className="w-8 h-8 rounded-lg bg-success-bg flex items-center justify-center shrink-0">
+            <CheckCircle2 className="size-4 text-success" />
           </div>
           <div>
             <span className="text-sm text-muted-foreground">{t.deployments.stats.success}</span>
             <div className="flex items-baseline gap-1.5">
               <span className="text-lg font-semibold text-foreground">{stats.success}</span>
-              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-success-bg text-success">
                 {successRate}%
               </span>
             </div>
@@ -66,8 +66,8 @@ export const DeploymentHeader: React.FC<DeploymentHeaderProps> = ({ stats, proje
 
         {/* Failed */}
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center shrink-0">
-            <XCircle className="size-4 text-red-500" />
+          <div className="w-8 h-8 rounded-lg bg-danger-bg flex items-center justify-center shrink-0">
+            <XCircle className="size-4 text-danger" />
           </div>
           <div>
             <span className="text-sm text-muted-foreground">{t.deployments.stats.failed}</span>
@@ -77,8 +77,8 @@ export const DeploymentHeader: React.FC<DeploymentHeaderProps> = ({ stats, proje
 
         {/* In Progress */}
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center shrink-0">
-            <Loader2 className={`size-4 text-amber-500${activeCount > 0 ? " animate-spin" : ""}`} />
+          <div className="w-8 h-8 rounded-lg bg-warning-bg flex items-center justify-center shrink-0">
+            <Loader2 className={`size-4 text-warning${activeCount > 0 ? " animate-spin" : ""}`} />
           </div>
           <div>
             <span className="text-sm text-muted-foreground">{t.deployments.stats.inProgress}</span>

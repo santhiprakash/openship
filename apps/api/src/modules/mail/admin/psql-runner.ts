@@ -163,12 +163,15 @@ export async function transaction(
 ): Promise<void> {
   const body = ["BEGIN;", ...statements.map((s) => s.replace(/;?\s*$/, ";")), "COMMIT;"].join("\n");
 
-  // Use a heredoc so we don't need to shell-escape multiline SQL. `<<-EOF`
-  // with a tab-indented marker is the standard pattern; we don't indent
-  // the body so a plain `<<EOF` is enough.
-  const cmd = `sudo -u postgres psql -d vmail -A -t -v ON_ERROR_STOP=1 <<'__OPENSHIP_SQL_EOF__'\n${body}\n__OPENSHIP_SQL_EOF__`;
-
-  await runCmd(serverIdOrExec, cmd);
+  // Pass the whole transaction as a single shell-quoted `-c` argument — the
+  // same safe path `execute()` uses. NEVER a heredoc: a heredoc with a fixed
+  // delimiter lets any value containing a line equal to that delimiter close it
+  // early and turn the following lines into shell commands (OS command
+  // injection). shellQuote wraps the multiline SQL in one inert argv string, so
+  // newlines and any delimiter-looking text stay literal data. psql `-c` runs a
+  // multi-statement BEGIN;…COMMIT; string in one transaction; ON_ERROR_STOP=1
+  // still rolls the whole block back and surfaces the error.
+  await runCmd(serverIdOrExec, psqlCommand(body));
 }
 
 /**

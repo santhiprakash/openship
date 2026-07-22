@@ -1,7 +1,7 @@
 import { api } from "./client";
 import { endpoints } from "./endpoints";
 import type { StackId, ComposeAdvanced, RoutingConfig } from "@repo/core";
-import type { CloudResourceTier, CloudResourceCustom } from "@/context/deployment/types";
+import type { CloudResourceTier, CloudResourceCustom, PublicEndpoint, PortCheckUI, OutputCheckUI } from "@/context/deployment/types";
 
 export type PrepareProjectSource =
   | { source?: "github"; owner: string; repo: string; branch?: string; force?: string | boolean }
@@ -34,6 +34,10 @@ export interface PrepareComposeService {
   domain?: string;
   customDomain?: string;
   domainType?: "free" | "custom";
+  /** Multi-route: additional public routes (one per port). Reuses the shared
+   *  PublicEndpoint shape so the routing card edits them directly; entry[0]
+   *  mirrors the scalar exposedPort/domain above. */
+  publicEndpoints?: PublicEndpoint[];
 }
 
 export interface PrepareAppConfig {
@@ -132,6 +136,22 @@ export const deployApi = {
    *  the pending marker so it stops reading as "Action Required". */
   keep: (id: string) =>
     api.post<any>(endpoints.deploy.keep(id)),
+
+  /** Dismiss an advisory port-check for `target` (the exposed port for a
+   *  single-app, or the service id for a compose service) so it won't re-nag
+   *  after a refresh. */
+  skipPortCheck: (id: string, target: number | string) =>
+    api.post<any>(endpoints.deploy.skipPortCheck(id), { target }),
+
+  /** Live, on-demand port-reachability audit of a PROJECT's active deployment
+   *  (advisory) — powers the Domains tab's "port not reachable" hint. */
+  checkPorts: (projectId: string) =>
+    api.post<{ data: PortCheckUI[] }>(endpoints.projects.portCheck(projectId)),
+
+  /** Live, on-demand static-output audit of a PROJECT's active deployment
+   *  (advisory; static apps) — powers the Domains tab's "no output at path" hint. */
+  checkOutput: (projectId: string) =>
+    api.post<{ data: OutputCheckUI[] }>(endpoints.projects.outputCheck(projectId)),
 
   /** Roll back to a previous successful deployment. The orchestrator
    *  validates artifact-retained + not-already-active before swapping. */

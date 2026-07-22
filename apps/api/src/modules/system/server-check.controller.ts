@@ -18,16 +18,20 @@ import { env } from "../../config";
 import {
   checkComponents,
   type CommandExecutor,
-  createExecutor,
   COMPONENT_INSTALLERS,
   COMPONENT_UNINSTALLERS,
+  EdgeMigrateRequested,
   getRemovalSupport,
   isSshAuthError,
+  recoverInterruptedTakeover,
+  runEdgeTakeover,
   SYSTEM_COMPONENTS,
   getSystemComponentDefinition,
 } from "@repo/adapters";
 import { formatDuration, systemDebug } from "@/lib/system-debug";
 import { sshManager, buildSshConfig } from "../../lib/ssh-manager";
+import { runConnectivityCheck } from "../../lib/connectivity";
+import "../../lib/connectivity-checks"; // registers ssh / ssh-server / backup-destination
 import { repos } from "@repo/db";
 import { getRequestContext } from "../../lib/request-context";
 import { permission } from "../../lib/permission";
@@ -40,7 +44,12 @@ import {
   appendSetupLog,
   finishSetupSession,
   subscribeSetupSession,
+  promptSetupUser,
+  respondToSetupPrompt,
+  rejectPendingSetupPrompt,
+  setupPromptState,
 } from "./setup-session";
+import type { PromptUserFn } from "@repo/adapters";
 
 // ─── Allowlisted components ──────────────────────────────────────────────────
 
@@ -110,6 +119,33 @@ function resolveInfraComponents(): string[] {
  * Body: { sshHost, sshPort?, sshUser?, sshAuthMethod, sshPassword?, sshKeyPath?, sshKeyPassphrase? }
  * Returns: { ok: boolean, message: string }
  */
+/**
+ * Run an ephemeral SSH echo test from request-body credentials (no DB row).
+ * Shared by the authenticated `/test-connection` and the pre-auth first-run
+ * `/onboarding/test-connection` so both behave identically.
+ */
+async function runEphemeralConnectionTest(c: Context): Promise<Response> {
+  const startedAt = Date.now();
+  const built = await buildEphemeralSshConfig(c);
+  if (built instanceof Response) return built; // validation error already sent
+
+  systemDebug("system-check", `test-connection:start`);
+  const result = await runConnectivityCheck("ssh", built);
+  systemDebug(
+    "system-check",
+    `test-connection:done ok=${result.ok} code=${result.code} (${formatDuration(startedAt)})`,
+  );
+
+  // Preserve the historical HTTP contract (bad creds → 400, other failures →
+  // 502) and the friendly auth copy; `code` is additive for richer client UI.
+  const status = result.ok ? 200 : result.code === "auth_failed" ? 400 : 502;
+  const message =
+    result.code === "auth_failed"
+      ? "Authentication failed - check your credentials"
+      : result.message;
+  return c.json({ ok: result.ok, message, code: result.code }, status);
+}
+
 export async function testConnection(c: Context) {
   if (env.CLOUD_MODE) return c.json({ error: "Not available" }, 404);
 
@@ -120,43 +156,68 @@ export async function testConnection(c: Context) {
   // oracles by unprivileged members. Private IPs are NOT blocked because
   // admins may legitimately test internal hosts.
   const ctx = getRequestContext(c);
-  const userId = ctx.userId;
-  const orgId = ctx.organizationId;
-  const m = await repos.member.find(orgId, userId);
+  const m = await repos.member.find(ctx.organizationId, ctx.userId);
   if (!m || (m.role !== "owner" && m.role !== "admin")) {
     return c.json({ error: "Insufficient permissions" }, 403);
   }
 
-  const startedAt = Date.now();
-  const result = await buildEphemeralExecutor(c);
-
-  if (result instanceof Response) return result; // validation error already sent
-  const executor = result;
-
-  try {
-    systemDebug("system-check", `test-connection:start`);
-    const output = await executor.exec("echo ok", { timeout: 15_000 });
-    const success = output.trim() === "ok";
-    systemDebug("system-check", `test-connection:done ok=${success} (${formatDuration(startedAt)})`);
-    return c.json({ ok: success, message: success ? "Connection successful" : "Unexpected response" });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to connect";
-    systemDebug("system-check", `test-connection:failed ${message} (${formatDuration(startedAt)})`);
-
-    if (isSshAuthError(err)) {
-      return c.json({ ok: false, message: "Authentication failed - check your credentials" }, 400);
-    }
-    return c.json({ ok: false, message }, 502);
-  } finally {
-    await executor.dispose();
-  }
+  return runEphemeralConnectionTest(c);
 }
 
 /**
- * Build an ephemeral SshExecutor from request body credentials.
- * Returns the executor on success, or sends an error response and returns null.
+ * POST /system/onboarding/test-connection
+ *
+ * Pre-auth, first-run-only counterpart to `/test-connection`. During onboarding
+ * no user/session exists yet (mirrors the public `/system/onboarding` setup
+ * route), so instead of an org-role gate we only allow it while the instance
+ * has no servers configured. Same ephemeral SSH echo test, no persistence.
  */
-async function buildEphemeralExecutor(c: Context) {
+export async function onboardingTestConnection(c: Context) {
+  if (env.CLOUD_MODE) return c.json({ error: "Not available" }, 404);
+
+  // A publicly-served / CLI-managed instance is network-reachable, so an
+  // UNauthenticated SSH prober here is an SSRF / port-scan oracle. Those
+  // instances must be configured through the authenticated flow — disable the
+  // pre-auth variant for them entirely.
+  if (env.OPENSHIP_PUBLIC_URL || env.OPENSHIP_REQUIRE_AUTH) {
+    return c.json({ error: "Not available" }, 404);
+  }
+
+  const servers = await repos.server.list();
+  if (servers.length > 0) {
+    return c.json({ error: "Instance already configured" }, 403);
+  }
+
+  // Never let the pre-auth prober reach loopback / link-local / cloud-metadata
+  // targets — never a legitimate remote SSH server, and the highest-value SSRF
+  // targets (e.g. 169.254.169.254). Private LAN ranges stay allowed (real
+  // self-hosted servers live there). Hostname→internal-IP rebinding is a known
+  // residual that needs the onboarding auth model to fully close.
+  const body = await c.req.json().catch(() => ({}));
+  if (isBlockedSshTarget(typeof body?.sshHost === "string" ? body.sshHost.trim() : "")) {
+    return c.json({ ok: false, message: "This host is not allowed.", code: "blocked_host" }, 400);
+  }
+
+  return runEphemeralConnectionTest(c);
+}
+
+/** Literal loopback / link-local / cloud-metadata / wildcard SSH targets. */
+function isBlockedSshTarget(host: string): boolean {
+  if (!host) return false; // empties handled by the normal validation
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "ip6-localhost") return true;
+  if (h === "0.0.0.0" || h === "::" || h === "::1") return true;
+  if (/^127\./.test(h)) return true; // IPv4 loopback
+  if (/^169\.254\./.test(h)) return true; // IPv4 link-local + cloud metadata
+  if (/^(fe80|fc|fd)/.test(h)) return true; // IPv6 link-local / ULA
+  return false;
+}
+
+/**
+ * Build an ephemeral SshConfig from request-body credentials for a one-off
+ * connectivity check. Returns the config, or a Response when validation fails.
+ */
+async function buildEphemeralSshConfig(c: Context) {
   const body = await c.req.json().catch(() => ({}));
   const host = (body.sshHost as string)?.trim();
   if (!host) {
@@ -187,7 +248,7 @@ async function buildEphemeralExecutor(c: Context) {
     return c.json({ ok: false, message: "Invalid auth configuration" }, 400);
   }
 
-  return createExecutor(config);
+  return config;
 }
 
 /**
@@ -274,6 +335,33 @@ export async function checkServer(c: Context) {
     }
     return c.json({ error: "connection_failed", message }, 502);
   }
+}
+
+/**
+ * POST /system/install/respond
+ *
+ * Answer a prompt raised mid-install (e.g. the OpenResty edge-takeover hold).
+ * Body: { action: string, sessionId?: string }. Targets the active session
+ * when no sessionId is given (only one install runs at a time).
+ */
+export async function installRespond(c: Context) {
+  if (env.CLOUD_MODE) return c.json({ error: "Not available" }, 404);
+
+  const body = await c.req.json().catch(() => ({}));
+  const action = body.action as string | undefined;
+  if (!action) return c.json({ error: "action is required" }, 400);
+
+  const sessionId = (body.sessionId as string | undefined) ?? getActiveSetupSession()?.id;
+  if (!sessionId) return c.json({ error: "no_active_session" }, 404);
+
+  const session = getSetupSession(sessionId);
+  if (!session) return c.json({ error: "no_active_session" }, 404);
+
+  await permission.assert(getRequestContext(c), { resourceType: "server", resourceId: session.serverId, action: "admin" });
+
+  const resolved = respondToSetupPrompt(sessionId, action);
+  if (!resolved) return c.json({ error: "no_pending_prompt" }, 409);
+  return c.json({ ok: true });
 }
 
 /**
@@ -462,6 +550,21 @@ export async function installStream(c: Context) {
     const installPromise = (async () => {
       let hasFailure = false;
 
+      // Before installing OpenResty, self-heal a takeover that crashed mid-flight
+      // on this server on a prior attempt (restores the previous proxy if the
+      // migrate didn't finish). No-op when there's no leftover journal.
+      if (validNames.includes("openresty")) {
+        try {
+          await sshManager.withExecutor(serverId, (executor) =>
+            recoverInterruptedTakeover(executor, (l) =>
+              appendSetupLog(session.id, "openresty", l.message, l.level),
+            ),
+          );
+        } catch {
+          /* best-effort */
+        }
+      }
+
       for (const name of validNames) {
         if (closed) break;
 
@@ -474,14 +577,40 @@ export async function installStream(c: Context) {
 
         updateComponentProgress(session.id, name, "installing");
 
+        // Bind the interactive "hold" to this session so installOpenResty can
+        // pause on an edge (80/443) conflict and surface the SAME prompt modal
+        // the deploy pipeline uses. Non-openresty installers ignore it.
+        const promptUser: PromptUserFn = (prompt) => promptSetupUser(session.id, prompt);
+
+        const onLog = (log: { message: string; level: "info" | "warn" | "error" }) =>
+          appendSetupLog(session.id, name, log.message, log.level);
+
         try {
-          const result = await sshManager.withExecutor(serverId, (executor) =>
-            installerFn(
-              executor,
-              (log) => appendSetupLog(session.id, name, log.message, log.level),
-              config,
-            ),
-          );
+          const result = await sshManager.withExecutor(serverId, async (executor) => {
+            try {
+              return await installerFn(executor, onLog, { ...config, promptUser });
+            } catch (err) {
+              // User chose "migrate" at the edge-conflict hold → import the
+              // existing proxy's sites, then take over 80/443.
+              if (err instanceof EdgeMigrateRequested) {
+                appendSetupLog(session.id, name, `Migrating ${err.sites.length} site(s) from the existing proxy...`);
+                const takeover = await runEdgeTakeover(
+                  executor,
+                  { status: err.status, sites: err.sites, acmeEmail: config?.acmeEmail },
+                  onLog,
+                );
+                for (const w of [...err.warnings, ...takeover.warnings]) {
+                  appendSetupLog(session.id, name, w, "warn");
+                }
+                return {
+                  component: name,
+                  success: takeover.ok,
+                  error: takeover.ok ? undefined : "migration failed — rolled back to the previous proxy",
+                };
+              }
+              throw err;
+            }
+          });
 
           if (result.success) {
             appendSetupLog(session.id, name, `${name} installed successfully${result.version ? ` (${result.version})` : ""}`);
@@ -515,6 +644,17 @@ export async function installStream(c: Context) {
       sseStream.onAbort(() => {
         closed = true;
         unsubscribe();
+        // If the install is parked on a prompt and the client vanished, don't
+        // leave a zombie "running" session blocking retries for 5 minutes. Give
+        // a short grace for a reload to reattach; if nobody does, reject the
+        // prompt so the install unwinds and the session finishes.
+        const grace = setTimeout(() => {
+          const { pending, subscribers } = setupPromptState(session.id);
+          if (pending && subscribers === 0) {
+            rejectPendingSetupPrompt(session.id, "client disconnected");
+          }
+        }, 20_000);
+        if (typeof grace.unref === "function") grace.unref();
         resolve();
       });
     });

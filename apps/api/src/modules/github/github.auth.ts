@@ -25,7 +25,7 @@ import { cacheStore } from "../../lib/cache-store";
 // gh-CLI (github.local-auth) is imported DYNAMICALLY at its two self-hosted
 // call sites (getUserStatus "cli" branch, getGitHubConnectionState gh probe)
 // so the gh module never loads in CLOUD_MODE (the SaaS). See those sites.
-import { ghFetch } from "./github.http";
+import { ghFetch, ghFetchPublic } from "./github.http";
 import { mapAccounts } from "./sources/mappers";
 import type { RequestContext } from "../../lib/request-context";
 import { resolveOrgOwner } from "../../lib/org-actor";
@@ -562,6 +562,19 @@ export async function githubFetch<T = unknown>(opts: GitHubFetchOptions): Promis
   const token = result?.token ?? null;
 
   if (!token) {
+    // No credential resolved. A PUBLIC github.com repo still answers the REST
+    // API unauthenticated, so try that before demanding a connection — this is
+    // what lets a public repo URL be prepared/deployed with no GitHub link.
+    // A private/missing repo 404s to anonymous callers → null → fall through to
+    // the connect-account error (which for a private repo is the right guidance).
+    if (method === "GET") {
+      const publicData = await ghFetchPublic<T>({
+        url: opts.url,
+        params: opts.params,
+        headers: opts.headers,
+      });
+      if (publicData !== null) return publicData;
+    }
     throw new Error("No GitHub access token available. Please connect your GitHub account.");
   }
 

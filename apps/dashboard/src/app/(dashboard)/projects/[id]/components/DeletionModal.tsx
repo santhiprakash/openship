@@ -101,8 +101,8 @@ export const DeletionModal = ({
       >
         {/* Header */}
         <div className="flex items-center gap-3 px-5 py-4 border-b border-border/40">
-          <div className="size-9 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
-            <AlertTriangle className="size-[18px] text-amber-600" />
+          <div className="size-9 rounded-xl bg-warning-bg border border-warning-border flex items-center justify-center shrink-0">
+            <AlertTriangle className="size-[18px] text-warning" />
           </div>
           <div className="min-w-0">
             <h3 className="text-[15px] font-semibold text-foreground">{t.projectSettings.deletion.title}</h3>
@@ -198,8 +198,8 @@ export const DeletionModal = ({
             </div>
           ) : null}
 
-          <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2.5">
-            <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+          <div className="rounded-xl border border-warning-border bg-warning-bg px-3 py-2.5">
+            <p className="text-xs text-warning leading-relaxed">
               {wipeVolumes
                 ? t.projectSettings.deletion.amberWipe
                 : t.projectSettings.deletion.amberNoWipe}
@@ -236,7 +236,7 @@ export const DeletionModal = ({
             className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
               isConfirmDisabled
                 ? "bg-muted text-muted-foreground/70 cursor-not-allowed"
-                : "bg-red-600 text-white hover:bg-red-700"
+                : "bg-danger-solid text-white hover:bg-danger-solid/90"
             }`}
           >
             {wipeVolumes

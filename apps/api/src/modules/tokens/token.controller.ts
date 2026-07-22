@@ -5,7 +5,7 @@ import { getRequestContext, type RequestContext } from "../../lib/request-contex
 import { checkPermission } from "../../lib/permission";
 import { canUseGitHubRepo } from "../github/github-access";
 import { mintPatToken } from "../../lib/pat";
-import type { TCreateTokenBody } from "./token.schema";
+import { wildcardProjectGrantRejected, type TCreateTokenBody } from "./token.schema";
 
 /** Resource types a token may be scoped to (mirrors the picker + grants API). */
 const GRANTABLE_TOKEN_TYPES = new Set<string>([
@@ -64,6 +64,49 @@ async function minterHasAccess(
   });
 }
 
+/**
+ * Validate a scoped token's requested grants before minting — SHARED by the PAT
+ * create route and the MCP OAuth authorize path so both enforce identical rules
+ * with no duplicated loop (and no drift). Returns the response to send on the
+ * first invalid grant, or null when every grant is allowed.
+ */
+async function validateGrants(
+  ctx: RequestContext,
+  grants: Array<{ resourceType: string; resourceId: string; permissions: Permission[] }>,
+): Promise<{ status: 400 | 403; body: { error: string; code: string } } | null> {
+  for (const g of grants) {
+    if (!GRANTABLE_TOKEN_TYPES.has(g.resourceType)) {
+      return {
+        status: 400,
+        body: { error: `Invalid resource type: ${g.resourceType}`, code: "INVALID_RESOURCE_TYPE" },
+      };
+    }
+    // Hardening: the wildcard project grant is the "projects it creates" scope
+    // and MUST be create-only (see wildcardProjectGrantRejected) — never a
+    // wildcard read/write/admin that would reach every project by id.
+    if (wildcardProjectGrantRejected(g)) {
+      return {
+        status: 400,
+        body: {
+          error:
+            'A project "*" grant must be create-only (the "projects it creates" scope). Grant specific project ids for read/write/admin.',
+          code: "INVALID_GRANT_SCOPE",
+        },
+      };
+    }
+    if (!(await minterHasAccess(ctx, g))) {
+      return {
+        status: 403,
+        body: {
+          error: `You can't grant access you don't have yourself: ${g.resourceType} / ${g.resourceId}`,
+          code: "GRANT_EXCEEDS_ACCESS",
+        },
+      };
+    }
+  }
+  return null;
+}
+
 /** POST /api/tokens — mint a token. Returns the plaintext ONCE. */
 export async function create(c: Context) {
   const ctx = getRequestContext(c);
@@ -71,26 +114,13 @@ export async function create(c: Context) {
 
   // A scoped token carries its own grants. Validate every grant is within the
   // minter's own access BEFORE minting, so a token can never exceed its owner.
+  // The "projects it creates" scope is just a grant like any other:
+  // {project,"*",[create]} — no special-casing here.
   const grants = (body.grants ?? []).filter((g) => g.permissions.length > 0);
   const wantScoped = grants.length > 0;
   if (wantScoped) {
-    for (const g of grants) {
-      if (!GRANTABLE_TOKEN_TYPES.has(g.resourceType)) {
-        return c.json(
-          { error: `Invalid resource type: ${g.resourceType}`, code: "INVALID_RESOURCE_TYPE" },
-          400,
-        );
-      }
-      if (!(await minterHasAccess(ctx, g))) {
-        return c.json(
-          {
-            error: `You can't grant access you don't have yourself: ${g.resourceType} / ${g.resourceId}`,
-            code: "GRANT_EXCEEDS_ACCESS",
-          },
-          403,
-        );
-      }
-    }
+    const err = await validateGrants(ctx, grants);
+    if (err) return c.json(err.body, err.status);
   }
 
   const { token, tokenPrefix, tokenHash } = mintPatToken();
@@ -184,23 +214,8 @@ export async function authorizeMcpClient(c: Context) {
   const grants = (body.grants ?? []).filter((g) => g.permissions.length > 0);
   const scoped = grants.length > 0;
 
-  for (const g of grants) {
-    if (!GRANTABLE_TOKEN_TYPES.has(g.resourceType)) {
-      return c.json(
-        { error: `Invalid resource type: ${g.resourceType}`, code: "INVALID_RESOURCE_TYPE" },
-        400,
-      );
-    }
-    if (!(await minterHasAccess(ctx, g))) {
-      return c.json(
-        {
-          error: `You can't grant access you don't have yourself: ${g.resourceType} / ${g.resourceId}`,
-          code: "GRANT_EXCEEDS_ACCESS",
-        },
-        403,
-      );
-    }
-  }
+  const grantErr = await validateGrants(ctx, grants);
+  if (grantErr) return c.json(grantErr.body, grantErr.status);
 
   const binding = await repos.personalAccessToken.upsertOAuthBinding({
     userId: ctx.userId,

@@ -31,7 +31,7 @@ function rowToGrant(row: InvitationPendingGrantRow): InvitationPendingGrant {
     const parsed = JSON.parse(row.permissionsJson);
     if (Array.isArray(parsed)) {
       permissions = parsed.filter(
-        (p): p is Permission => p === "read" || p === "write" || p === "admin",
+        (p): p is Permission => p === "read" || p === "write" || p === "admin" || p === "create",
       );
     }
   } catch {

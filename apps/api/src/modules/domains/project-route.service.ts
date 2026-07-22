@@ -1,5 +1,7 @@
 import { repos, type Domain, type Project } from "@repo/db";
 import {
+  isLoopbackHost,
+  isReservedLoopbackPort,
   managedHostnameToSlug,
   publicEndpointHostname,
   routeDomainRowToPublicEndpoint,
@@ -8,6 +10,7 @@ import {
 } from "../../lib/public-endpoints";
 import { syncProjectPublicRoutes } from "../../lib/project-route-store";
 import { resolveDeploymentRuntime } from "../../lib/deployment-runtime";
+import { pushProjectRules } from "../route-rules/route-rule.service";
 import {
   reconcileProjectRoutes,
   type RouteRegister,
@@ -290,10 +293,12 @@ export async function reapplyProjectLiveRoutes(
       `[project-route] ${project.slug}: deployment ${deployment.id} has no containerId (target=${effectiveTarget}) — skipping single-app route registration`,
     );
     await reconcileProjectRoutes(project, { routing, removes });
+    await pushProjectRules(project.id, serverId ?? null, previousHostnames).catch(() => {});
     return;
   }
 
   const resolveTargetUrl = async (port: number): Promise<string | null> => {
+    let host: string;
     if (runtime.supports("containerIp")) {
       const ip = await runtime.getContainerIp(containerId);
       if (!ip) {
@@ -302,10 +307,22 @@ export async function reapplyProjectLiveRoutes(
         );
         return null;
       }
-      return `http://${ip}:${port}`;
+      host = ip;
+    } else {
+      // Bare metal: the app runs directly on the host.
+      host = "127.0.0.1";
     }
-    // Bare metal: the app runs directly on the host.
-    return `http://127.0.0.1:${port}`;
+    // Never proxy a public route at a reserved control-plane/mgmt port on the
+    // host loopback — that would expose the admin API (env.PORT) or the
+    // unauthenticated OpenResty mgmt port (9145) to the internet. Only guards
+    // loopback: a container's own IP:<port> is the app's, not ours.
+    if (isLoopbackHost(host) && isReservedLoopbackPort(port)) {
+      console.warn(
+        `[project-route] ${project.slug}: refusing reserved loopback upstream port ${port} for a public route`,
+      );
+      return null;
+    }
+    return `http://${host}:${port}`;
   };
 
   const registers: RouteRegister[] = [];
@@ -328,4 +345,9 @@ export async function reapplyProjectLiveRoutes(
   // The webhook-proxy location is re-attached automatically for the project's
   // webhookDomain inside reconcileProjectRoutes.
   await reconcileProjectRoutes(project, { routing, registers, removes });
+
+  // Re-sync per-route edge rules (rate-limit / ban / allow-deny) for the current
+  // hostnames. Best-effort — the DB is the source of truth; a failure defers to
+  // the next reconcile. previousHostnames clears rules for any dropped hostname.
+  await pushProjectRules(project.id, serverId ?? null, previousHostnames).catch(() => {});
 }

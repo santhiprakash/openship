@@ -90,7 +90,7 @@ export function UpdatesTab() {
         {/* Status */}
         <div className="flex items-center justify-between gap-4 rounded-xl border border-border/50 bg-background px-4 py-3">
           <div className="flex items-center gap-3">
-            <div className={`flex size-9 items-center justify-center rounded-xl ${upToDate ? "bg-emerald-500/10 text-emerald-500" : "bg-primary/10 text-primary"}`}>
+            <div className={`flex size-9 items-center justify-center rounded-xl ${upToDate ? "bg-success-bg text-success" : "bg-primary/10 text-primary"}`}>
               {upToDate ? <CheckCircle2 className="size-[18px]" /> : <Download className="size-[18px]" />}
             </div>
             <div>
@@ -164,8 +164,8 @@ export function UpdatesTab() {
         icon={ShieldCheck}
         title={t.settings.updates.securityTitle}
         description={t.settings.updates.securityDescription}
-        iconBg="bg-emerald-500/10"
-        iconColor="text-emerald-500"
+        iconBg="bg-success-bg"
+        iconColor="text-success"
       >
         <p className="text-[13.5px] leading-relaxed text-muted-foreground">
           {t.settings.updates.security1} <span className="font-medium text-foreground">{t.settings.updates.securityOnlyGithub}</span> {t.settings.updates.security2}

@@ -14,19 +14,24 @@ type Plan = {
   external?: boolean;
   features: string[];
   highlight?: boolean;
+  ribbon?: string;
+  ribbonMuted?: boolean;
+  muted?: boolean;
 };
 
 const PLANS: Plan[] = [
   {
     n: "01",
     name: "Self-hosted",
-    tag: "Free forever",
-    price: "$0",
-    priceNote: "On servers you own",
-    lead: "Run the full platform on your own server. No metering, no caps, no telemetry — free forever.",
-    cta: "Read the source",
-    ctaHref: "https://github.com/oblien/openship",
-    external: true,
+    tag: "Unavailable",
+    price: "Unavailable",
+    priceNote: "Paused while we finish setting up payments",
+    lead: "The self-hosted plan is temporarily unavailable while we sort out billing. It'll be back shortly — leave your email and we'll tell you the moment it opens.",
+    cta: "Notify me",
+    ctaHref: "/contact",
+    ribbon: "Unavailable",
+    ribbonMuted: true,
+    muted: true,
     features: [
       "Full platform, open source (Apache 2.0)",
       "Unlimited deploys, domains, projects",
@@ -40,10 +45,11 @@ const PLANS: Plan[] = [
     name: "Openship Cloud",
     tag: "Managed",
     price: "Coming soon",
-    priceNote: "Pricing announced later",
-    lead: "Fully managed Openship — multi-region, auto-scaling, backups included. Pricing is still being finalized.",
+    priceNote: "Plans announced once billing is live",
+    lead: "Fully managed Openship — multi-region, auto-scaling, backups included. Plans open as soon as payments are ready.",
     cta: "Get notified",
     ctaHref: "/contact",
+    ribbon: "Coming soon",
     features: [
       "Everything in self-hosted",
       "Managed multi-region edge",
@@ -60,12 +66,12 @@ const PLANS: Plan[] = [
 
 const FAQ = [
   {
-    q: "Is self-hosting really free?",
-    a: "Yes — free forever. Run the full platform on your own servers with no metering, no seat caps, and no telemetry. It's open source under Apache 2.0.",
+    q: "Why are the plans unavailable right now?",
+    a: "We're finishing setting up payments and billing. Rather than show plans we can't complete sign-up for yet, we've paused them for the moment. It's temporary — leave your email on the contact page and we'll tell you the instant they open.",
   },
   {
     q: "How much does Openship Cloud cost?",
-    a: "Cloud pricing hasn't been announced yet. We're still finalizing it — leave your email on the contact page and we'll let you know before it launches.",
+    a: "Cloud pricing hasn't been announced yet, and sign-ups are paused while we finish billing setup. Leave your email on the contact page and we'll let you know before it launches.",
   },
   {
     q: "Can I move between self-hosted and cloud later?",
@@ -95,20 +101,20 @@ export default function PricingPage() {
           <div className="pp-container pp-hero-inner">
             <p className="pp-eyebrow">Pricing</p>
             <h1 className="pp-headline">
-              Free to self-host.<br />
-              <span className="pp-headline-soft">Cloud pricing coming soon.</span>
+              Plans are on pause.<br />
+              <span className="pp-headline-soft">Back as soon as billing is live.</span>
             </h1>
             <p className="pp-sub">
-              The full platform is open source and free to run on your own
-              servers, today. Managed Openship Cloud is on the way — pricing
-              will be announced before it launches.
+              We're finishing setting up payments. Self-hosted is temporarily
+              unavailable and Openship Cloud is coming soon — leave your email
+              and we'll let you know the moment plans open up.
             </p>
 
             <ul className="pp-hero-trust">
-              <li>Free forever, self-hosted</li>
               <li>Open source · Apache 2.0</li>
-              <li>No credit card</li>
               <li>No lock-in</li>
+              <li>Cloud or self-hosted</li>
+              <li>Get notified at launch</li>
             </ul>
           </div>
         </section>
@@ -120,9 +126,13 @@ export default function PricingPage() {
               {PLANS.map((p) => (
                 <article
                   key={p.name}
-                  className={`pp-plan ${p.highlight ? "pp-plan--highlight" : ""}`}
+                  className={`pp-plan ${p.highlight ? "pp-plan--highlight" : ""} ${p.muted ? "pp-plan--muted" : ""}`}
                 >
-                  {p.highlight && <span className="pp-plan-ribbon">Coming soon</span>}
+                  {p.ribbon && (
+                    <span className={`pp-plan-ribbon ${p.ribbonMuted ? "pp-plan-ribbon--muted" : ""}`}>
+                      {p.ribbon}
+                    </span>
+                  )}
 
                   <div className="pp-plan-top">
                     <span className="pp-plan-n">{p.n}</span>
@@ -140,7 +150,7 @@ export default function PricingPage() {
                   <a
                     href={p.ctaHref}
                     {...(p.external ? { target: "_blank", rel: "noreferrer" } : {})}
-                    className={`pp-plan-cta ${p.highlight ? "pp-plan-cta--filled" : ""}`}
+                    className={`pp-plan-cta ${p.highlight ? "pp-plan-cta--filled" : ""} ${p.muted ? "pp-plan-cta--muted" : ""}`}
                   >
                     {p.cta}
                   </a>
@@ -191,17 +201,18 @@ export default function PricingPage() {
         <section className="pp-end">
           <div className="pp-container">
             <div className="pp-end-card">
-              <h2 className="pp-end-title">Start self-hosting today.</h2>
+              <h2 className="pp-end-title">Want in when plans open?</h2>
               <p className="pp-end-sub">
-                The full platform is free and open source. Deploy it on your own
-                server now — and be first to know when Cloud lands.
+                We're finishing billing setup — self-hosted is paused and Cloud
+                is coming soon. Leave your email and you'll be first to know the
+                moment plans go live.
               </p>
               <div className="pp-end-cta-row">
-                <a href="https://github.com/oblien/openship" target="_blank" rel="noreferrer" className="pp-btn pp-btn--primary">
-                  Self-host on GitHub
+                <a href="/contact" className="pp-btn pp-btn--primary">
+                  Get notified
                 </a>
-                <a href="/contact" className="pp-btn pp-btn--ghost">
-                  Get notified about Cloud
+                <a href="/docs" className="pp-btn pp-btn--ghost">
+                  Explore the platform
                 </a>
               </div>
             </div>

@@ -17,7 +17,7 @@ import {
   resolveEffectiveTarget,
   usesManagedRouting as usesManagedRoutingFor,
 } from "../../lib/deployment-runtime";
-import { resolveServiceHostnameLabel } from "@repo/core";
+import { resolveServiceHostnameLabel, normalizeCustomHostname } from "@repo/core";
 import { cloudClient } from "../../lib/cloud/client";
 import { isCloudConnectedForOrg } from "../../lib/cloud/session";
 import { runCloudPreflight, type CloudPreflightData } from "../../lib/cloud-preflight";
@@ -36,6 +36,7 @@ import {
   resolveGitHubAuthMode,
 } from "../github/github.auth";
 import { canResolveTokenFor } from "../github/github.token";
+import { canResolveServerGitCredential } from "../github/server-github.service";
 import { parseRepoUrl } from "../github/github.service";
 import { resolveRecords, lookupAddresses } from "../../lib/dns-resolver";
 import { type RequestContext } from "../../lib/request-context";
@@ -222,6 +223,7 @@ async function checkRemoteBuildTokenLeak(
   ctx: RequestContext | null,
   effectiveTarget: string,
   buildStrategy: "local" | "server" | undefined,
+  serverId: string | undefined,
 ): Promise<PreflightCheck> {
   const baseCheck = {
     id: "remote-build-token",
@@ -236,6 +238,12 @@ async function checkRemoteBuildTokenLeak(
   if (mode === "app" || mode === "cloud-app") return { ...baseCheck, status: "pass" };
   if (buildStrategy === "local") return { ...baseCheck, status: "pass" };
   if (effectiveTarget === "cloud") return { ...baseCheck, status: "pass" };
+  // A per-server credential means the clone authenticates as the SERVER, not by
+  // shipping the operator's gh-cli token off-host — so the leak concern (and the
+  // cli hard-fail below) doesn't apply.
+  if (serverId && (await canResolveServerGitCredential(serverId).catch(() => false))) {
+    return { ...baseCheck, status: "pass" };
+  }
 
   // gh CLI tokens are the user's personal long-lived PAT. clone-auth.ts
   // hard-refuses these on remote builds (GITHUB_CLI_REMOTE_BUILD_REJECTED).
@@ -288,6 +296,7 @@ async function checkRemoteCloneToken(
   projectId: string | undefined,
   effectiveTarget: string,
   buildStrategy: "local" | "server" | undefined,
+  serverId: string | undefined,
 ): Promise<PreflightCheck> {
   const baseCheck = {
     id: "remote-clone-token",
@@ -296,6 +305,12 @@ async function checkRemoteCloneToken(
   if (!ctx || !owner) return { ...baseCheck, status: "pass" };
   if (buildStrategy === "local") return { ...baseCheck, status: "pass" };
   if (effectiveTarget === "local") return { ...baseCheck, status: "pass" };
+
+  // A per-server GitHub credential (device token / PAT / SSH key) satisfies the
+  // clone directly — check it FIRST (matches clone-auth's precedence).
+  if (serverId && (await canResolveServerGitCredential(serverId).catch(() => false))) {
+    return { ...baseCheck, status: "pass" };
+  }
 
   // Existence check only — no mint. The real mint happens later in the
   // build pipeline when we actually need to clone.
@@ -335,6 +350,7 @@ async function checkCloneOnServerCredential(
   owner: string | null | undefined,
   projectId: string | undefined,
   platformTarget: string,
+  serverId: string | undefined,
 ): Promise<PreflightCheck> {
   const baseCheck = {
     id: "clone-on-server",
@@ -342,6 +358,12 @@ async function checkCloneOnServerCredential(
   };
   if (platformTarget === "desktop") return { ...baseCheck, status: "pass" };
   if (!ctx || !owner) return { ...baseCheck, status: "pass" };
+
+  // A per-server GitHub credential clones directly on the server — satisfies
+  // this check outright.
+  if (serverId && (await canResolveServerGitCredential(serverId).catch(() => false))) {
+    return { ...baseCheck, status: "pass" };
+  }
 
   const source = await canResolveTokenFor(ctx, "remote", {
     projectId,
@@ -481,7 +503,10 @@ async function checkPublicEndpoints(
     // Domain — custom hostname or free subdomain. Defer the network check
     // (DNS / availability) to the parallel pass below.
     if (endpoint.domainType === "custom") {
-      const hostname = endpoint.customDomain?.trim().toLowerCase();
+      // Same canonical form storage/routing use, so the DNS/availability probe
+      // checks the host that will actually be deployed (not a scheme-dressed
+      // form the user may have typed into an unpersisted wizard proposal).
+      const hostname = endpoint.customDomain ? normalizeCustomHostname(endpoint.customDomain) : "";
       if (!hostname) {
         checks.push(
           fail(idOf("domain"), `Endpoint domain (${label})`, "Custom endpoint domains cannot be empty."),
@@ -574,7 +599,7 @@ async function checkComposeServiceDomains(
     if (!service.exposed) continue;
 
     if (service.domainType === "custom" && service.customDomain?.trim()) {
-      const domain = service.customDomain.trim().toLowerCase();
+      const domain = normalizeCustomHostname(service.customDomain);
       if (seen.has(domain)) {
         checks.push({
           id: `service-domain-${service.name}`,
@@ -680,8 +705,14 @@ async function resolveCloudPreflight(
   const usesManagedRouting = usesManagedRoutingFor(plat.target, effectiveTarget);
   const hasManagedPublicEndpoints =
     opts?.publicEndpoints?.some((endpoint) => endpoint.domainType !== "custom") ?? false;
+  // The project-level free-domain slug is a routable web hostname only for a
+  // single-app project. In services mode there is no project domain — each
+  // service routes via its own endpoint (needsManagedComposeDomains), so an
+  // internal-only services deploy (nothing exposed, e.g. an adopted Docker
+  // stack migrated to a self-hosted server) must NOT demand a managed free
+  // .opsh.io domain it can't route without cloud.
   const needsManagedProjectDomain =
-    (!!opts?.slug && !opts?.customDomain && usesManagedRouting) ||
+    (!opts?.multiService && !!opts?.slug && !opts?.customDomain && usesManagedRouting) ||
     (usesManagedRouting && hasManagedPublicEndpoints);
   const needsManagedComposeDomains =
     opts?.composeServices?.some((service) => service.exposed && service.domainType !== "custom") ??
@@ -720,12 +751,28 @@ function checkConfig(snapshot: DeploymentConfigSnapshot, opts?: PreflightOptions
   if (!snapshot.branch && !snapshot.localPath && !snapshot.sourceStaged) missing.push("branch");
 
   if (opts?.multiService) {
-    if (missing.length > 0) {
+    // A services/compose deploy needs a project repo/localPath ONLY when some
+    // enabled service builds FROM that shared source — a Dockerfile / build
+    // context, or a monorepo sub-app. Registry-image services (e.g. an adopted
+    // Docker stack of postgres/redis migrated in) build nothing, so no source
+    // is required. We inspect the ACTUAL services rather than trusting a single
+    // project-level `hasBuild` flag, which an adopted-Docker project may leave
+    // unset on the snapshot even though nothing builds — the bug that made a
+    // Docker migration fail preflight with "repository URL or local path".
+    const enabledServices = (opts.composeServices ?? []).filter((s) => s.enabled !== false);
+    const needsProjectSource =
+      enabledServices.length > 0
+        ? enabledServices.some((s) => s.kind === "monorepo" || !!s.build || !!s.dockerfile)
+        : snapshot.hasBuild !== false;
+    const serviceMissing = needsProjectSource
+      ? missing
+      : missing.filter((m) => m !== "repository URL or local path" && m !== "branch");
+    if (serviceMissing.length > 0) {
       return {
         id: "config",
         label: "Service configuration",
         status: "fail",
-        message: `Missing required fields: ${missing.join(", ")}`,
+        message: `Missing required fields: ${serviceMissing.join(", ")}`,
       };
     }
 
@@ -1145,6 +1192,7 @@ export async function runPreflightChecks(
   const usesManagedRouting = usesManagedRoutingFor(plat.target, effectiveTarget);
   const hasEndpointRouting = !!opts?.publicEndpoints?.length;
   const hasManagedProjectDomain =
+    !opts?.multiService &&
     !hasEndpointRouting && !!opts?.slug && !opts?.customDomain && usesManagedRouting;
   const hasManagedPublicEndpoints =
     opts?.publicEndpoints?.some((endpoint) => endpoint.domainType !== "custom") ?? false;
@@ -1237,7 +1285,7 @@ export async function runPreflightChecks(
     // pass. For cli mode: hard FAIL (matches clone-auth's refusal to ship a gh
     // CLI token to a remote worker). For oauth/token: warn only.
     checks.push(
-      await checkRemoteBuildTokenLeak(githubCtx, effectiveTarget, effectiveBuildStrategy),
+      await checkRemoteBuildTokenLeak(githubCtx, effectiveTarget, effectiveBuildStrategy, snapshot.serverId),
     );
 
     // Atomic remote-clone-token check — mirrors clone-auth.ts at deploy time so
@@ -1249,6 +1297,7 @@ export async function runPreflightChecks(
         opts?.projectId,
         effectiveTarget,
         effectiveBuildStrategy,
+        snapshot.serverId,
       ),
     );
   }
@@ -1280,6 +1329,7 @@ export async function runPreflightChecks(
         opts?.gitOwner,
         opts?.projectId,
         plat.target,
+        snapshot.serverId,
       ),
     );
   }

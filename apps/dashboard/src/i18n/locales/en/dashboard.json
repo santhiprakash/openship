@@ -38,6 +38,8 @@
     "successRate": "Success rate",
     "recentTitle": "Recent",
     "activityEmpty": "Your activity will appear here",
+    "appsEmptyTitle": "No apps yet",
+    "appsEmptyDesc": "One click, fully self-hosted — databases, automation, analytics, password vaults and more, running on your own servers.",
     "allSystemsOperational": "All systems operational",
     "runningSmoothly": "Your projects are running smoothly",
     "time": {
@@ -52,12 +54,14 @@
     "home": "Home",
     "new-project": "New Project",
     "projects": "Projects",
+    "apps": "Apps",
     "deployments": "Deployments",
     "backups": "Backups",
     "domains": "Domains",
     "monitoring": "Monitoring",
     "servers": "Servers",
     "emails": "Emails",
+    "jobs": "Jobs",
     "settings": "Settings",
     "billing": "Billing",
     "sections": {
@@ -78,6 +82,39 @@
     "preferences": "Preferences"
   },
   "pages": {
+    "apps": {
+      "title": "Apps",
+      "description": "One-click managed services — install and run Convex, WordPress, mail, and more.",
+      "createButton": "Install App",
+      "loading": "Loading apps…",
+      "countOne": "{count} app installed",
+      "countOther": "{count} apps installed",
+      "emptyTitle": "Install your first app",
+      "emptyDescription": "Spin up Convex, n8n, Ghost, and more — one click, fully self-hosted. Pick one to get started.",
+      "popular": "Popular apps",
+      "alsoDeploy": "You can also deploy",
+      "browseAll": "Browse all apps",
+      "catalogTitle": "Install an app",
+      "catalogDescription": "One-click managed services. Pick one to install it as an app.",
+      "catalogSearchPlaceholder": "Search apps…",
+      "catalogNoResults": "No apps match your search.",
+      "categories": {
+        "all": "All",
+        "backend": "Backend",
+        "database": "Database",
+        "cms": "CMS",
+        "analytics": "Analytics",
+        "automation": "Automation",
+        "mail": "Mail",
+        "other": "Tools"
+      },
+      "installing": "Installing…",
+      "install": "Install",
+      "cancel": "Cancel",
+      "nameLabel": "Name",
+      "configTitle": "Configure {app}",
+      "comingSoon": "Coming soon"
+    },
     "projects": {
       "title": "Projects",
       "description": "Deploy and manage your applications with ease",

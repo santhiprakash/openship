@@ -26,6 +26,7 @@ import type {
 } from "../types";
 import type { ComposeAdvanced } from "@repo/core";
 import type { BuildLogger } from "./build-pipeline";
+import type { PortProbeExecutor } from "../system/port-listen";
 
 // ─── Capabilities ────────────────────────────────────────────────────────────
 
@@ -79,7 +80,15 @@ export type RuntimeCapability =
    * drift. Docker implements this; Bare/Cloud don't (no label-queryable set)
    * and reconcile falls back to per-container `getContainerInfo`.
    */
-  | "deploymentContainerQuery";
+  | "deploymentContainerQuery"
+  /**
+   * Runtime can hand back a command runner that executes INSIDE a running
+   * deployment (not on the build/daemon host). Powers the advisory post-deploy
+   * port probe (`cat /proc/net/tcp*`). Docker exec (Tty:false), Oblien workspace
+   * exec, or — for Bare — the host executor itself (the process shares the host
+   * netns). Capability flag: "inContainerExec".
+   */
+  | "inContainerExec";
 
 // ─── Interface ───────────────────────────────────────────────────────────────
 
@@ -172,6 +181,19 @@ export interface RuntimeAdapter {
 
   /** Resolve the internal IP address of a container/process */
   getContainerIp(containerId: string): Promise<string | null>;
+
+  /**
+   * Hand back a command runner scoped to the INSIDE of the running deployment
+   * named by `containerId` (docker container / cloud workspace / bare host
+   * netns). Its `.exec` runs `sh -c <cmd>` in that context — used by the
+   * advisory post-deploy port probe. Optional; callers skip the probe when the
+   * runtime doesn't implement it (capability "inContainerExec").
+   *
+   * NOTE: on Bare this is the host executor, so a probe sees EVERY listener on
+   * the host, not only this deployment's — fine for an advisory "is something on
+   * this port?" but not proof it's this specific process.
+   */
+  inContainerExecutor?(containerId: string): Promise<PortProbeExecutor>;
 
   // ── Rollback primitives ──────────────────────────────────────────────
   //
@@ -319,6 +341,13 @@ export interface MultiServiceDeployConfig {
   namespaceVolumes: boolean;
   command?: string;
   restart?: string;
+  /**
+   * Force a fresh `docker pull` of the image tag even when a local copy exists.
+   * Set only for the "update" trigger — a normal deploy/redeploy stays
+   * pull-if-missing so it never surprise-bumps a `:latest` app or defeats the
+   * unchanged-image carry-forward.
+   */
+  forcePull?: boolean;
   /** Extended compose fields (healthcheck, …). Docker honors them; runtimes
    *  that can't (cloud) warn-and-drop. See ComposeAdvanced in @repo/core. */
   advanced?: ComposeAdvanced;
@@ -327,6 +356,14 @@ export interface MultiServiceDeployConfig {
   publicSlug?: string;
   customDomain?: string;
   expose?: boolean;
+  /** Cloud only: the workspace id this service used in the PREVIOUS deployment.
+   *  Reused so its permanent-workspace disk — the only persistence Oblien
+   *  offers (no volume primitive) — survives a redeploy. A fresh workspace each
+   *  deploy = silent data loss for stateful services (Postgres, Redis, …). */
+  previousWorkspaceId?: string;
+  /** Service names this service depends on (compose `depends_on`). Used for
+   *  readiness ordering on runtimes with no native healthcheck. */
+  dependsOn?: string[];
 }
 
 export interface MultiServiceDeployResult {
@@ -334,6 +371,13 @@ export interface MultiServiceDeployResult {
   status: string;
   ip?: string;
   hostPort?: number;
+  /**
+   * Content-addressable image digest actually running (`repo@sha256:…`), read
+   * from the image's RepoDigests after create. The anchor the update scanner
+   * uses to detect a moved mutable tag. Undefined when unresolvable (e.g. a
+   * locally-built image with no registry digest).
+   */
+  imageDigest?: string;
 }
 
 export interface MultiServiceRuntimeAdapter extends RuntimeAdapter {
@@ -387,6 +431,32 @@ export interface MultiServiceRuntimeAdapter extends RuntimeAdapter {
     }>,
     prepareLogger: BuildLogger,
   ): Promise<Array<{ serviceName: string; result: BuildResult }>>;
+
+  /**
+   * Optional final convergence pass, run ONCE after every service in the group
+   * has deployed. Lets a runtime whose service discovery is built up
+   * incrementally (Cloud: per-workspace /etc/hosts + private links) re-resolve
+   * any late-assigned addresses and rewrite the full mesh so every peer is
+   * reachable by name. Absent on runtimes with live DNS (Docker) — their real
+   * network needs no post-pass.
+   */
+  finalizeServiceGroup?(
+    group: MultiServiceGroupHandle,
+    onLog?: LogCallback,
+  ): Promise<void>;
+
+  /**
+   * Optional: seed an ALREADY-RUNNING service into the group's in-memory mesh
+   * state WITHOUT deploying it, so a subsequent `finalizeServiceGroup` includes
+   * it when rewriting the full mesh. Used by the decoupled single-service add
+   * (strictScope): only the new service is deployed, but its existing peers
+   * must stay reachable by name (and learn about the newcomer). No-op / absent
+   * on runtimes with live DNS (Docker) — their real network needs no seeding.
+   */
+  registerExistingWorkload?(
+    group: MultiServiceGroupHandle,
+    service: { serviceName: string; workspaceId: string; ip?: string; portSpecs?: string[] },
+  ): void;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -408,4 +478,104 @@ export function isMultiServiceRuntime(
   runtime: RuntimeAdapter,
 ): runtime is MultiServiceRuntimeAdapter {
   return runtime.supports("multiServiceDeploy");
+}
+
+// ─── Docker discovery (label-agnostic inspection) ─────────────────────────────
+//
+// DTOs for MIGRATING an existing Docker deployment into Openship. The
+// label-scoped queries elsewhere in DockerRuntime only see `openship.*`
+// containers; these enumerate the WHOLE daemon so we can adopt containers
+// Openship never created (a hand-run `docker run`, or a `docker compose` stack).
+// All fields are plain/serializable — they cross the API→dashboard boundary.
+
+export interface DockerMount {
+  /** "volume" | "bind" | "tmpfs" | "npipe" */
+  type: string;
+  /** Named-volume name (type=volume). Absent for binds/tmpfs. */
+  name?: string;
+  /** Host path (bind) or the volume's resolved mountpoint. */
+  source?: string;
+  /** Path inside the container. */
+  destination: string;
+  rw: boolean;
+}
+
+export interface DockerPortBinding {
+  /** Container-side port. */
+  privatePort: number;
+  /** Published host port (absent = exposed but not published). */
+  publicPort?: number;
+  /** "tcp" | "udp" | "sctp" */
+  type: string;
+  /** Host IP the port is bound on ("0.0.0.0" = all interfaces). */
+  ip?: string;
+}
+
+/** One container as seen in the `docker ps` list view. */
+export interface DockerContainerSummary {
+  id: string;
+  names: string[];
+  image: string;
+  imageId: string;
+  /** "running" | "exited" | "paused" | "created" | "restarting" | "dead" */
+  state: string;
+  /** Human status line, e.g. "Up 3 days". */
+  status: string;
+  labels: Record<string, string>;
+  ports: DockerPortBinding[];
+  mounts: DockerMount[];
+  /** com.docker.compose.project label, if the container is compose-managed. */
+  composeProject?: string;
+  /** com.docker.compose.service label, if the container is compose-managed. */
+  composeService?: string;
+}
+
+/** Full `docker inspect` of one container, normalized to what adoption needs. */
+export interface DockerContainerDetail {
+  id: string;
+  name: string;
+  image: string;
+  imageId: string;
+  state: string;
+  command?: string[];
+  entrypoint?: string[];
+  /** Config.Env as raw KEY=VALUE strings (image-default entries included). */
+  env: string[];
+  workingDir?: string;
+  labels: Record<string, string>;
+  restart?: { name: string; maximumRetryCount?: number };
+  /** Names of the networks the container is attached to. */
+  networks: string[];
+  mounts: DockerMount[];
+  ports: DockerPortBinding[];
+  /** Healthcheck as declared on the container config (durations in ns). */
+  healthcheck?: {
+    test?: string[];
+    interval?: number;
+    timeout?: number;
+    retries?: number;
+    startPeriod?: number;
+  };
+  composeProject?: string;
+  composeService?: string;
+  /** com.docker.compose.project.config_files — absolute compose paths on the host. */
+  composeConfigFiles?: string[];
+  /** com.docker.compose.project.working_dir — the compose project's cwd. */
+  composeWorkingDir?: string;
+}
+
+export interface DockerVolumeInfo {
+  name: string;
+  driver: string;
+  mountpoint?: string;
+  labels: Record<string, string>;
+  composeProject?: string;
+}
+
+export interface DockerNetworkInfo {
+  id: string;
+  name: string;
+  driver: string;
+  labels: Record<string, string>;
+  composeProject?: string;
 }

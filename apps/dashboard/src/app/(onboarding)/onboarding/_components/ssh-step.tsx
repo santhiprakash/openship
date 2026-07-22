@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getApiOrigin } from "@/lib/api/urls";
 import { useI18n } from "@/components/i18n-provider";
+import { api, endpoints, getApiErrorMessage } from "@/lib/api";
 import { validateSshPayload } from "@repo/onboarding";
 import type { SshPayload } from "@repo/onboarding";
 import type { StepProps } from "./step-props";
@@ -44,6 +45,8 @@ export function SshStep({ state, onUpdate, onNext, onBack }: StepProps) {
   const [jumpHost, setJumpHost] = useState(state.ssh?.jumpHost ?? "");
   const [sshArgs, setSshArgs] = useState(state.ssh?.sshArgs ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testOk, setTestOk] = useState(false);
   // Native SSH-key file picker is Electron-only (no filesystem access on web).
   // Detect the bridge after mount to avoid an SSR/hydration mismatch.
   const [canBrowseKey, setCanBrowseKey] = useState(false);
@@ -61,6 +64,44 @@ export function SshStep({ state, onUpdate, onNext, onBack }: StepProps) {
     if (picked) {
       setKeyPath(picked);
       setError(null);
+    }
+  }
+
+  async function handleTest() {
+    const trimmedHost = host.trim();
+    if (!trimmedHost) {
+      setError(t.onboarding.ssh.testFailed);
+      return;
+    }
+    setTesting(true);
+    setTestOk(false);
+    setError(null);
+    try {
+      const payload: Record<string, unknown> = {
+        sshHost: trimmedHost,
+        sshPort: parseInt(port, 10) || 22,
+        sshUser: user.trim() || "root",
+        sshAuthMethod: method,
+      };
+      if (method === "password") payload.sshPassword = password;
+      if (method === "key") {
+        if (keyPath.trim()) payload.sshKeyPath = keyPath.trim();
+        if (passphrase) payload.sshKeyPassphrase = passphrase;
+      }
+      if (jumpHost.trim()) payload.sshJumpHost = jumpHost.trim();
+      if (sshArgs.trim()) payload.sshArgs = sshArgs.trim();
+
+      const res = await api.post<{ ok: boolean; message: string }>(
+        endpoints.system.onboardingTestConnection,
+        payload,
+      );
+      if (res.ok) setTestOk(true);
+      else setError(res.message || t.onboarding.ssh.testFailed);
+    } catch (err) {
+      // Non-2xx (auth failure 400 / unreachable 502) surface as thrown ApiErrors.
+      setError(getApiErrorMessage(err, t.onboarding.ssh.testFailed));
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -136,7 +177,7 @@ export function SshStep({ state, onUpdate, onNext, onBack }: StepProps) {
             id="ob-server-ip"
             type="text"
             value={host}
-            onChange={(e) => { setHost(e.target.value); setError(null); }}
+            onChange={(e) => { setHost(e.target.value); setError(null); setTestOk(false); }}
             onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
             placeholder="123.45.67.89"
             spellCheck={false}
@@ -162,21 +203,21 @@ export function SshStep({ state, onUpdate, onNext, onBack }: StepProps) {
           <button
             type="button"
             className={`ob-auth-tab${method === "password" ? " active" : ""}`}
-            onClick={() => { setMethod("password"); setError(null); }}
+            onClick={() => { setMethod("password"); setError(null); setTestOk(false); }}
           >
             {t.onboarding.ssh.methodPassword}
           </button>
           <button
             type="button"
             className={`ob-auth-tab${method === "key" ? " active" : ""}`}
-            onClick={() => { setMethod("key"); setError(null); }}
+            onClick={() => { setMethod("key"); setError(null); setTestOk(false); }}
           >
             {t.onboarding.ssh.methodKey}
           </button>
           <button
             type="button"
             className={`ob-auth-tab${method === "agent" ? " active" : ""}`}
-            onClick={() => { setMethod("agent"); setError(null); }}
+            onClick={() => { setMethod("agent"); setError(null); setTestOk(false); }}
           >
             {t.onboarding.ssh.methodAgent}
           </button>
@@ -197,7 +238,7 @@ export function SshStep({ state, onUpdate, onNext, onBack }: StepProps) {
               id="ob-server-password"
               type="password"
               value={password}
-              onChange={(e) => { setPassword(e.target.value); setError(null); }}
+              onChange={(e) => { setPassword(e.target.value); setError(null); setTestOk(false); }}
               onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
               placeholder={t.onboarding.ssh.passwordPlaceholder}
               autoComplete="off"
@@ -215,7 +256,7 @@ export function SshStep({ state, onUpdate, onNext, onBack }: StepProps) {
                   id="ob-key-path"
                   type="text"
                   value={keyPath}
-                  onChange={(e) => { setKeyPath(e.target.value); setError(null); }}
+                  onChange={(e) => { setKeyPath(e.target.value); setError(null); setTestOk(false); }}
                   placeholder="~/.ssh/id_rsa"
                   spellCheck={false}
                   autoComplete="off"
@@ -301,6 +342,18 @@ export function SshStep({ state, onUpdate, onNext, onBack }: StepProps) {
         {error && (
           <div className="ob-status-message error">{error}</div>
         )}
+        {testOk && !error && (
+          <div className="ob-status-message success">{t.onboarding.ssh.connected}</div>
+        )}
+
+        <button
+          type="button"
+          className={`ob-btn-secondary${testOk ? " is-ok" : ""}`}
+          onClick={handleTest}
+          disabled={testing || !host.trim()}
+        >
+          {testing ? t.onboarding.ssh.testing : testOk ? t.onboarding.ssh.connected : t.onboarding.ssh.testConnection}
+        </button>
 
         <button className="ob-btn-primary" onClick={handleSubmit}>
           {t.onboarding.ssh.submit}
@@ -308,7 +361,7 @@ export function SshStep({ state, onUpdate, onNext, onBack }: StepProps) {
 
         <a
           className="ob-tutorial-link"
-          href="https://docs.openship.io/self-hosting"
+          href="https://openship.io/docs/self-hosting"
           target="_blank"
           rel="noopener noreferrer"
         >

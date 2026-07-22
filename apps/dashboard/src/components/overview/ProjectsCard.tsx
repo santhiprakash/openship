@@ -36,22 +36,22 @@ const ProjectsCard: React.FC<ProjectsCardProps> = ({ data, isLoading = false }) 
   const getStatusIcon = (status: 'live' | 'building' | 'failed' | 'paused') => {
     switch (status) {
       case 'live':
-        return <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />;
+        return <CheckCircle2 className="w-3.5 h-3.5 text-success" />;
       case 'building':
-        return <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin" />;
+        return <Loader2 className="w-3.5 h-3.5 text-info animate-spin" />;
       case 'failed':
-        return <XCircle className="w-3.5 h-3.5 text-rose-500" />;
+        return <XCircle className="w-3.5 h-3.5 text-danger" />;
       case 'paused':
-        return <Pause className="w-3.5 h-3.5 text-amber-500" />;
+        return <Pause className="w-3.5 h-3.5 text-warning" />;
     }
   };
 
   const getStatusBadge = (status: 'live' | 'building' | 'failed' | 'paused') => {
     const styles = {
-      live: 'bg-emerald-50 text-emerald-700 border-emerald-100',
-      building: 'bg-blue-50 text-blue-700 border-blue-100',
-      failed: 'bg-rose-50 text-rose-700 border-rose-100',
-      paused: 'bg-amber-50 text-amber-700 border-amber-100',
+      live: 'bg-success-bg text-success border-success-border',
+      building: 'bg-info-bg text-info border-info-border',
+      failed: 'bg-danger-bg text-danger border-danger-border',
+      paused: 'bg-warning-bg text-warning border-warning-border',
     };
     return styles[status];
   };
@@ -109,12 +109,12 @@ const ProjectsCard: React.FC<ProjectsCardProps> = ({ data, isLoading = false }) 
         </div>
         <div className="w-px h-8 bg-pink-100" />
         <div className="flex-1 text-center">
-          <p className="text-2xl font-bold text-emerald-600">{data.live}</p>
+          <p className="text-2xl font-bold text-success">{data.live}</p>
           <p className="text-xs text-black/40">{t.overview.projects.live}</p>
         </div>
         <div className="w-px h-8 bg-pink-100" />
         <div className="flex-1 text-center">
-          <p className="text-2xl font-bold text-blue-600">{data.building}</p>
+          <p className="text-2xl font-bold text-info">{data.building}</p>
           <p className="text-xs text-black/40">{t.overview.projects.building}</p>
         </div>
       </div>
@@ -122,7 +122,7 @@ const ProjectsCard: React.FC<ProjectsCardProps> = ({ data, isLoading = false }) 
       {/* Footer */}
       {data.failed > 0 && (
         <div className="pt-4 mt-auto border-t border-pink-100">
-          <div className="flex items-center gap-2 text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">
+          <div className="flex items-center gap-2 text-danger bg-danger-bg px-3 py-2 rounded-lg">
             <XCircle className="w-4 h-4" />
             <span className="text-xs font-medium">{interpolate(
               data.failed === 1

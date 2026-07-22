@@ -33,6 +33,7 @@ import { LanguageSetting } from "./_components/LanguageSetting";
 import { UpdatesTab } from "./_components/UpdatesTab";
 import { TeamTab } from "./_components/TeamTab";
 import { NotificationsTab } from "./_components/NotificationsTab";
+import { EmailSettings } from "./_components/EmailSettings";
 import { AuditTab } from "./_components/AuditTab";
 import { DataTransferTab } from "./_components/DataTransferTab";
 import {
@@ -118,6 +119,8 @@ function SettingsPageInner() {
           {activeTab === "team" && <TeamTab />}
 
           {activeTab === "notifications" && <NotificationsTab />}
+
+          {activeTab === "email" && selfHosted && <EmailSettings />}
 
           {activeTab === "audit" && <AuditTab />}
 

@@ -2,8 +2,8 @@
 
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
 
-type Theme = "light" | "dark" | "system";
-type ResolvedTheme = "light" | "dark";
+type Theme = "light" | "dim" | "dark" | "system";
+type ResolvedTheme = "light" | "dim" | "dark";
 
 interface ThemeContextValue {
   theme: Theme;
@@ -23,10 +23,18 @@ export function useTheme() {
   return useContext(ThemeContext);
 }
 
+function isDesktopApp(): boolean {
+  return typeof window !== "undefined" && !!(window as { desktop?: { isDesktop?: boolean } }).desktop?.isDesktop;
+}
+
 function resolveTheme(t: Theme): ResolvedTheme {
-  if (t === "light" || t === "dark") return t;
+  if (t === "light" || t === "dim" || t === "dark") return t;
   if (typeof window === "undefined") return "light";
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  if (!dark) return "light";
+  // Desktop's default dark appearance is the softer "dim"; the web product keeps
+  // full "dark". Either way an explicit choice (picker/toggle) still wins above.
+  return isDesktopApp() ? "dim" : "dark";
 }
 
 function applyTheme(resolved: ResolvedTheme) {
@@ -45,7 +53,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const stored = localStorage.getItem("theme") as Theme | null;
     const isDesktop = !!(window as { desktop?: { isDesktop?: boolean } }).desktop?.isDesktop;
     const t: Theme =
-      stored === "light" || stored === "dark" || stored === "system"
+      stored === "light" || stored === "dim" || stored === "dark" || stored === "system"
         ? stored
         : isDesktop
           ? "system"
@@ -78,7 +86,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const toggle = useCallback(() => {
-    setTheme(resolvedTheme === "dark" ? "light" : "dark");
+    // Cycle light → dim → dark → light, based on what's currently shown.
+    const next: Theme =
+      resolvedTheme === "light" ? "dim" : resolvedTheme === "dim" ? "dark" : "light";
+    setTheme(next);
   }, [resolvedTheme, setTheme]);
 
   return (
@@ -99,10 +110,13 @@ export function ThemeScript() {
         var sysDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
         var resolved;
         if (t === 'dark') resolved = 'dark';
+        else if (t === 'dim') resolved = 'dim';
         else if (t === 'light') resolved = 'light';
-        else if (t === 'system') resolved = sysDark ? 'dark' : 'light';
-        // No stored pref: desktop follows the OS, web stays light-first.
-        else resolved = (isDesktop && sysDark) ? 'dark' : 'light';
+        // 'system': follow the OS. Desktop's default dark appearance is the
+        // softer 'dim'; the web product keeps full 'dark'.
+        else if (t === 'system') resolved = sysDark ? (isDesktop ? 'dim' : 'dark') : 'light';
+        // No stored pref: desktop follows the OS (dark → dim), web stays light-first.
+        else resolved = (isDesktop && sysDark) ? 'dim' : 'light';
         document.documentElement.setAttribute('data-theme', resolved);
       } catch (e) {
         document.documentElement.setAttribute('data-theme', 'light');

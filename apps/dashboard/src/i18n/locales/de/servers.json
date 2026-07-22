@@ -1,4 +1,35 @@
 {
+  "github": {
+    "title": "GitHub-Zugriff",
+    "desc": "Wie sich dieser Server bei GitHub authentifiziert, um private Repos zu klonen.",
+    "loadFailed": "GitHub-Status konnte nicht geladen werden",
+    "connected": "Verbunden",
+    "modeToken": "Token",
+    "modeSshKey": "SSH-Schlüssel",
+    "modeDeployKey": "Deploy-Keys",
+    "connectDevice": "Mit GitHub verbinden",
+    "deviceHint": "Öffne den Link und gib diesen Code ein:",
+    "open": "GitHub öffnen",
+    "connecting": "Warte auf Autorisierung…",
+    "connectFailed": "Verbindung fehlgeschlagen",
+    "connectedToast": "GitHub für diesen Server verbunden",
+    "patPlaceholder": "ghp_… (Token einfügen)",
+    "patHint": "Ein Personal Access Token, verschlüsselt für diesen Server gespeichert.",
+    "save": "Speichern",
+    "savedToast": "Gespeichert",
+    "saveFailed": "Speichern fehlgeschlagen",
+    "tokenAs": "Authentifiziert als",
+    "sshGenerate": "SSH-Schlüssel erzeugen",
+    "sshAddHint": "Füge diesen Schlüssel zu deinem GitHub-Konto hinzu und deploye dann:",
+    "openGithubKeys": "GitHub-SSH-Schlüssel öffnen",
+    "copy": "Kopieren",
+    "deployKeyUse": "Repo-Deploy-Keys verwenden",
+    "deployKeyHint": "Openship registriert beim ersten Deploy einen schreibgeschützten Deploy-Key pro Repo.",
+    "deployKeyActive": "Deploy-Key-Modus aktiv — Schlüssel werden beim ersten Deploy erstellt.",
+    "deployKeysRegistered": "Deploy-Keys registriert",
+    "disconnect": "Trennen",
+    "disconnectedToast": "GitHub getrennt"
+  },
   "list": {
     "title": "Server",
     "subtitle": "Verwalten Sie Ihre Deployment-Server und Infrastruktur",
@@ -19,7 +50,14 @@
     "serverOverview": "Server-Übersicht",
     "totalServers": "Server gesamt",
     "connectedLabel": "Verbunden",
-    "errors": "Fehler"
+    "errors": "Fehler",
+    "checking": "Wird geprüft",
+    "online": "Online",
+    "offline": "Offline",
+    "authKey": "Schlüssel",
+    "authPassword": "Passwort",
+    "projects": "Projekte",
+    "regions": "Regionen"
   },
   "form": {
     "sshConnection": "SSH-Verbindung",
@@ -68,6 +106,7 @@
     "tabs": {
       "overview": "Übersicht",
       "components": "Komponenten",
+      "github": "Git",
       "security": "Sicherheit",
       "ports": "Ports",
       "terminal": "Terminal"
@@ -77,6 +116,7 @@
     "edit": "Bearbeiten",
     "removeServer": "Server entfernen",
     "serverNotFound": "Server nicht gefunden",
+    "serverNotFoundDesc": "Dieser Server ist nicht in deinem Workspace vorhanden oder du hast keinen Zugriff darauf. Möglicherweise wurde er entfernt.",
     "noServerConfigured": "Kein Server mit der ID „{id}“ konfiguriert.",
     "editServer": "Server bearbeiten",
     "editSubtitle": "Verbindungsdetails für {name} aktualisieren",
@@ -267,6 +307,8 @@
     "autoDesc": "Anforderungen prüfen und alles automatisch installieren. Ein Klick – Openship übernimmt Docker, OpenResty und Git.",
     "stepTitle": "Schritt-für-Schritt-Einrichtung",
     "stepDesc": "Überprüfen Sie jede Komponente und wählen Sie, was installiert werden soll. Sehen Sie detaillierte Status, bevor Sie fortfahren.",
+    "skipTitle": "Vorerst überspringen",
+    "skipDesc": "Fügen Sie den Server hinzu, ohne etwas zu installieren – überwachen Sie nur seinen Zustand. Die Einrichtung können Sie später auf der Serverseite ausführen.",
     "connecting": "Verbindung zum Server wird hergestellt …",
     "runningChecks": "Systemzustandsprüfungen werden per SSH ausgeführt",
     "connectionFailed": "Verbindung fehlgeschlagen",
@@ -318,5 +360,17 @@
     "serverCheck": "Serverprüfung",
     "security": "Sicherheit",
     "portForwarding": "Port-Weiterleitung"
+  },
+  "tabsNav": {
+    "servers": "Server",
+    "cluster": "Cluster",
+    "networking": "Netzwerk"
+  },
+  "comingSoon": {
+    "badge": "Demnächst",
+    "clusterTitle": "Cluster",
+    "clusterBody": "Fassen Sie Server zu einem Cluster zusammen und lassen Sie Openship Deployments darüber verteilen und ausbalancieren.",
+    "networkingTitle": "Netzwerk",
+    "networkingBody": "Private Links, Mesh-Routing und Firewall-Regeln über Ihre Server – zentral verwaltet."
   }
 }

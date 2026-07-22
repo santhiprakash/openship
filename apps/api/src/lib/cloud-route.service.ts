@@ -104,6 +104,12 @@ export async function reapplyCloudProjectRoute(
     // Dynamic workspace.
     const ws = client.workspace(containerId);
     if (input.isCustomDomain) {
+      // KNOWN LIMITATION (multi-port): network.update replaces ingress_ports, so
+      // applying several custom-domain routes on ONE workspace one-at-a-time
+      // leaves only the last port's ingress open. Managed (*.opsh.io) routes
+      // don't hit this — publicAccess.expose below is additive per port, which is
+      // the path multi-port apps like Convex use by default. Multi-port CUSTOM
+      // domains on cloud need a live-Oblien fix to accumulate ingress_ports.
       if (input.port) await ws.network.update({ ingress_ports: [input.port] });
       await ws.domains.connect({
         domain: input.hostname,

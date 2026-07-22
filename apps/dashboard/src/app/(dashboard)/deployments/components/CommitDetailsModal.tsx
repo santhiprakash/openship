@@ -136,9 +136,9 @@ export const CommitDetailsModal: React.FC<CommitDetailsModalProps> = ({
                       {t.deployments.modal.status}
                     </p>
                     <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
-                      deployment.status === 'success' ? 'bg-emerald-500/10 text-emerald-600' :
-                      deployment.status === 'failed' ? 'bg-red-500/10 text-red-600' :
-                      deployment.status === 'building' ? 'bg-blue-500/10 text-blue-600' :
+                      deployment.status === 'success' ? 'bg-success-bg text-success' :
+                      deployment.status === 'failed' ? 'bg-danger-bg text-danger' :
+                      deployment.status === 'building' ? 'bg-info-bg text-info' :
                       'bg-muted text-muted-foreground'
                     }`}>
                       {statusName}
@@ -164,9 +164,9 @@ export const CommitDetailsModal: React.FC<CommitDetailsModalProps> = ({
                       <div className="space-y-2">
                         {changedFiles.map((file: any, idx: number) => {
                           const fileTypeConfig: Record<string, { bg: string; text: string; label: string }> = {
-                            added: { bg: 'bg-emerald-500/10', text: 'text-emerald-600', label: fileTypeLabels.added },
-                            modified: { bg: 'bg-blue-500/10', text: 'text-blue-600', label: fileTypeLabels.modified },
-                            removed: { bg: 'bg-red-500/10', text: 'text-red-600', label: fileTypeLabels.removed },
+                            added: { bg: 'bg-success-bg', text: 'text-success', label: fileTypeLabels.added },
+                            modified: { bg: 'bg-info-bg', text: 'text-info', label: fileTypeLabels.modified },
+                            removed: { bg: 'bg-danger-bg', text: 'text-danger', label: fileTypeLabels.removed },
                           };
                           const typeConfig = fileTypeConfig[file.type] || fileTypeConfig.modified;
 

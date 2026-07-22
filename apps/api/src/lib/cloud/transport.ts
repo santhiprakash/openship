@@ -41,7 +41,20 @@ export async function cloudFetch(
   const settings = await repos.settings.findByUser(userId);
   if (!settings?.cloudSessionToken) return null;
 
-  const sessionToken = decrypt(settings.cloudSessionToken);
+  // A stored token that won't decrypt — a rotated/mismatched BETTER_AUTH_SECRET,
+  // or a token written by a different instance (e.g. the CLI box vs `bun dev`) —
+  // is unusable. Treat it as "no session" (→ graceful "not connected") instead
+  // of throwing an unhandled 500 out of the status endpoint. Re-connecting
+  // overwrites it with a token sealed under the current key.
+  let sessionToken: string;
+  try {
+    sessionToken = decrypt(settings.cloudSessionToken);
+  } catch {
+    console.warn(
+      `[cloud-client] cloudSessionToken for ${userId} failed to decrypt (BETTER_AUTH_SECRET mismatch?) — treating as disconnected`,
+    );
+    return null;
+  }
 
   const targetUrl = `${cloudRuntimeTarget.api}${path}`;
   const method = (init?.method ?? "GET").toUpperCase();

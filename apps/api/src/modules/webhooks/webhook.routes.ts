@@ -1,10 +1,11 @@
 /**
- * Webhook routes - unified entry point for GitHub and Stripe.
+ * Webhook routes - unified entry point for signed provider webhooks.
  *
  * POST /api/webhooks/:provider - dispatches to the registered provider
  *
- * Only "github" and "stripe" are accepted. All other paths return 404.
- * These routes do NOT require session auth - they verify signatures instead.
+ * Only "github" is accepted. (Stripe has its own SDK-verified route at
+ * /api/billing/webhook/stripe.) All other paths return 404. These routes do
+ * NOT require session auth - they verify signatures instead.
  */
 
 import { Hono } from "hono";

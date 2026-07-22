@@ -1,7 +1,7 @@
-import { eq, and, isNull, inArray, desc, sql, type SQL } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, inArray, desc, sql, type SQL } from "drizzle-orm";
 import { generateId } from "@repo/core";
 import type { Database } from "../client";
-import { project, envVar } from "../schema";
+import { project, envVar, deployment } from "../schema";
 import { member } from "../schema/organization";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -75,9 +75,25 @@ export function createProjectRepo(db: Database) {
       });
     },
 
-    async listByApp(appId: string) {
+    /**
+     * Auto-deploy projects that have a registered webhook (webhookId set) but no
+     * per-project signing secret yet — the self-hosted webhook-secret backfill
+     * sweep re-registers these to mint + persist a per-project secret.
+     */
+    async listNeedingWebhookBackfill() {
       return db.query.project.findMany({
-        where: and(eq(project.appId, appId), isNull(project.deletedAt)),
+        where: and(
+          eq(project.autoDeploy, true),
+          isNotNull(project.webhookId),
+          isNull(project.webhookSecret),
+          isNull(project.deletedAt),
+        ),
+      });
+    },
+
+    async listByGroup(groupId: string) {
+      return db.query.project.findMany({
+        where: and(eq(project.groupId, groupId), isNull(project.deletedAt)),
         orderBy: [desc(project.createdAt)],
       });
     },
@@ -146,6 +162,19 @@ export function createProjectRepo(db: Database) {
         .where(and(eq(project.organizationId, organizationId), isNull(project.deletedAt)));
 
       return { rows, total: Number(total), page, perPage };
+    },
+
+    /**
+     * Every non-deleted project across ALL orgs — for the instance-wide
+     * updates:scan job (each row carries its own organizationId). Capped so a
+     * pathological instance can't run an unbounded sweep.
+     */
+    async listAllForScan(limit = 5000) {
+      return db.query.project.findMany({
+        where: isNull(project.deletedAt),
+        orderBy: [desc(project.createdAt)],
+        limit,
+      });
     },
 
     /** Org-scoped findById — verifies the project belongs to the org. */
@@ -225,11 +254,11 @@ export function createProjectRepo(db: Database) {
       return rows.length > 0;
     },
 
-    async updateByApp(appId: string, data: Partial<NewProject>) {
+    async updateByApp(groupId: string, data: Partial<NewProject>) {
       await db
         .update(project)
         .set({ ...data, updatedAt: new Date() })
-        .where(and(eq(project.appId, appId), isNull(project.deletedAt)));
+        .where(and(eq(project.groupId, groupId), isNull(project.deletedAt)));
     },
 
     /** Update favicon cache metadata without touching the user-visible updatedAt field. */
@@ -316,6 +345,34 @@ export function createProjectRepo(db: Database) {
         .where(eq(project.deletionInProgress, true))
         .returning();
       return rows.length;
+    },
+
+    /**
+     * Count projects currently deployed to each server, keyed by server id.
+     * A project counts for a server when its ACTIVE deployment's meta.serverId
+     * matches. Powers the "N projects" chip + Projects stat on the Servers list.
+     */
+    async countActiveByServer(organizationId: string): Promise<Record<string, number>> {
+      const rows = await db
+        .select({
+          serverId: sql<string>`${deployment.meta} ->> 'serverId'`,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(project)
+        .innerJoin(deployment, eq(project.activeDeploymentId, deployment.id))
+        .where(
+          and(
+            eq(project.organizationId, organizationId),
+            isNull(project.deletedAt),
+            sql`${deployment.meta} ->> 'serverId' is not null`,
+          ),
+        )
+        .groupBy(sql`${deployment.meta} ->> 'serverId'`);
+      const out: Record<string, number> = {};
+      for (const r of rows) {
+        if (r.serverId) out[r.serverId] = Number(r.count);
+      }
+      return out;
     },
 
     /** Set the active deployment for a project */

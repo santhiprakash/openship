@@ -56,13 +56,8 @@ const GRANTABLE_ROOTS: ResourceType[] = [
   "github_repository",
   "permissions",
   "settings",
+  "job",
   "terminal",
-  // Org-singleton feature. INVARIANT: every cloud operation reaches the SaaS
-  // ONLY through a local API route that is permission-tagged and resolved here
-  // — the local permission plane gates access (coarsely, by role) before any
-  // proxy. Cloud PROJECT data is canonical on the SaaS, which is the
-  // authoritative per-project gate; the local gate stays coarse on purpose
-  // (tightening it into a second source of truth re-introduces split-brain).
   "cloud",
 ];
 
@@ -89,6 +84,10 @@ export interface PermissionInput {
    * For singletons like billing/audit, pass resourceId="*" and omit scope.
    */
   scope?: "list";
+  /** Set by the dedicated project-create route so the "own projects" scope can
+   *  allow creation without allowing other collection-write routes (ensure/
+   *  scan/import) that could touch existing projects. */
+  projectCreate?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -327,6 +326,36 @@ export async function checkPermission(
   }
 
   // Restricted: only explicit grants.
+  const source = opts?.grants ?? repos.resourceGrant;
+
+  // Collection-level project actions (resourceId "*") authorized by a project
+  // "*" grant — read directly, since resolveResourceOrg can't resolve "*". This
+  // ONLY grants the "create" capability's two abilities; every other "*" action
+  // falls through to the existing (deny) behavior below, so no other scope
+  // changes. The "create" verb is collection-only: it never satisfies a
+  // per-resource read/write/admin check (the switch below + specific-over-
+  // wildcard fallback), so a create-only grant can't reach existing projects.
+  if (input.resourceType === "project" && input.resourceId === "*") {
+    const wildcard = await source.findForResource(organizationId, userId, "project", "*");
+    if (wildcard) {
+      // CREATE: only on the dedicated create route, only with a create-capable
+      // grant. Other collection-write routes (ensure/scan/import) can touch
+      // existing projects, so they stay denied for a create-only grant.
+      if (
+        input.action === "write" &&
+        input.projectCreate === true &&
+        wildcard.permissions.includes("create")
+      ) {
+        return true;
+      }
+      // LIST: a create-capable grant may list; the caller filters results to the
+      // grant's concrete (self-created) project ids, so it sees only its own.
+      if (input.action === "read" && wildcard.permissions.includes("create")) {
+        return true;
+      }
+    }
+  }
+
   let root = await resolveResourceOrg(input.resourceType, input.resourceId);
   if (!root) {
     // A `project` with no local row is a CLOUD project (canonical on the
@@ -341,7 +370,7 @@ export async function checkPermission(
       return false;
     }
   }
-  const grant = await (opts?.grants ?? repos.resourceGrant).findForResource(
+  const grant = await source.findForResource(
     organizationId,
     userId,
     root.rootType,
@@ -358,6 +387,10 @@ export async function checkPermission(
       return grant.permissions.some((p) => p === "write" || p === "admin");
     case "admin":
       return grant.permissions.includes("admin");
+    case "create":
+      // "create" is a collection-only capability (handled above for "*"); it is
+      // never a per-resource action, so it grants nothing on a specific id.
+      return false;
     default: {
       const _exhaustive: never = input.action;
       return false;

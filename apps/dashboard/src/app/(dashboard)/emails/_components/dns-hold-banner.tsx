@@ -104,16 +104,16 @@ export function DnsHoldBanner({
   };
 
   return (
-    <div className="bg-amber-500/5 border border-amber-500/30 rounded-2xl p-6 mb-6">
+    <div className="bg-warning-bg border border-warning-border rounded-2xl p-6 mb-6">
       <div className="flex items-start gap-3 mb-5">
-        <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center shrink-0">
-          <Globe className="size-5 text-amber-600" strokeWidth={1.75} />
+        <div className="w-10 h-10 rounded-xl bg-warning-bg flex items-center justify-center shrink-0">
+          <Globe className="size-5 text-warning" strokeWidth={1.75} />
         </div>
         <div className="min-w-0">
-          <h2 className="text-lg font-semibold text-amber-900 dark:text-amber-100">
+          <h2 className="text-lg font-semibold text-warning">
             {heading}
           </h2>
-          <p className="text-sm text-amber-900/80 dark:text-amber-100/80 mt-1 leading-snug">
+          <p className="text-sm text-warning/80 mt-1 leading-snug">
             {body}
           </p>
         </div>
@@ -123,10 +123,10 @@ export function DnsHoldBanner({
         <DnsRecordsView records={records} domain={domain} />
       </div>
 
-      <div className="flex items-center justify-between gap-3 pt-4 border-t border-amber-500/20">
+      <div className="flex items-center justify-between gap-3 pt-4 border-t border-warning-border">
         <button
           onClick={openAutoConfigure}
-          className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border border-amber-500/30 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 transition-colors"
+          className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border border-warning-border text-warning hover:bg-warning-bg transition-colors"
         >
           <Sparkles className="size-4" />
           {t.emails.dns.autoConfigure}
@@ -134,7 +134,7 @@ export function DnsHoldBanner({
         <button
           onClick={onAcknowledge}
           disabled={acknowledging}
-          className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg bg-amber-500 text-white hover:bg-amber-500/90 transition-colors disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg bg-warning-solid text-white hover:bg-warning-solid/90 transition-colors disabled:opacity-50"
         >
           {acknowledging ? (
             <Loader2 className="size-4 animate-spin" />
@@ -173,7 +173,7 @@ function AutoConfigureModal({ onClose }: { onClose: () => void }) {
     <div className="p-6">
       <div className="mb-5">
         <div className="flex items-center gap-2.5 mb-1">
-          <Sparkles className="size-4 text-amber-500" />
+          <Sparkles className="size-4 text-warning" />
           <h3 className="text-base font-semibold text-foreground">
             {t.emails.dns.autoConfigure}
           </h3>
@@ -289,11 +289,11 @@ function ProviderComingSoon({
         </div>
       </div>
 
-      <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 mb-5">
-        <p className="text-sm font-medium text-amber-900 dark:text-amber-100">
+      <div className="rounded-xl border border-warning-border bg-warning-bg p-4 mb-5">
+        <p className="text-sm font-medium text-warning">
           {interpolate(t.emails.dns.comingSoon, { provider: provider.label })}
         </p>
-        <p className="text-xs text-amber-900/80 dark:text-amber-100/80 mt-1.5 leading-relaxed">
+        <p className="text-xs text-warning/80 mt-1.5 leading-relaxed">
           {t.emails.dns.comingSoonBefore}
           <strong>{t.emails.dns.action}</strong>
           {t.emails.dns.comingSoonAfter}

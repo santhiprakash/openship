@@ -1,4 +1,8 @@
-import { DASHBOARD_RUNTIME_TARGETS, DEFAULT_PORT } from "@repo/core";
+import { DASHBOARD_RUNTIME_TARGETS, DEFAULT_PORT, alignLoopbackOrigin } from "@repo/core";
+
+// Re-exported for existing importers (and urls.test.ts). The implementation now
+// lives in @repo/core so the API can align the desktop-login redirect too.
+export { alignLoopbackOrigin };
 
 // The runtime-target table, flattened to an array with the id inlined
 // for browser-side lookup ("which row matches window.location?").
@@ -80,34 +84,6 @@ function sameOriginProxyOrigin(): string | null {
 // into `window.__OPENSHIP_API_ORIGIN__` for the browser bundle (whose base URL
 // is a module-load constant — a build-time NEXT_PUBLIC var can't carry it).
 
-const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
-
-/**
- * Align a loopback API origin with the loopback host the page is served from.
- *
- * `localhost` and `127.0.0.1` are the same machine but *different sites* to a
- * browser: a request between them is cross-site, so the session cookie
- * (host-only, SameSite=Lax) is never stored or sent back — sign-in returns 200
- * and the next get-session returns 401. The CLI advertises the dashboard on
- * `localhost` while injecting a `127.0.0.1` API origin, which trips exactly
- * this. Rewriting the host (port preserved) keeps the pair same-site either
- * way round. Non-loopback origins are left untouched.
- */
-export function alignLoopbackOrigin(injected: string, pageOrigin: string): string {
-  try {
-    const api = new URL(injected);
-    const page = new URL(pageOrigin);
-    if (!LOOPBACK_HOSTNAMES.has(api.hostname) || !LOOPBACK_HOSTNAMES.has(page.hostname)) {
-      return injected;
-    }
-    api.hostname = page.hostname;
-    return `${api.protocol}//${api.host}`;
-  } catch {
-    // ponytail: a malformed override is passed through untouched — callers already
-    // tolerate a bad origin, and repairing it here would hide the real config bug.
-    return injected;
-  }
-}
 
 function localApiOverride(): string | null {
   if (typeof window !== "undefined") {

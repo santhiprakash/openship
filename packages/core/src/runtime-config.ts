@@ -15,8 +15,20 @@ const localhost = (port: number) => `http://localhost:${port}`;
 export const LOCAL_WEB_URL = localhost(DEFAULT_PORT.web);
 export const LOCAL_DASHBOARD_URL = localhost(DEFAULT_PORT.dashboard);
 export const LOCAL_API_URL = localhost(DEFAULT_PORT.api);
-export const CLOUD_DASHBOARD_URL = "https://app.openship.io";
-export const CLOUD_API_URL = "https://api.openship.io";
+
+// The production cloud endpoints — env-overridable so a dev instance can point
+// "cloud" at a LOCAL SaaS without editing code or flipping the whole target row.
+// Unset (production / the default) → the real remote cloud, so self-hosted
+// production is unaffected. Set OPENSHIP_CLOUD_API_URL / OPENSHIP_CLOUD_DASHBOARD_URL
+// (e.g. http://localhost:4100 / http://localhost:3002) to exercise cloud flows
+// against a local `dev:saas` instance. Only consulted for the `cloud-saas` row.
+const envUrl = (key: string): string | undefined => {
+  const v = typeof process !== "undefined" ? process.env?.[key] : undefined;
+  return v && v.trim() ? v.trim() : undefined;
+};
+export const CLOUD_DASHBOARD_URL =
+  envUrl("OPENSHIP_CLOUD_DASHBOARD_URL") ?? "https://app.openship.io";
+export const CLOUD_API_URL = envUrl("OPENSHIP_CLOUD_API_URL") ?? "https://api.openship.io";
 
 /**
  * THE runtime-target table. Keyed by id — the id IS the key, no
@@ -101,3 +113,34 @@ export const cloudRuntimeTarget = DASHBOARD_RUNTIME_TARGETS[cloudRuntimeTargetId
 export const dashboardRuntimeOrigins = Object.values(DASHBOARD_RUNTIME_TARGETS).flatMap(
   ({ dashboard, api }) => [dashboard, api],
 );
+
+export const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * Align a loopback origin with the loopback host of a reference origin.
+ *
+ * `localhost` and `127.0.0.1` are the same machine but *different sites* to a
+ * browser: a request between them is cross-site, so a host-only SameSite=Lax
+ * cookie minted on one host is never sent to the other. Rewriting the hostname
+ * (port + protocol of `injected` preserved) keeps the pair same-site. Only
+ * touches origins where BOTH are loopback — non-loopback (production) origins
+ * pass through untouched, so this can never redirect off-box.
+ *
+ * Shared by the dashboard (align the injected API origin to the page host) and
+ * the API (align the desktop-login redirect target to the request host).
+ */
+export function alignLoopbackOrigin(injected: string, referenceOrigin: string): string {
+  try {
+    const target = new URL(injected);
+    const reference = new URL(referenceOrigin);
+    if (!LOOPBACK_HOSTNAMES.has(target.hostname) || !LOOPBACK_HOSTNAMES.has(reference.hostname)) {
+      return injected;
+    }
+    target.hostname = reference.hostname;
+    return `${target.protocol}//${target.host}`;
+  } catch {
+    // A malformed origin is passed through untouched — callers already tolerate
+    // a bad origin, and repairing it here would hide the real config bug.
+    return injected;
+  }
+}

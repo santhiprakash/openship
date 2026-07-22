@@ -37,6 +37,12 @@ export interface RoutingSettingsCardProps {
   onDomainChange: (value: string) => void | Promise<void>;
   onCustomDomainChange: (value: string) => void | Promise<void>;
   saveMode?: "change" | "explicit";
+  /** Optional control rendered on the RIGHT of the Free/Custom row (e.g. an
+   *  "add domain" button when the parent hides its own header). */
+  actionSlot?: React.ReactNode;
+  /** Place the exposed-port field to the RIGHT of the domain input (label above)
+   *  instead of on its own row below — saves height when there's horizontal room. */
+  portInline?: boolean;
 }
 
 export function RoutingSettingsCard({
@@ -58,6 +64,8 @@ export function RoutingSettingsCard({
   onDomainChange,
   onCustomDomainChange,
   saveMode = "change",
+  actionSlot,
+  portInline = false,
 }: RoutingSettingsCardProps) {
   const { baseDomain } = usePlatform();
   const { t } = useI18n();
@@ -65,7 +73,7 @@ export function RoutingSettingsCard({
   const portListId = useId();
   const [showDnsModal, setShowDnsModal] = useState(false);
   const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
-  const [dnsMode, setDnsMode] = useState<"cloud" | "selfhosted">("cloud");
+  const [dnsMode, setDnsMode] = useState<"cloud" | "selfhosted" | "external">("cloud");
   const [loadingRecords, setLoadingRecords] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [draftDomain, setDraftDomain] = useState(domain);
@@ -161,12 +169,44 @@ export function RoutingSettingsCard({
     }
   };
 
+  // Exposed-port field with the label ABOVE — used when `portInline` places it
+  // to the right of the domain input. Matches the input height (h-11) so the
+  // two bottom-align.
+  const portInlineField = showsPortTarget ? (
+    <div className="shrink-0">
+      <label className="mb-1.5 block text-[13px] font-medium text-muted-foreground">{w.exposedPort}</label>
+      <input
+        type="text"
+        inputMode="numeric"
+        value={saveMode === "explicit" ? draftPort : exposedPort}
+        onChange={(event) => {
+          if (saveMode === "explicit") setDraftPort(event.target.value);
+          else void onExposedPortChange!(event.target.value);
+        }}
+        onBlur={() => {
+          if (saveMode === "explicit" && draftPort !== (exposedPort ?? "")) commitPort();
+        }}
+        placeholder="3000"
+        disabled={disabled}
+        list={hasPortOptions ? portListId : undefined}
+        className="w-24 h-11 rounded-2xl border border-border/50 bg-background/60 px-3.5 text-sm text-foreground outline-none"
+      />
+      {hasPortOptions && (
+        <datalist id={portListId}>
+          {portOptions.map((port) => (
+            <option key={port} value={port} />
+          ))}
+        </datalist>
+      )}
+    </div>
+  ) : null;
+
   return (
     <div className="space-y-3">
       {typeof exposed === "boolean" && onExposedChange && (
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            {visible ? <Eye className="size-4 text-blue-500" /> : <EyeOff className="size-4 text-muted-foreground" />}
+            {visible ? <Eye className="size-4 text-info" /> : <EyeOff className="size-4 text-muted-foreground" />}
             <span className="text-sm font-medium text-foreground">
               {visible ? w.publiclyExposed : w.internalOnly}
             </span>
@@ -175,7 +215,7 @@ export function RoutingSettingsCard({
             type="button"
             onClick={() => void onExposedChange(!visible)}
             disabled={disabled}
-            className={`relative rounded-full transition-colors duration-200 ${visible ? "bg-blue-500" : "bg-muted-foreground/20"}`}
+            className={`relative rounded-full transition-colors duration-200 ${visible ? "bg-info-solid" : "bg-muted-foreground/20"}`}
             style={{ height: "22px", width: "40px" }}
           >
             <span className={`absolute top-0.5 start-0.5 w-[18px] h-[18px] rounded-full bg-white shadow-sm transition-transform duration-200 ${visible ? "translate-x-[18px] rtl:-translate-x-[18px]" : "translate-x-0"}`} />
@@ -184,32 +224,37 @@ export function RoutingSettingsCard({
       )}
 
       {visible && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void onDomainTypeChange("free")}
-              disabled={disabled}
-              aria-label={w.freeSubdomain}
-              className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${domainType === "free" ? "bg-primary/10 text-primary ring-1 ring-primary/15" : "bg-muted/40 text-muted-foreground hover:bg-muted/60"}`}
-            >
-              {w.free}
-            </button>
-            <button
-              type="button"
-              onClick={() => void onDomainTypeChange("custom")}
-              disabled={disabled}
-              aria-label={w.customDomain}
-              className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${domainType === "custom" ? "bg-primary/10 text-primary ring-1 ring-primary/15" : "bg-muted/40 text-muted-foreground hover:bg-muted/60"}`}
-            >
-              {w.custom}
-            </button>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void onDomainTypeChange("free")}
+                disabled={disabled}
+                aria-label={w.freeSubdomain}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${domainType === "free" ? "bg-primary/10 text-primary ring-1 ring-primary/15" : "bg-muted/40 text-muted-foreground hover:bg-muted/60"}`}
+              >
+                {w.free}
+              </button>
+              <button
+                type="button"
+                onClick={() => void onDomainTypeChange("custom")}
+                disabled={disabled}
+                aria-label={w.customDomain}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${domainType === "custom" ? "bg-primary/10 text-primary ring-1 ring-primary/15" : "bg-muted/40 text-muted-foreground hover:bg-muted/60"}`}
+              >
+                {w.custom}
+              </button>
+            </div>
+            {/* When the port is inline, the add-domain "+" moves to the end of
+                the input row (after Exposed port); otherwise it sits here. */}
+            {!portInline && actionSlot}
           </div>
 
           {domainType === "free" ? (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="flex-1 flex items-center rounded-2xl border border-border/50 bg-muted/20 overflow-hidden min-h-12">
+            <div className="flex items-end gap-2">
+              <div className="min-w-0 flex-1 flex items-center gap-2">
+                <div className="flex-1 flex items-center rounded-2xl border border-border/50 bg-background/60 overflow-hidden h-11">
                   <input
                     value={saveMode === "explicit" ? draftDomain : domain}
                     onChange={(event) => {
@@ -226,26 +271,29 @@ export function RoutingSettingsCard({
                       if (saveMode === "explicit" && draftDomain !== domain) commitFreeDomain();
                     }}
                     placeholder={projectName || "my-project"}
-                    className="flex-1 px-3.5 py-3 text-sm bg-transparent outline-none text-foreground placeholder:text-muted-foreground/40"
+                    className="min-w-0 flex-1 h-full ps-3.5 text-sm bg-transparent outline-none text-foreground placeholder:text-muted-foreground/40"
                   />
-                  <span className="text-sm text-muted-foreground pe-3.5 shrink-0">.{baseDomain}</span>
+                  <span className="shrink-0 ps-2 pe-3.5 text-sm text-muted-foreground">.{baseDomain}</span>
                 </div>
                 {saveMode === "explicit" && draftDomain !== domain && (
                   <button
                     type="button"
                     onClick={commitFreeDomain}
                     disabled={disabled}
-                    className="px-3 py-2 rounded-2xl text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                    className="px-3 py-2 rounded-xl text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
                   >
                     {w.save}
                   </button>
                 )}
               </div>
+              {portInline && portInlineField}
+              {portInline && actionSlot}
             </div>
           ) : (
             <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="flex-1 flex items-center rounded-2xl border border-border/50 bg-muted/20 overflow-hidden min-h-12">
+              <div className="flex items-end gap-2">
+                <div className="min-w-0 flex-1 flex items-center gap-2">
+                  <div className="flex-1 flex items-center rounded-2xl border border-border/50 bg-background/60 overflow-hidden h-11">
                   <input
                     value={saveMode === "explicit" ? draftCustomDomain : customDomain}
                     onChange={(event) => {
@@ -260,7 +308,7 @@ export function RoutingSettingsCard({
                       if (saveMode === "explicit" && draftCustomDomain !== customDomain) commitCustomDomain();
                     }}
                     placeholder="app.example.com"
-                    className="flex-1 px-3.5 py-3 text-sm bg-transparent outline-none text-foreground placeholder:text-muted-foreground/40"
+                    className="flex-1 h-full px-3.5 text-sm bg-transparent outline-none text-foreground placeholder:text-muted-foreground/40"
                   />
                 </div>
                 {saveMode === "explicit" && draftCustomDomain !== customDomain && (
@@ -268,11 +316,14 @@ export function RoutingSettingsCard({
                     type="button"
                     onClick={commitCustomDomain}
                     disabled={disabled}
-                    className="px-3 py-2 rounded-2xl text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                    className="px-3 py-2 rounded-xl text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
                   >
                     {w.save}
                   </button>
                 )}
+                </div>
+                {portInline && portInlineField}
+                {portInline && actionSlot}
               </div>
 
               {/* DNS hint — lazy: only shown once records are resolvable (or
@@ -307,7 +358,7 @@ export function RoutingSettingsCard({
             </div>
           )}
 
-          {showsPortTarget && (
+          {!portInline && showsPortTarget && (
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2">
                 <Hash className="size-3.5 text-muted-foreground" />
@@ -443,7 +494,7 @@ export function RoutingSettingsCard({
                         <div className="flex items-center gap-2 bg-background rounded-lg border border-border/50 px-3 py-2">
                           <code className="flex-1 text-sm font-medium text-foreground">{record.host}</code>
                           <button onClick={() => copy(record.host, `${index}-host`)} className="p-1 hover:bg-muted rounded-md transition-colors shrink-0">
-                            {copied === `${index}-host` ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5 text-muted-foreground" />}
+                            {copied === `${index}-host` ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5 text-muted-foreground" />}
                           </button>
                         </div>
                       </div>
@@ -452,7 +503,7 @@ export function RoutingSettingsCard({
                         <div className="flex items-center gap-2 bg-background rounded-lg border border-border/50 px-3 py-2">
                           <code className="flex-1 text-sm font-medium text-foreground truncate">{record.value}</code>
                           <button onClick={() => copy(record.value, `${index}-value`)} className="p-1 hover:bg-muted rounded-md transition-colors shrink-0">
-                            {copied === `${index}-value` ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5 text-muted-foreground" />}
+                            {copied === `${index}-value` ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5 text-muted-foreground" />}
                           </button>
                         </div>
                       </div>

@@ -252,9 +252,13 @@ async function createPgliteClient(): Promise<Database> {
 
   // Guarantee single-process access BEFORE opening. PGlite has no real
   // cross-process lock, and two openers corrupt the WASM cluster irrecoverably.
-  // Waits briefly for a clean handoff (restart races), self-heals a crashed
-  // previous run, and never touches cluster data — so it can't lose data.
-  await acquirePgliteLock(dataDir);
+  // Wait up to the full graceful-shutdown window (index.ts caps shutdown at
+  // 30s) so a hot-reload / restart handoff — where the previous process is
+  // still draining + releasing the DB — reliably succeeds instead of racing a
+  // 5s window (the recurring "already using the database" reload failure). A
+  // crashed predecessor is reclaimed instantly (dead pid), so this only ever
+  // waits while a LIVE predecessor is actively shutting down.
+  await acquirePgliteLock(dataDir, { waitMs: 30_000, pollMs: 250 });
   clearStalePgliteControlFile(dataDir);
 
   const assets = await resolvePgliteAssets();

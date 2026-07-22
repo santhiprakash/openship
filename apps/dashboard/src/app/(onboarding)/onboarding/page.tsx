@@ -10,6 +10,8 @@ import { SshStep } from "./_components/ssh-step";
 import { TunnelStep } from "./_components/tunnel-step";
 import { PreferencesStep } from "./_components/preferences-step";
 import { LoadingStep } from "./_components/loading-step";
+import { useTheme } from "@/components/theme-provider";
+import { locales, isRtl, type Locale } from "@/i18n";
 import "./onboarding.css";
 
 /* ── SVG icons used in the top bar ── */
@@ -19,9 +21,26 @@ const GlobeIcon = () => (
 const GitHubIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.1.82-.26.82-.58v-2.02c-3.34.73-4.04-1.61-4.04-1.61a3.18 3.18 0 0 0-1.33-1.76c-1.09-.74.08-.73.08-.73a2.52 2.52 0 0 1 1.84 1.24 2.56 2.56 0 0 0 3.5 1 2.56 2.56 0 0 1 .76-1.6c-2.67-.3-5.47-1.33-5.47-5.93a4.64 4.64 0 0 1 1.24-3.22 4.3 4.3 0 0 1 .12-3.18s1-.32 3.3 1.23a11.38 11.38 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23a4.3 4.3 0 0 1 .12 3.18 4.64 4.64 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92a2.87 2.87 0 0 1 .82 2.23v3.29c0 .32.21.7.82.58A12 12 0 0 0 12 .3"/></svg>
 );
+const SunIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+);
+const MoonIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+);
+
+/** Each language's own name / short glyph, in its own script (never translated). */
+const LANG_NATIVE: Record<Locale, string> = {
+  en: "English", ar: "العربية", es: "Español", fr: "Français",
+  de: "Deutsch", pt: "Português", ja: "日本語", zh: "中文",
+};
+const LANG_CODE: Record<Locale, string> = {
+  en: "EN", ar: "ع", es: "ES", fr: "FR", de: "DE", pt: "PT", ja: "日", zh: "中",
+};
 
 function OnboardingInner() {
-  const { t } = useI18n();
+  const { t, locale, setLocale } = useI18n();
+  const { resolvedTheme, toggle } = useTheme();
+  const [langOpen, setLangOpen] = useState(false);
   const [step, setStep] = useState<OnboardingStep>("choose");
   const [state, setState] = useState<OnboardingState>({
     buildMode: "auto",
@@ -66,6 +85,48 @@ function OnboardingInner() {
           <span className="ob-logo-text">Openship</span>
         </div>
         <div className="ob-top-bar-links">
+          <button
+            type="button"
+            className="ob-top-bar-link"
+            onClick={toggle}
+            title={t.onboarding.topBar.theme}
+            aria-label={t.onboarding.topBar.theme}
+          >
+            {resolvedTheme === "dark" ? <SunIcon /> : <MoonIcon />}
+          </button>
+          <div className="ob-lang">
+            <button
+              type="button"
+              className="ob-top-bar-link ob-lang-trigger"
+              onClick={() => setLangOpen((v) => !v)}
+              title={t.onboarding.topBar.language}
+              aria-haspopup="true"
+              aria-expanded={langOpen}
+            >
+              {LANG_CODE[locale]}
+            </button>
+            {langOpen && (
+              <>
+                <div className="ob-lang-backdrop" onClick={() => setLangOpen(false)} aria-hidden />
+                <div className="ob-lang-menu" role="menu">
+                  {locales.map((l) => (
+                    <button
+                      key={l}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={l === locale}
+                      lang={l}
+                      dir={isRtl(l) ? "rtl" : "ltr"}
+                      className={`ob-lang-item${l === locale ? " is-active" : ""}`}
+                      onClick={() => { setLocale(l); setLangOpen(false); }}
+                    >
+                      {LANG_NATIVE[l]}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           <a className="ob-top-bar-link" href="https://openship.io" target="_blank" rel="noopener noreferrer" title={t.onboarding.topBar.website}>
             <GlobeIcon />
           </a>

@@ -5,8 +5,7 @@ import { auth } from "../lib/auth";
 import { env, trustedOrigins } from "../config/env";
 import { ensureLocalUser } from "../lib/local-user";
 import { resolveActiveOrganizationId } from "./active-organization";
-import { getAuthMode } from "../lib/auth-mode";
-import { isLoopbackRequest, peerAddress } from "./loopback-peer";
+import { zeroAuthAllowed } from "./zero-auth-guard";
 import { hashPatToken } from "../lib/pat";
 import { isPatToken, parseBearerToken } from "../lib/bearer";
 import {
@@ -309,34 +308,15 @@ export async function authMiddleware(c: Context, next: Next) {
     return next();
   }
 
-  // ── 2. No session: gate everything on operator-controlled authMode ──
-  const authMode = await getAuthMode();
-  if (authMode !== "none") {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-
-  // ── 3. Zero-auth path (CRITICAL #4) ─────────────────────────────────
-  //
-  // Two independent checks:
-  //   (a) Operator opt-in: desktop is always allowed, every other
-  //       deploy mode requires OPENSHIP_ALLOW_ZERO_AUTH=true. Without
-  //       both layers a network-reachable instance flipped to
-  //       authMode=none would silently hand out admin.
-  //   (b) Loopback TCP peer (kernel-reported address). Replaces the
-  //       old Host-header check, which a misconfigured reverse proxy
-  //       or LAN exposure could spoof.
-  if (env.DEPLOY_MODE !== "desktop" && !env.OPENSHIP_ALLOW_ZERO_AUTH) {
-    console.warn(
-      `[auth] zero-auth refused: DEPLOY_MODE=${env.DEPLOY_MODE} and OPENSHIP_ALLOW_ZERO_AUTH is not set.`,
-    );
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-
-  if (!isLoopbackRequest(c)) {
-    const peer = peerAddress(c);
-    console.warn(
-      `[auth] zero-auth refused for non-loopback peer=${peer ?? "<unknown>"}`,
-    );
+  // ── 2+3. No session → the zero-auth synthetic-admin path. Gated by the
+  // shared guard (canonical authMode + operator opt-in + loopback peer) so this
+  // and the public /upgrade-to-auth bootstrap route can never diverge. See
+  // zeroAuthAllowed() for the full rationale (CRITICAL #4).
+  const gate = await zeroAuthAllowed(c);
+  if (!gate.ok) {
+    if (!gate.reason.startsWith("authMode=")) {
+      console.warn(`[auth] zero-auth refused: ${gate.reason}`);
+    }
     return c.json({ error: "Unauthorized" }, 401);
   }
 

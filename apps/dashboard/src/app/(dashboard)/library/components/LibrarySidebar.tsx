@@ -269,13 +269,13 @@ function SourceRow({
       <div className="flex items-center gap-2.5 min-w-0">
         <div
           className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-            connected ? "bg-emerald-500/10" : "bg-muted/60"
+            connected ? "bg-success-bg" : "bg-muted/60"
           }`}
         >
           <Icon
             className={`size-4 ${
               connected
-                ? "text-emerald-600 dark:text-emerald-400"
+                ? "text-success"
                 : "text-muted-foreground"
             }`}
           />
@@ -295,13 +295,13 @@ function SourceRow({
       <span
         className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium shrink-0 ${
           connected
-            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+            ? "bg-success-bg text-success"
             : "bg-muted/60 text-muted-foreground"
         }`}
       >
         <span
           className={`w-1.5 h-1.5 rounded-full ${
-            connected ? "bg-emerald-500" : "bg-muted-foreground/40"
+            connected ? "bg-success-solid" : "bg-muted-foreground/40"
           }`}
         />
         {connected ? t.library.sidebar.connected : "—"}

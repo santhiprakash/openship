@@ -41,8 +41,6 @@ export async function registerResolvedRoutes(
   }
 
   for (const domain of domains) {
-    logger.log(`Registering route for ${domain.hostname}...\n`);
-
     let routeConfig: RouteConfig;
     const hasPortTarget = domain.targetPort !== undefined;
     const hasPathTarget = typeof domain.targetPath === "string";
@@ -60,6 +58,22 @@ export async function registerResolvedRoutes(
         : routeTarget;
     const targetUrl = (resolvedRouteTarget as { targetUrl?: string }).targetUrl;
     const staticRoot = (resolvedRouteTarget as { staticRoot?: string }).staticRoot;
+
+    // Source-of-truth registration log: show the RESOLVED upstream (ip:port) or
+    // static root, plus the target port/path + tls — so a wrong or MISSING
+    // upstream (the "route never registered → 404" case) is visible in the
+    // deploy log instead of a bare "Registering route for <host>".
+    const upstream = hasPortTarget
+      ? typeof targetUrl === "string"
+        ? targetUrl
+        : "⚠ NO UPSTREAM RESOLVED — container IP/port did not resolve; route will NOT serve"
+      : typeof staticRoot === "string"
+        ? `static:${staticRoot}`
+        : "⚠ NO STATIC ROOT RESOLVED";
+    logger.log(
+      `Registering route ${domain.hostname} → ${upstream} ` +
+        `[${hasPortTarget ? `container port ${domain.targetPort}` : `path ${domain.targetPath}`}, tls=${domain.tls}]\n`,
+    );
 
     if (hasPortTarget && typeof targetUrl === "string") {
       routeConfig = { domain: domain.hostname, tls: domain.tls, targetUrl };

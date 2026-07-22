@@ -191,9 +191,10 @@ export class DockerBackupExecutor implements BackupExecutor {
 
     await this.ensureImage(helperImage);
 
-    const hostConfig: Dockerode.HostConfig = source.type === "bind"
-      ? { Binds: [`${source.source}:/mnt:ro`], AutoRemove: true }
-      : { Binds: [`${source.source}:/mnt:ro`], AutoRemove: true };
+    const hostConfig: Dockerode.HostConfig = {
+      Binds: [`${source.source}:/mnt:ro`],
+      AutoRemove: true,
+    };
 
     const helper = await this.dockerode.createContainer({
       Image: helperImage,
@@ -202,8 +203,9 @@ export class DockerBackupExecutor implements BackupExecutor {
       AttachStdout: true,
       AttachStderr: true,
       Tty: false,
-      // No network — backup helper doesn't need to phone home.
-      NetworkDisabled: true,
+      // zstd isn't in alpine:3 and is apk-installed at runtime, which needs
+      // egress; gzip/none use busybox built-ins and stay network-isolated.
+      NetworkDisabled: compression !== "zstd",
     });
 
     const stream = await helper.attach({
@@ -212,7 +214,10 @@ export class DockerBackupExecutor implements BackupExecutor {
       stderr: true,
     });
     await helper.start();
-    return this.demuxContainerStream(helper, stream, opts ? (opts as ExecuteCommandOpts).timeoutMs : undefined);
+    // Generous last-resort timeout so a genuinely stuck stream errors instead of
+    // hanging forever (streamPath callers don't pass one).
+    const timeoutMs = opts ? (opts as ExecuteCommandOpts).timeoutMs : undefined;
+    return this.demuxContainerStream(helper, stream, timeoutMs ?? 60 * 60 * 1000);
   }
 
   async receiveStream(
@@ -260,7 +265,9 @@ export class DockerBackupExecutor implements BackupExecutor {
       OpenStdin: true,
       StdinOnce: true,
       Tty: false,
-      NetworkDisabled: true,
+      // zstd isn't in alpine:3 and is apk-installed at runtime, which needs
+      // egress; gzip/none use busybox built-ins and stay network-isolated.
+      NetworkDisabled: compression !== "zstd",
     });
 
     const stream = await helper.attach({
@@ -276,13 +283,137 @@ export class DockerBackupExecutor implements BackupExecutor {
     body.on("data", (chunk: Buffer) => {
       bytesWritten += chunk.byteLength;
     });
+    // Capture the helper's own stdout/stderr (multiplexed) so a non-zero exit
+    // reports WHY tar failed instead of a bare code.
+    const errChunks: Buffer[] = [];
+    stream.on("data", (c: Buffer) => {
+      if (errChunks.length < 32) errChunks.push(c);
+    });
     body.pipe(stream);
 
     const waitResult = await helper.wait();
     if (waitResult.StatusCode !== 0) {
-      throw new Error(`Restore helper exited with code ${waitResult.StatusCode}`);
+      const detail = Buffer.concat(errChunks)
+        .toString("utf8")
+        .replace(/[^\x20-\x7e\n]+/g, " ")
+        .trim()
+        .slice(-500);
+      throw new Error(
+        `Restore helper exited with code ${waitResult.StatusCode}${detail ? `: ${detail}` : ""}`,
+      );
     }
     return { bytesWritten };
+  }
+
+  /**
+   * SAME-DAEMON volume→volume copy in ONE helper container that mounts both
+   * volumes — no SSH round-trip, no cross-connection stream, no compression.
+   * The fastest path when source and target live on the same Docker daemon
+   * (same-server migration copy). `tar | tar` preserves perms/owners/symlinks.
+   *
+   * Security: the volume names only reach dockerode's `Binds` (docker API, not
+   * the shell) at FIXED mount points /from,/to — they never enter the `sh -c`
+   * string, so there is no interpolation/injection surface. Helper is
+   * network-isolated; source is mounted read-only.
+   */
+  async copyVolumeLocal(
+    srcService: ServiceHandle,
+    srcSourceId: string,
+    dstService: ServiceHandle,
+    dstSourceId: string,
+    opts?: { clearTarget?: boolean },
+  ): Promise<{ bytesWritten: number }> {
+    const src = (await this.listSources(srcService)).find((s) => s.id === srcSourceId);
+    const dst = (await this.listSources(dstService)).find((s) => s.id === dstSourceId);
+    if (!src) throw new Error(`Copy source "${srcSourceId}" not found on ${srcService.name}`);
+    if (!dst) throw new Error(`Copy target "${dstSourceId}" not found on ${dstService.name}`);
+    if (src.type === "tmpfs" || dst.type === "tmpfs") {
+      throw new Error(`Cannot copy tmpfs source (${srcSourceId}→${dstSourceId})`);
+    }
+
+    await this.ensureImage(HELPER_IMAGE);
+    const clearCmd = opts?.clearTarget ? "find /to -mindepth 1 -delete 2>/dev/null || true; " : "";
+    // Fixed mount points only — no untrusted value enters the shell string.
+    //
+    // A plain `tar … | tar …` exits with the RECEIVING tar's status under
+    // POSIX sh, so a FAILED source read (perms, unreadable volume) still
+    // reports success and silently leaves /to empty/partial — data loss. We
+    // stash the source tar's exit code and require BOTH tars to succeed before
+    // reporting size, so any read failure fails the copy loudly.
+    const copyCmd =
+      `${clearCmd}{ tar -C /from -cf - . ; echo $? > /tmp/src.rc ; } | tar -C /to -xf - ; ` +
+      `rc=$? ; [ "$(cat /tmp/src.rc 2>/dev/null)" = 0 ] && [ "$rc" = 0 ] && du -sk /to 2>/dev/null | cut -f1`;
+    const helper = await this.dockerode.createContainer({
+      Image: HELPER_IMAGE,
+      Cmd: ["sh", "-c", copyCmd],
+      HostConfig: {
+        Binds: [`${src.source}:/from:ro`, `${dst.source}:/to`],
+      },
+      Tty: true, // merged raw stdout so the trailing `du` number reads cleanly
+      NetworkDisabled: true,
+    });
+    try {
+      await helper.start();
+      const res = await helper.wait();
+      const out = await helper
+        .logs({ follow: false, stdout: true, stderr: true })
+        .then((b) => b.toString().trim())
+        .catch(() => "");
+      if (res.StatusCode !== 0) {
+        throw new Error(
+          `Local volume copy failed (${srcSourceId}→${dstSourceId}): ${out.slice(0, 500) || `exit ${res.StatusCode}`}`,
+        );
+      }
+      const kb = parseInt(out.split(/\s+/).pop() || "0", 10);
+      return { bytesWritten: Number.isFinite(kb) ? kb * 1024 : 0 };
+    } finally {
+      await helper.remove({ force: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * Does the named volume behind `sourceId` already exist on this daemon, and
+   * does it hold data? Used to refuse overwriting a pre-existing, non-empty
+   * target volume. Fixed mount point (/probe) — no untrusted value hits the
+   * shell. An unreadable/ambiguous result is reported as NON-empty (empty:false)
+   * so we err on the side of NOT clobbering.
+   */
+  async probeVolume(
+    service: ServiceHandle,
+    sourceId: string,
+  ): Promise<{ exists: boolean; empty: boolean }> {
+    const source = (await this.listSources(service)).find((s) => s.id === sourceId);
+    if (!source || source.type !== "volume" || !source.source) {
+      return { exists: false, empty: true };
+    }
+    try {
+      await this.dockerode.getVolume(source.source).inspect();
+    } catch {
+      return { exists: false, empty: true }; // not present → safe to create
+    }
+    await this.ensureImage(HELPER_IMAGE);
+    const helper = await this.dockerode.createContainer({
+      Image: HELPER_IMAGE,
+      Cmd: [
+        "sh",
+        "-c",
+        'if [ -z "$(ls -A /probe 2>/dev/null)" ]; then echo VOLEMPTY; else echo VOLDATA; fi',
+      ],
+      HostConfig: { Binds: [`${source.source}:/probe:ro`] },
+      Tty: true,
+      NetworkDisabled: true,
+    });
+    try {
+      await helper.start();
+      await helper.wait();
+      const out = await helper
+        .logs({ follow: false, stdout: true, stderr: true })
+        .then((b) => b.toString())
+        .catch(() => "");
+      return { exists: true, empty: out.includes("VOLEMPTY") };
+    } finally {
+      await helper.remove({ force: true }).catch(() => {});
+    }
   }
 
   async pipeIntoCommand(
@@ -406,17 +537,10 @@ export class DockerBackupExecutor implements BackupExecutor {
   // ── Helpers ──────────────────────────────────────────────────────────
 
   private async ensureImage(image: string): Promise<void> {
-    try {
-      await this.dockerode.getImage(image).inspect();
-    } catch {
-      // Pull synchronously — alpine:3 is tiny (~3 MB).
-      const stream = await this.dockerode.pull(image);
-      await new Promise<void>((resolve, reject) => {
-        this.dockerode.modem.followProgress(stream, (err) =>
-          err ? reject(err) : resolve(),
-        );
-      });
-    }
+    // Single, shared pull path. Over SSH this runs a blocking `docker pull`
+    // via the command executor — dockerode's pull + followProgress never EOFs
+    // over the tunneled socket and hung the cross-server volume move.
+    await this.runtime.pullImage(image);
   }
 
   /** dockerode `exec.start` returns a multiplexed stream — stdout +
@@ -477,6 +601,20 @@ export class DockerBackupExecutor implements BackupExecutor {
       if (stderrChunks.length < 16) stderrChunks.push(chunk);
     });
     container.modem.demuxStream(stream as unknown as NodeJS.ReadableStream, stdout, stderrSink);
+    // demuxStream never ends the destinations. End `stdout` when the attach
+    // stream itself ends (all output demuxed) — otherwise a consumer piping it
+    // into `tar -x` stdin never sees EOF and hangs. This is RELIABLE only
+    // because the helper has no AutoRemove (see streamPath): docker flushes the
+    // output then closes the attach cleanly on exit. We must NOT end on
+    // container.wait() — the container can exit while bytes are still buffered,
+    // and ending early truncates the tar ("Restore helper exited 1").
+    //
+    const endSinks = () => {
+      stdout.end();
+      stderrSink.end();
+    };
+    stream.on("end", endSinks);
+    stream.on("close", endSinks);
 
     const awaitExit = new Promise<ExecExitInfo>((resolve, reject) => {
       const timer = timeoutMs
@@ -490,6 +628,10 @@ export class DockerBackupExecutor implements BackupExecutor {
         .wait()
         .then((res) => {
           if (timer) clearTimeout(timer);
+          // Backstop: over the SSH-tunneled attach the stream's end/close is not
+          // always delivered. The container has exited so all output is pushed;
+          // give the buffer a moment to drain, then force-close. Idempotent.
+          setTimeout(endSinks, 3000);
           resolve({
             code: res.StatusCode,
             stderr: Buffer.concat(stderrChunks).toString("utf8").slice(0, 16 * 1024),

@@ -175,8 +175,8 @@ export function ServerForm({ server, onSaved, submitLabel }: ServerFormProps) {
   return (
     <div className="bg-card rounded-2xl border border-border/50">
       <div className="flex items-center gap-3 px-5 py-4 border-b border-border/50">
-        <div className="w-9 h-9 bg-blue-500/10 rounded-xl flex items-center justify-center">
-          <Server className="size-[18px] text-blue-500" />
+        <div className="w-9 h-9 bg-info-bg rounded-xl flex items-center justify-center">
+          <Server className="size-[18px] text-info" />
         </div>
         <div>
           <h2 className="font-semibold text-foreground text-[15px]">
@@ -402,14 +402,14 @@ export function ServerForm({ server, onSaved, submitLabel }: ServerFormProps) {
             {testing ? (
               <Loader2 className="size-4 animate-spin" />
             ) : testResult?.ok ? (
-              <Check className="size-4 text-emerald-500" />
+              <Check className="size-4 text-success" />
             ) : (
               <Network className="size-4" />
             )}
             {testing ? t.servers.form.testing : testResult?.ok ? t.servers.form.connected : t.servers.form.testConnection}
           </button>
           {testResult && !testResult.ok && (
-            <p className="text-xs text-red-500 text-center">{testResult.message}</p>
+            <p className="text-xs text-danger text-center">{testResult.message}</p>
           )}
           <button
             onClick={handleSave}

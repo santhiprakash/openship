@@ -30,6 +30,7 @@ export type {
   RouteRedirect,
   RouteHeaderRule,
   SslResult,
+  ManualCert,
   SshConfig,
   CommandExecutor,
   ShellOptions,
@@ -52,6 +53,12 @@ export type {
   DeploymentRef,
   RollbackInput,
   MakeActiveResult,
+  DockerMount,
+  DockerPortBinding,
+  DockerContainerSummary,
+  DockerContainerDetail,
+  DockerVolumeInfo,
+  DockerNetworkInfo,
 } from "./runtime/types";
 export { assertCapability, isMultiServiceRuntime } from "./runtime/types";
 export { DockerRuntime, type DockerConnectionOptions } from "./runtime/docker";
@@ -110,11 +117,17 @@ export {
 // ─── System layer ────────────────────────────────────────────────────────────
 export type {
   ComponentStatus,
+  EdgeClassification,
+  EdgeOccupant,
+  EdgePolicy,
+  EdgeStatus,
+  EdgeStopTarget,
   Feature,
   FeatureReadiness,
   InstallerConfig,
   InstallResult,
   PrerequisiteRule,
+  ProxyKind,
   RuntimeMode as SystemRuntimeMode,
   SystemComponentDefinition,
   SetupResult,
@@ -122,6 +135,22 @@ export type {
   SystemLog,
   SystemLogCallback,
 } from "./system/types";
+export type { ImportedSite, ProxyScanResult } from "./system/types";
+export {
+  classifyProxy,
+  EdgeConflictError,
+  EdgeMigrateRequested,
+  freeEdgeTargets,
+  probeEdge,
+  stopTargetsForStatus,
+} from "./system/edge-preflight";
+export { scanImportableSites, canImportProxy } from "./system/proxy-import";
+export {
+  runEdgeTakeover,
+  recoverInterruptedTakeover,
+  type EdgeTakeoverOptions,
+  type EdgeTakeoverResult,
+} from "./system/edge-takeover";
 
 export type { SetupState, SetupStateStore, ComponentState } from "./system/state";
 export { FileStateStore } from "./system/state";
@@ -136,6 +165,23 @@ export type {
 } from "./system/environment";
 export { resolveEnvironment } from "./system/environment";
 export { systemCatalog } from "./system/catalog";
+// Native-module versioning + migration framework (verify → reconcile).
+export {
+  resolveVerifiedCatalog,
+  loadEmbeddedCatalog,
+  fetchRemoteCatalog,
+  reconcileServerModule,
+  readManifest,
+  readManifestOrSeed,
+  manifestPath,
+  MODULES_STATE_DIR,
+  type VerifiedCatalog,
+  type ModuleCatalog,
+  type ReconcileResult,
+  type ReconcileOptions,
+  type PendingConsent,
+  type OnBoxManifest,
+} from "./system/modules";
 export { SYSTEM_COMPONENTS, getSystemComponentDefinition } from "./system/components";
 export {
   isRemoteConnectionError,
@@ -146,6 +192,14 @@ export {
   SshDisconnectedError,
 } from "./system/errors";
 export { probeTcp, probeHttp, waitForReady } from "./system/reachability";
+export {
+  parseListeningPorts,
+  probePortListeningOnce,
+  waitForPortListening,
+  type PortProbeExecutor,
+  type PortProbeResult,
+} from "./system/port-listen";
+export { probeStaticOutput, type OutputProbeResult } from "./system/output-exists";
 
 export { LocalExecutor, SshExecutor, SystemSshExecutor, createExecutor } from "./system/executor";
 export {

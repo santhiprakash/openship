@@ -167,9 +167,39 @@ export function createDomainRepo(db: Database) {
           verified: true,
           verifiedAt: new Date(),
           status: "active",
+          // Reset the verify state machine on success.
+          verifyAttempts: 0,
+          lastVerifyError: null,
+          lastCheckedAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(domain.id, id));
+    },
+
+    /**
+     * Record a failed verification attempt: bump the counter, stamp the time +
+     * reason, and flip status to `failed` only once attempts cross `failAfter`
+     * (so a still-propagating domain stays `pending`, a misconfigured one
+     * eventually reads `failed`). Returns the new attempt count.
+     */
+    async recordVerifyFailure(
+      id: string,
+      error: string,
+      failAfter = 8,
+    ): Promise<number> {
+      const row = await db.query.domain.findFirst({ where: eq(domain.id, id) });
+      const attempts = (row?.verifyAttempts ?? 0) + 1;
+      await db
+        .update(domain)
+        .set({
+          verifyAttempts: attempts,
+          lastVerifyError: error,
+          lastCheckedAt: new Date(),
+          ...(attempts >= failAfter ? { status: "failed" } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(domain.id, id));
+      return attempts;
     },
 
     async updateSsl(
@@ -190,6 +220,11 @@ export function createDomainRepo(db: Database) {
     /** Hard-delete every domain row tied to a project. Frees managed slugs immediately on project teardown. */
     async deleteByProjectId(projectId: string) {
       await db.delete(domain).where(eq(domain.projectId, projectId));
+    },
+
+    /** Hard-delete every domain row tied to a service. Clears derived routing rows on service teardown. */
+    async deleteByServiceId(serviceId: string) {
+      await db.delete(domain).where(eq(domain.serviceId, serviceId));
     },
 
     /** Find all domains needing SSL renewal */

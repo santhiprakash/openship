@@ -474,7 +474,7 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
                   setIsEditingMode(true);
                   void handlePasteFromClipboard();
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-foreground bg-muted/60 hover:bg-muted rounded-lg transition-colors"
               >
                 <FileText className="size-3.5" />
                 {ev.pasteEnv}
@@ -484,14 +484,14 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
                   setIsEditingMode(true);
                   handleUploadClick();
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-foreground bg-muted/60 hover:bg-muted rounded-lg transition-colors"
               >
                 <Upload className="size-3.5" />
                 {ev.uploadEnv}
               </button>
               <button
                 onClick={() => setIsEditingMode(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-foreground bg-muted/60 hover:bg-muted rounded-lg transition-colors"
               >
                 <Pencil className="size-3.5" />
                 {ev.edit}
@@ -503,7 +503,7 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
               {showSettingsActions && (
                 <button
                   onClick={onCancel}
-                  className="p-2 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                  className="p-2 text-muted-foreground hover:text-danger hover:bg-danger-bg rounded-lg transition-colors"
                   title={ev.cancel}
                 >
                   <X className="size-4" />
@@ -511,14 +511,14 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
               )}
               <button
                 onClick={() => void handlePasteFromClipboard()}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-foreground bg-muted/60 hover:bg-muted rounded-lg transition-colors"
               >
                 <FileText className="size-3.5" />
                 {ev.pasteEnv}
               </button>
               <button
                 onClick={handleUploadClick}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-foreground bg-muted/60 hover:bg-muted rounded-lg transition-colors"
               >
                 <Upload className="size-3.5" />
                 {ev.uploadEnv}
@@ -538,14 +538,14 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
             <>
               <button
                 onClick={() => void handlePasteFromClipboard()}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-foreground bg-muted/60 hover:bg-muted rounded-lg transition-colors"
               >
                 <FileText className="size-3.5" />
                 {ev.pasteEnv}
               </button>
               <button
                 onClick={handleUploadClick}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-foreground bg-muted/60 hover:bg-muted rounded-lg transition-colors"
               >
                 <Upload className="size-3.5" />
                 {ev.uploadEnv}
@@ -638,7 +638,7 @@ const EnvironmentVariables: React.FC<EnvironmentVariablesPropsOptional> = ({
                 {showEditControls && isEditingMode && (
                   <button
                     onClick={() => removeEnvVar(index)}
-                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground/50 hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground/50 hover:text-danger hover:bg-danger-bg transition-colors"
                     type="button"
                     title={ev.delete}
                   >
@@ -773,8 +773,8 @@ function getEnvResolutionState(meta: EnvironmentVariableMeta | undefined, value:
     return {
       icon: AlertTriangle,
       label: res.needsValue,
-      badgeClass: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-      inputClass: "border-amber-400/70 bg-amber-500/5 focus:ring-amber-500/20",
+      badgeClass: "bg-warning-bg text-warning",
+      inputClass: "border-warning-border bg-warning-bg focus:ring-warning-border",
     };
   }
 
@@ -782,8 +782,8 @@ function getEnvResolutionState(meta: EnvironmentVariableMeta | undefined, value:
     return {
       icon: RotateCcw,
       label: res.fallbackDefault,
-      badgeClass: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
-      inputClass: "border-blue-400/50 bg-blue-500/5 focus:ring-blue-500/20",
+      badgeClass: "bg-info-bg text-info",
+      inputClass: "border-info-border bg-info-bg focus:ring-info-border",
     };
   }
 
@@ -791,8 +791,8 @@ function getEnvResolutionState(meta: EnvironmentVariableMeta | undefined, value:
     return {
       icon: FileText,
       label: res.loadedFromEnv,
-      badgeClass: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-      inputClass: "border-emerald-400/50 bg-emerald-500/5 focus:ring-emerald-500/20",
+      badgeClass: "bg-success-bg text-success",
+      inputClass: "border-success-border bg-success-bg focus:ring-success-border",
     };
   }
 

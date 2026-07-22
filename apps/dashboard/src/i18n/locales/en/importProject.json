@@ -136,7 +136,9 @@
       "domainLabel": "Domain",
       "free": "Free",
       "custom": "Custom",
-      "routingTrafficPrefix": "Routing traffic to port"
+      "routingTrafficPrefix": "Routing traffic to port",
+      "duplicateTitle": "Duplicate domain",
+      "duplicateDescription": "Two routes point at the same domain — change one so each route has its own:"
     },
     "shared": {
       "title": "Shared environment",
@@ -264,6 +266,19 @@
       "process": "Process",
       "unitDescription": "Unit Description",
       "openshipDeployment": "Openship Deployment"
+    },
+    "portAdvisory": {
+      "title": "Is that the right port?",
+      "bannerTitle": "A port might be misconfigured",
+      "review": "Review",
+      "note": "Routing points at this port — if it's wrong, requests will fail with a 502.",
+      "body": "Nothing responded on port {port}. If your app listens on a different port, set the correct one here.",
+      "bodyService": "Service \"{service}\": nothing responded on port {port}. If it listens on a different port, set the correct one here.",
+      "newPortLabel": "Correct port",
+      "changePort": "Change port",
+      "skip": "Skip",
+      "applied": "Routing updated to port {port}.",
+      "changeError": "Couldn't update the port. Please try again."
     },
     "title": {
       "cancelled": "Deployment Cancelled",

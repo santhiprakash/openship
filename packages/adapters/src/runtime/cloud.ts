@@ -16,6 +16,7 @@ import { join, posix } from "node:path";
 
 import {
   DEFAULT_RESOURCE_CONFIG,
+  cloudCpus,
   type BuildConfig,
   type DeployConfig,
   type BuildResult,
@@ -63,14 +64,41 @@ import { createDockerBuildContext } from "./docker-build-context";
 import { normalizeDockerRelativePath, resolveDockerfileCandidates } from "./docker-paths";
 import { runLocalBuild } from "./local-build";
 import { transferLocalDirectory } from "./transfer";
+import { prepareStackOutput, resolveProjectDir } from "./stack-output";
 import { checkGit } from "../system/checks";
 import { installGit } from "../system/installer";
 import { isRuntimeNotFoundError } from "../system/errors";
-import { STACKS, TRANSFER_EXCLUDES, SYSTEM, safeErrorMessage, missingOutputDirectoryMessage, type StackId, type StackDefinition, type ComposeAdvanced } from "@repo/core";
+import { STACKS, TRANSFER_EXCLUDES, buildOutputTransferExcludes, SYSTEM, safeErrorMessage, missingOutputDirectoryMessage, packageManagerEnsureCommand, type StackId, type StackDefinition, type ComposeAdvanced } from "@repo/core";
 
 type CloudWorkspaceRuntime = Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
 const DOCKERFILE_SOURCE_IMAGE = "node:22";
 const WORKSPACE_STREAM_EXEC_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
+ * Oblien throws typed errors carrying status/code/requestId/details (402
+ * payment_required/quota, 401 authentication_error, 422 validation_error, 409
+ * conflict, 404 not_found, 429 rate_limited). safeErrorMessage keeps only
+ * `.message`, so a failed provision surfaces as a causeless "Failed to create
+ * workspace". This re-attaches the fields you actually need to diagnose it.
+ */
+function formatCloudError(err: unknown): string {
+  const base = safeErrorMessage(err);
+  if (!err || typeof err !== "object") return base;
+  const e = err as { status?: number; code?: string; requestId?: string; details?: unknown };
+  const tags: string[] = [];
+  const codePart = [e.code, typeof e.status === "number" ? `HTTP ${e.status}` : null].filter(Boolean).join(" ");
+  if (codePart) tags.push(codePart);
+  if (e.requestId) tags.push(`requestId=${e.requestId}`);
+  let detail = "";
+  if (e.details != null) {
+    try {
+      detail = typeof e.details === "string" ? e.details : JSON.stringify(e.details);
+    } catch {
+      /* non-serializable details */
+    }
+  }
+  return `${base}${tags.length ? ` [${tags.join(", ")}]` : ""}${detail ? ` — ${detail.slice(0, 800)}` : ""}`;
+}
 
 function now(): string {
   return new Date().toISOString();
@@ -319,14 +347,14 @@ export async function provisionCloudWorkspace(
       image: config.image,
       mode: config.mode,
       config: {
-        cpus: config.resources.cpuCores,
+        cpus: cloudCpus(config.resources.cpuCores),
         memory_mb: config.resources.memoryMb,
         disk_size_mb: config.resources.diskMb,
         env: toEnvArray(config.env ?? {}),
       },
     });
   } catch (err) {
-    logger?.log(`Failed to create workspace from image "${config.image}": ${safeErrorMessage(err)}\n`, "error");
+    logger?.log(`Failed to create workspace from image "${config.image}": ${formatCloudError(err)}\n`, "error");
     throw err;
   }
 
@@ -357,7 +385,7 @@ export async function provisionCloudWorkspace(
     return { workspaceId: wsData.id, runtime: rt };
   } catch (err) {
     await ws.delete().catch(() => {});
-    logger?.log(`Failed to prepare workspace "${wsData.id}": ${safeErrorMessage(err)}\n`, "error");
+    logger?.log(`Failed to prepare workspace "${wsData.id}": ${formatCloudError(err)}\n`, "error");
     throw err;
   }
 }
@@ -379,6 +407,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
     "containerIp",
     "rollback",
     "serviceShell",
+    "inContainerExec",
   ]);
 
   /**
@@ -542,7 +571,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
           this.trackActiveBuildWorkspace(config.sessionId, wsId);
         }
       } catch (err) {
-        const msg = safeErrorMessage(err);
+        const msg = formatCloudError(err);
         log.log(`Failed to provision build environment: ${msg}`, "error");
         return {
           sessionId: config.sessionId,
@@ -558,6 +587,9 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         log.log("Build strategy: local (build on API host, upload to cloud)\n");
         const stackDef: StackDefinition | undefined = STACKS[config.stack as StackId];
 
+        // Set when a Next.js standalone bundle is detected (see bare.ts).
+        let standaloneStartCommand: string | undefined;
+
         let result: Awaited<ReturnType<typeof runLocalBuild>>;
         try {
           result = await runLocalBuild({
@@ -567,6 +599,26 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
             transferOutput: async (buildDir) => {
               if (activeBuild.abort.signal.aborted) {
                 throw new Error("Build cancelled");
+              }
+
+              // Self-contained build output (detect-only): if this stack's build
+              // emitted a wholesale-shippable bundle (e.g. Next's standalone),
+              // upload it to /app and skip the on-target install. Absent → host
+              // mode below.
+              const selfContained = await prepareStackOutput(
+                config.stack,
+                resolveProjectDir(buildDir, config.rootDirectory),
+              );
+              if (selfContained) {
+                log.log("Detected self-contained build output — uploading the bundle (no install on cloud).\n");
+                await transferLocalDirectory(
+                  selfContained.bundleDir,
+                  { kind: "cloud-runtime", runtime: rt, path: "/app" },
+                  log,
+                  { excludes: [] },
+                );
+                standaloneStartCommand = selfContained.startCommand;
+                return;
               }
 
               if (stackDef?.productionPaths?.length) {
@@ -579,13 +631,20 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
                   { includes: [...stackDef.productionPaths] },
                 );
               } else {
-                // Runtime stacks - transfer everything except deps & caches
-                const excludes = [...TRANSFER_EXCLUDES, ...(stackDef?.cacheDirs ?? [])];
+                // Runtime stacks: ship tracked source PLUS the build output,
+                // drop deps/caches. The build dir is a git clone, so packing
+                // uses git-truth (omits the gitignored build output) — hence
+                // `alsoInclude: [outputDirectory]` re-adds it. `excludes` covers
+                // the no-git fallback (upload sources), where
+                // buildOutputTransferExcludes keeps the output by name.
                 await transferLocalDirectory(
                   buildDir,
                   { kind: "cloud-runtime", runtime: rt, path: "/app" },
                   log,
-                  { excludes },
+                  {
+                    excludes: buildOutputTransferExcludes(stackDef),
+                    alsoInclude: stackDef?.outputDirectory ? [stackDef.outputDirectory] : undefined,
+                  },
                 );
               }
 
@@ -593,11 +652,16 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
                 throw new Error("Build cancelled");
               }
 
-              // Install production dependencies with correct platform binaries
+              // Install production dependencies with correct platform binaries.
+              // Enable the package manager first (corepack for pnpm/yarn; no-op
+              // otherwise) — the node:22 cloud workspace ships corepack disabled,
+              // so a pnpm/yarn install would otherwise hit "pnpm: not found".
               const installCmd = config.installCommand?.trim();
               if (installCmd) {
                 log.log("Installing production dependencies on cloud...\n");
-                await this.execAndStream(rt, ["sh", "-c", `cd /app && ${installCmd}`], log.callback);
+                const pmEnsure = packageManagerEnsureCommand(config.packageManager);
+                const fullInstall = pmEnsure ? `${pmEnsure} && ${installCmd}` : installCmd;
+                await this.execAndStream(rt, ["sh", "-c", `cd /app && ${fullInstall}`], log.callback);
               }
             },
           });
@@ -620,6 +684,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
           imageRef: wsId,
           durationMs: result.durationMs,
           errorMessage: activeBuild.abort.signal.aborted ? undefined : result.errorMessage,
+          startCommand: standaloneStartCommand,
         };
       }
 
@@ -1318,14 +1383,14 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         image: config.buildImage,
         mode: "temporary",
         config: {
-          cpus: config.resources.cpuCores,
+          cpus: cloudCpus(config.resources.cpuCores),
           memory_mb: config.resources.memoryMb,
           disk_size_mb: config.resources.diskMb,
           env: envArray,
         },
       });
     } catch (err) {
-      const message = safeErrorMessage(err);
+      const message = formatCloudError(err);
       logger.log(
         `Failed to create build workspace from image "${config.buildImage}": ${message}\n`,
         "error",
@@ -1370,7 +1435,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
     } catch (err) {
       // Workspace was created but setup failed - clean it up
       await ws.delete().catch(() => {});
-      const message = safeErrorMessage(err);
+      const message = formatCloudError(err);
       logger.log(`Failed to prepare build workspace "${wsData.id}": ${message}\n`, "error");
       throw err;
     }
@@ -1423,21 +1488,49 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
       );
     }
 
-    // TODO: temporarily disabled - testing without resource shrink
-    // try {
-    //   // 2. Resize CPU/memory to production levels
-    //   //    Disk is NOT resized down - VMs don't support disk shrink.
-    //   //    The build disk size carries over (harmless, just extra space).
-    //   await ws.resources.update({
-    //     cpus: config.resources.cpuCores,
-    //     memory_mb: config.resources.memoryMb,
-    //     apply: true,
-    //   });
-    // } catch (err) {
-    //   throw new Error(`Failed to resize workspace: ${err instanceof Error ? err.message : err}`);
-    // }
+    // 2. Resize CPU/memory DOWN to production levels. The workspace was built at
+    //    the large build tier (DEFAULT_BUILD_RESOURCE_CONFIG = 4 vCPU / 8 GB); a
+    //    running app must not keep hogging that. `config.resources` is the resolved
+    //    production tier (cloud default = "low" / 512 MB). Disk is NOT resized down
+    //    — VMs don't support disk shrink, so the build disk carries over (harmless).
+    //    Non-fatal: if the resize call errors we log and keep the deploy (it just
+    //    runs at the build size) rather than failing an otherwise-healthy release.
+    const prodResources = config.resources ?? DEFAULT_RESOURCE_CONFIG;
+    // MANDATORY (not best-effort): a workspace left at the build tier hogs the
+    // pool and blows the free-tier limit — the exact saturation bug we chase. So
+    // retry transient errors, then FAIL the deploy rather than silently promoting
+    // a 4 vCPU / 8 GB workspace to production. `apply: true` performs the live
+    // resize. Disk is not shrunk (VMs can't) — the build disk carries over.
+    let resized = false;
+    for (let attempt = 1; attempt <= 3 && !resized; attempt++) {
+      try {
+        await ws.resources.update({
+          cpus: cloudCpus(prodResources.cpuCores),
+          memory_mb: prodResources.memoryMb,
+          apply: true,
+        });
+        resized = true;
+        log({
+          timestamp: now(),
+          level: "info",
+          message: `Resized workspace to ${prodResources.cpuCores} vCPU · ${prodResources.memoryMb} MB.\n`,
+        });
+      } catch (err) {
+        if (attempt === 3) {
+          throw new Error(
+            `Failed to shrink workspace from the build tier to ${prodResources.cpuCores} vCPU · ${prodResources.memoryMb} MB after 3 attempts — refusing to promote a build-sized workspace: ${safeErrorMessage(err)}`,
+          );
+        }
+        log({
+          timestamp: now(),
+          level: "warn",
+          message: `Resize attempt ${attempt} failed, retrying… ${safeErrorMessage(err)}\n`,
+        });
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      }
+    }
 
-    // 2. Prepare production directory - copy only what's needed at runtime
+    // 3. Prepare production directory - copy only what's needed at runtime
     const builtArtifact = this.builtArtifacts.get(workspaceId);
     const prodPaths = config.productionPaths;
     const workDir =
@@ -1475,13 +1568,17 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         const moveLines = safePaths
           .map((p) => {
             const e = sq(p);
+            // `e` is escaped for a SINGLE-quoted context — every interpolation
+            // must therefore sit inside single quotes. The echo lines used
+            // double quotes, where $()/backticks/$VAR stay active, so a
+            // productionPaths value like `x$(cmd)` executed. Keep them single-quoted.
             return `if [ -e '/app/${e}' ]; then
   d=$(dirname '${e}')
   mkdir -p "/app/.staging/$d"
   mv '/app/${e}' '/app/.staging/${e}'
-  echo "  moved ${e}"
+  echo '  moved /app/${e}'
 else
-  echo "  skip ${e} (not found)"
+  echo '  skip /app/${e} (not found)'
 fi`;
           })
           .join("\n");
@@ -1510,7 +1607,7 @@ fi`;
       }
     }
 
-    // 3. Create a workload for the application process
+    // 4. Create a workload for the application process
     const startCommand = builtArtifact?.runtime.startCommand || config.startCommand || "npm start";
     const envArray = toEnvArray({
       ...(builtArtifact?.runtime.env ?? {}),
@@ -1535,7 +1632,7 @@ fi`;
       throw new Error(`Failed to create workload: ${err instanceof Error ? err.message : err}`);
     }
 
-    // 4. Expose the primary configured public endpoint, if any.
+    // 5. Expose the primary configured public endpoint, if any.
     let url: string | undefined;
     const primaryEndpoint = primaryPublicEndpoint(config);
     const primarySlug = endpointSlug(primaryEndpoint);
@@ -1959,9 +2056,10 @@ fi`;
   // ── Observability ──────────────────────────────────────────────────────
 
   async getContainerInfo(containerId: string): Promise<ContainerInfo> {
+    const ws = this.ws(containerId);
     let data: Awaited<ReturnType<ReturnType<typeof this.ws>["get"]>>;
     try {
-      data = await this.ws(containerId).get();
+      data = await ws.get();
     } catch (err) {
       // ABSENT: the workspace was deleted on Openship Cloud out-of-band →
       // report `missing` (drift). A transient Oblien/network error is NOT a
@@ -1980,12 +2078,46 @@ fi`;
       creating: "building",
       error: "failed",
     };
+    let status: ContainerStatus = statusMap[data.status] ?? "stopped";
 
-    return {
-      containerId,
-      status: statusMap[data.status] ?? "stopped",
-      ip: (data as Record<string, unknown>).ip as string | undefined,
-    };
+    // A workspace being "running" is only its LIFECYCLE — it says nothing about
+    // whether the service's PROCESS is actually up. When managed workloads exist
+    // (a service with a command, or Oblien's per-image default workload), reflect
+    // their REAL state, so a workspace whose process never started or crashed is
+    // not falsely reported as running. If there are NO workloads, the image runs
+    // as the workspace's own process, so the lifecycle status is the best signal.
+    if (status === "running") {
+      try {
+        const workloads = await ws.workloads.list();
+        if (workloads && workloads.length > 0) {
+          const states = workloads.map((w) =>
+            String(
+              (w as { status?: string; states?: string }).status ??
+                (w as { states?: string }).states ??
+                "",
+            ).toLowerCase(),
+          );
+          if (states.some((s) => s.includes("run"))) status = "running";
+          else if (states.some((s) => /(fail|exit|error|crash|dead)/.test(s))) status = "failed";
+          else status = "deploying";
+        }
+      } catch {
+        // Transient list error — keep the workspace-derived status.
+      }
+    }
+
+    // Prefer the DOCUMENTED private IP (the address peers use over a private
+    // link) from apiAccess.rawToken — ws.get().ip is the public/gateway IP and
+    // is often unset for internal-only services.
+    let ip: string | undefined = (data as Record<string, unknown>).ip as string | undefined;
+    try {
+      const raw = await ws.apiAccess.rawToken();
+      if (raw?.ip) ip = raw.ip;
+    } catch {
+      // Keep the ws.get() ip fallback.
+    }
+
+    return { containerId, status, ip };
   }
 
   async getRuntimeLogs(containerId: string, tail?: number): Promise<LogEntry[]> {
@@ -2303,6 +2435,20 @@ fi`;
     return this.compose.deployServiceWorkload(group, config, onLog);
   }
 
+  async finalizeServiceGroup(
+    group: MultiServiceGroupHandle,
+    onLog?: LogCallback,
+  ): Promise<void> {
+    return this.compose.finalizeGroup(group.id, onLog);
+  }
+
+  registerExistingWorkload(
+    group: MultiServiceGroupHandle,
+    service: { serviceName: string; workspaceId: string; ip?: string; portSpecs?: string[] },
+  ): void {
+    this.compose.registerExistingWorkload(group, service);
+  }
+
   // ── Account ────────────────────────────────────────────────────────────
 
   /** Check cloud credentials and account status. Throws on failure. */
@@ -2366,6 +2512,14 @@ fi`;
   }
 
   // ── Private helpers ────────────────────────────────────────────────────
+
+  /** Command runner INSIDE the workspace named by `containerId` (the stored
+   *  workspace id) — reuses the same runtime-token path as `openServiceShell`.
+   *  Powers the advisory post-deploy port probe. */
+  async inContainerExecutor(containerId: string): Promise<CommandExecutor> {
+    const rt = await this.ws(containerId).runtime();
+    return this.workspaceExecutor(rt);
+  }
 
   private workspaceExecutor(rt: CloudWorkspaceRuntime): CommandExecutor {
     const run = async (

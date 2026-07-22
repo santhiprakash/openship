@@ -285,7 +285,7 @@ export function MailboxesTab({
       </div>
 
       {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-600 dark:text-red-400">
+        <div className="rounded-xl border border-danger-border bg-danger-bg px-4 py-3 text-sm text-danger">
           {error}
         </div>
       )}
@@ -497,7 +497,7 @@ function PasswordPreview({
         aria-label={t.emailsAdmin.mailboxes.create.copyPassword}
       >
         {copied ? (
-          <Check className="size-3.5 text-emerald-500" />
+          <Check className="size-3.5 text-success" />
         ) : (
           <Copy className="size-3.5" />
         )}
@@ -636,7 +636,7 @@ function DeleteMailboxConfirm({
       onCancel={onCancel}
     >
       {!isPostmaster ? (
-        <label className="flex items-start gap-3 cursor-pointer p-3 -mx-1 rounded-xl hover:bg-red-500/5 transition-colors">
+        <label className="flex items-start gap-3 cursor-pointer p-3 -mx-1 rounded-xl hover:bg-danger-bg transition-colors">
           <input
             type="checkbox"
             checked={hardDelete}
@@ -644,7 +644,7 @@ function DeleteMailboxConfirm({
             className="rounded border-border mt-0.5"
           />
           <span>
-            <span className="block text-sm font-medium text-red-600 dark:text-red-400">
+            <span className="block text-sm font-medium text-danger">
               {t.emailsAdmin.mailboxes.deleteForm.hardDeleteLabel}
             </span>
             <span className="block text-xs text-muted-foreground mt-0.5 leading-relaxed">
@@ -653,7 +653,7 @@ function DeleteMailboxConfirm({
           </span>
         </label>
       ) : (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+        <div className="rounded-xl border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning">
           {t.emailsAdmin.mailboxes.deleteForm.postmasterNote}
         </div>
       )}

@@ -27,7 +27,7 @@ export const LogsActions: React.FC<LogsActionsProps> = ({
         onClick={onCopy}
         className="inline-flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-muted/60 rounded-md transition-colors text-xs text-muted-foreground hover:text-foreground"
       >
-        {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+        {copied ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
         {copied ? t.projectDetail.logs.actions.copied : t.projectDetail.logs.actions.copy}
       </button>
 
@@ -43,7 +43,7 @@ export const LogsActions: React.FC<LogsActionsProps> = ({
       {/* Clear */}
       <button
         onClick={onClear}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-red-500/10 rounded-md transition-colors text-xs text-muted-foreground hover:text-red-600"
+        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-danger-bg rounded-md transition-colors text-xs text-muted-foreground hover:text-danger"
       >
         <RefreshCw className="w-3.5 h-3.5" />
         {t.projectDetail.logs.actions.clear}

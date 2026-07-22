@@ -131,7 +131,7 @@ export async function start(c: Context) {
     return c.json({
       ok: true,
       projectId: result.projectId,
-      appId: result.appId,
+      groupId: result.groupId,
       migrationTargetUrl: result.migrationTargetUrl,
     });
   } catch (err) {

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { Terminal } from "@xterm/xterm";
 import BuildTerminal from "./BuildTerminal";
+import { PortAdvisoryModal } from "./PortAdvisoryModal";
 import { generateIcon } from "@/utils/icons";
 import { useRouter } from "next/navigation";
 import { encodeRepoSlug } from "@/utils/repoSlug";
@@ -158,7 +159,7 @@ const DeploymentProcessing: React.FC<DeploymentProcessingProps> = ({ onRedeploy 
             {actions.map((action) => {
               const variant = (action.variant || "secondary") as "secondary" | "danger" | "primary";
               const styles = variant === "danger"
-                ? "bg-red-600 text-white hover:bg-red-700"
+                ? "bg-danger-solid text-white hover:bg-danger-solid/90"
                 : variant === "primary"
                   ? "bg-primary text-primary-foreground hover:bg-primary/90"
                   : "border border-border bg-muted text-foreground hover:bg-muted/80";
@@ -259,14 +260,25 @@ const DeploymentProcessing: React.FC<DeploymentProcessingProps> = ({ onRedeploy 
           {/* Main Content */}
           <div className="lg:col-span-2 space-y-6">
             {hasWarning && (
-              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/8 px-4 py-3">
-                <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+              <div className="rounded-2xl border border-warning-border bg-warning-bg px-4 py-3">
+                <p className="text-sm font-medium text-warning">
                   {dp.warningTitle}
                 </p>
-                <p className="mt-1 text-sm text-amber-700/80 dark:text-amber-300/80">
+                <p className="mt-1 text-sm text-warning/80">
                   {state.warningMessage}
                 </p>
               </div>
+            )}
+
+            {deploymentStatus === "ready" && (
+              <PortAdvisoryModal
+                deploymentId={state.deploymentId}
+                projectId={state.projectId ?? config.projectId}
+                checks={state.portCheck}
+                skipped={state.portCheckSkipped}
+                isCompose={false}
+                publicEndpoints={config.publicEndpoints}
+              />
             )}
 
             {/* Steps — progress tracker above the terminal. */}
@@ -348,10 +360,10 @@ const DeploymentProcessing: React.FC<DeploymentProcessingProps> = ({ onRedeploy 
                 )}
               </div>
 
-              <div className="bg-white dark:bg-black border border-border/50 rounded-xl overflow-hidden h-[400px]">
+              <div className="bg-white dark:bg-black dim:bg-black border border-border/50 rounded-xl overflow-hidden h-[400px]">
                 <BuildTerminal
                   onReady={handleTerminalReady}
-                  theme={resolvedTheme}
+                  theme={resolvedTheme === "light" ? "light" : "dark"}
                 />
               </div>
             </div>
@@ -491,7 +503,7 @@ const DeploymentDetails = memo(() => {
     deploymentStatus === "failed" || deploymentStatus === "cancelled"
       ? "text-destructive"
       : hasWarning
-        ? "text-amber-600 dark:text-amber-300"
+        ? "text-warning"
         : deploymentStatus === "ready"
           ? "text-primary"
           : "text-foreground";
@@ -499,7 +511,7 @@ const DeploymentDetails = memo(() => {
     deploymentStatus === "failed" || deploymentStatus === "cancelled"
       ? "bg-destructive/10"
       : hasWarning
-        ? "bg-amber-500/10"
+        ? "bg-warning-bg"
         : deploymentStatus === "ready"
           ? "bg-primary/10"
           : "bg-muted/60";
@@ -507,7 +519,7 @@ const DeploymentDetails = memo(() => {
     deploymentStatus === "failed" || deploymentStatus === "cancelled" ? (
       <XCircle className="size-4 text-destructive" />
     ) : hasWarning ? (
-      <CheckCircle2 className="size-4 text-amber-600 dark:text-amber-300" />
+      <CheckCircle2 className="size-4 text-warning" />
     ) : deploymentStatus === "ready" ? (
       <CheckCircle2 className="size-4 text-primary" />
     ) : (

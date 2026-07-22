@@ -226,6 +226,28 @@ export async function postMgmt<T>(serverId: string, path: string): Promise<T | n
 }
 
 /**
+ * POST a JSON body to the OpenResty management API through the SSH tunnel.
+ * Used to push per-route rules into the edge's `rules` shared dict (reload-free).
+ */
+export async function postMgmtJson<T>(
+  serverId: string,
+  path: string,
+  json: unknown,
+): Promise<T | null> {
+  const res = await tunnelRequest(serverId, OPENRESTY_MGMT_PORT, path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(json),
+  });
+  if (!res || res.statusCode < 200 || res.statusCode >= 300) return null;
+  try {
+    return JSON.parse(res.body) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Lightweight health probe for the OpenResty management port.
  */
 export async function probeMgmt(serverId: string): Promise<boolean> {

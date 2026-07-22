@@ -15,8 +15,8 @@ const MODELS = [
       "Auto-scaling, zero-downtime rolling deploys",
       "Backups, monitoring, alerts included",
     ],
-    price: "From free",
-    priceNote: "Pay only for compute and bandwidth",
+    price: "Coming soon",
+    priceNote: "Plans announced once billing is live",
   },
   {
     n: "02",
@@ -29,8 +29,8 @@ const MODELS = [
       "Multi-server fan-out across regions",
       "No agent or dashboard on your boxes",
     ],
-    price: "Free, forever",
-    priceNote: "Open source, no usage caps, no telemetry",
+    price: "Unavailable for now",
+    priceNote: "Paused while we finish setting up payments",
     feature: true,
   },
   {
@@ -44,8 +44,8 @@ const MODELS = [
       "Or production locally, previews managed",
       "One billing, one team, one dashboard",
     ],
-    price: "Pay per piece",
-    priceNote: "Only the managed services you use",
+    price: "Coming soon",
+    priceNote: "Available once plans open",
   },
 ];
 

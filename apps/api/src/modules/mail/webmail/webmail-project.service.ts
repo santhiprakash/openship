@@ -22,17 +22,19 @@
  * target" flow is gone too - it OOM-killed small VPSes during the Vite
  * SSR pass; pre-building avoids that entirely.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { repos, type Project } from "@repo/db";
-import { safeErrorMessage } from "@repo/core";
+import { safeErrorMessage, type ReleaseSource, type DeployTarget } from "@repo/core";
 import { sshManager } from "../../../lib/ssh-manager";
+import { decryptEnvMap } from "../../../lib/encryption";
 import { assertResourceInOrg } from "../../../lib/controller-helpers";
 import type { RequestContext } from "../../../lib/request-context";
-import { fetchAndExtractRelease } from "../../system/migration/lib/release-download";
+import {
+  apiRootPath,
+  readApiVersion,
+  resolveReleaseDist,
+  type ReleaseDistSpec,
+} from "../../../lib/release-resolver";
 import {
   buildConfigSnapshot,
   createQueuedDeployment,
@@ -70,139 +72,38 @@ const REMOTE_SQLITE_PATH = `${REMOTE_PERSIST_DIR}/zero.db`;
 /** Internal port Zero binds to behind the OpenResty vhost the pipeline creates. */
 const DEFAULT_INTERNAL_PORT = 4080;
 
-/** GitHub repo for release downloads. Same repo as openship - mono-version. */
-const RELEASE_REPO = "oblien/openship";
-
 /**
- * apps/api/ directory, used to find the root package.json (for version)
- * and the repo-local `apps/email/dist/` dev path.
- *
- * This file lives at apps/api/src/modules/mail/webmail/webmail-project.service.ts,
- * so 4 levels up reaches apps/api/. Mirrors the ESM-safe pattern in
- * openship-dist.ts.
+ * Webmail (Zero) release source. Same repo/tag as openship — mono-version —
+ * but a distinct per-arch asset. The shared resolver (release-dist.ts) does
+ * the actual 3-slot resolution + download; this only pins the spec.
  */
-const __dirname = (() => {
-  try {
-    return resolve(fileURLToPath(import.meta.url), "..");
-  } catch {
-    // CJS fallback (tests, scripts) - walk back up from cwd.
-    return resolve(process.cwd(), "apps/api/src/modules/mail/webmail");
-  }
-})();
-const API_ROOT = resolve(__dirname, "../../../..");
+const WEBMAIL_SOURCE: ReleaseSource = {
+  mode: "github",
+  repo: "oblien/openship",
+  assetTemplate: "openship-email-{tag}-linux-amd64.tar.gz",
+};
 
-/**
- * Read the API's own version from package.json. Embedded at first call
- * and cached. We use the API version as the openship release tag because
- * the email/webmail release ships at the SAME tag as the rest of openship
- * (mono-version).
- */
-let cachedVersion: string | undefined;
-function readApiVersion(): string {
-  if (cachedVersion) return cachedVersion;
-  const pkgPath = join(API_ROOT, "package.json");
-  try {
-    const raw = readFileSync(pkgPath, "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    if (typeof parsed.version === "string" && parsed.version.length > 0) {
-      cachedVersion = parsed.version;
-      return cachedVersion;
-    }
-    throw new Error(`package.json at ${pkgPath} has no version field`);
-  } catch (err) {
-    throw new Error(
-      `Cannot read Openship API version from ${pkgPath}: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
-}
-
-/** Root for downloaded release caches. Mirrors openship-dist.ts. */
-function computeDataDir(): string {
-  return process.env.OPENSHIP_DATA_DIR ?? join(homedir(), ".openship");
-}
-
-/** Repo-local dev path produced by `bun run build` in apps/email/. */
-function computeRepoLocalEmailDistPath(): string {
-  // apps/api/ → ../email/dist
-  return resolve(API_ROOT, "..", "email", "dist");
-}
-
-export class WebmailReleaseDistMissingError extends Error {
-  readonly code = "WEBMAIL_RELEASE_DIST_MISSING" as const;
-  constructor(distPath: string, options?: { cause?: unknown }) {
-    super(
-      `Webmail release dist not found at ${distPath}. ` +
-        `Build it first: \`cd apps/email && bun run build\`, ` +
-        `or set MAIL_WEBMAIL_SOURCE_DIR to point at an existing apps/email/ checkout ` +
-        `whose dist/ directory has been built.`,
-      options,
-    );
-    this.name = "WebmailReleaseDistMissingError";
-  }
+function webmailDistSpec(): ReleaseDistSpec {
+  return {
+    name: "email",
+    version: readApiVersion(),
+    source: WEBMAIL_SOURCE,
+    // Env override points at an apps/email/ checkout; dist/ lives underneath.
+    envOverride: "MAIL_WEBMAIL_SOURCE_DIR",
+    envOverrideSubdir: "dist",
+    repoLocalPath: apiRootPath("..", "email", "dist"),
+  };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Resolve the path to the pre-built webmail dist on the API host using
- * the three-slot resolution order (mirrors openship-dist.ts):
- *
- *   1. MAIL_WEBMAIL_SOURCE_DIR env override (highest priority). Points at
- *      an apps/email/ checkout whose `dist/` has been built. For Docker
- *      images, custom CI bundles, air-gapped installs, tests.
- *   2. <repoRoot>/apps/email/dist/ - the dev path produced by
- *      `cd apps/email && bun run build`.
- *   3. <dataDir>/email-dist/v<version>/ - production cache. On a miss,
- *      downloads the matching GitHub release tarball and extracts it
- *      here. `<dataDir>` is OPENSHIP_DATA_DIR or ~/.openship. The tag
- *      matches the API version (mono-version with openship-dist).
- *
- * The client reads its backend URL from `window.location.origin` at
- * runtime, so one dist deploys to any hostname unchanged - no env
- * required at build time.
- *
- * If all three slots fail, throws WebmailReleaseDistMissingError. The
- * download error (if any) is attached as the `cause` so the operator
- * sees both the network failure and the env-override escape hatch.
- *
- * Note: async because the cache-miss path performs a network download.
- * The env-override and repo-local-hit branches are still effectively
- * synchronous (they return on the same microtask tick).
+ * Resolve (download on miss) the pre-built webmail dist directory. The
+ * client reads its backend URL from `window.location.origin` at runtime,
+ * so one dist deploys to any hostname unchanged.
  */
 async function resolveWebmailDistDir(): Promise<string> {
-  // Slot 1: explicit env override. Points at an apps/email/ checkout;
-  // mirror the previous behavior of joining `dist` underneath it.
-  const override = process.env.MAIL_WEBMAIL_SOURCE_DIR;
-  if (override) {
-    const dir = resolve(override, "dist");
-    if (existsSync(dir)) return dir;
-    throw new WebmailReleaseDistMissingError(dir);
-  }
-
-  // Slot 2: repo-local dev path.
-  const repoLocal = computeRepoLocalEmailDistPath();
-  if (existsSync(repoLocal)) return repoLocal;
-
-  // Slot 3: <dataDir>/email-dist/v<version>/ - download on miss.
-  const version = readApiVersion();
-  const tag = `v${version}`;
-  const cacheDir = join(computeDataDir(), "email-dist");
-  const cachedTarget = join(cacheDir, tag);
-  if (existsSync(cachedTarget)) return cachedTarget;
-
-  try {
-    const result = await fetchAndExtractRelease({
-      repo: RELEASE_REPO,
-      asset: `openship-email-${tag}-linux-amd64.tar.gz`,
-      tag,
-      cacheDir,
-    });
-    return result.path;
-  } catch (err) {
-    throw new WebmailReleaseDistMissingError(cachedTarget, { cause: err });
-  }
+  return (await resolveReleaseDist(webmailDistSpec())).dir;
 }
 
 function deriveAcmeEmail(hostname: string): string {
@@ -370,8 +271,22 @@ async function registerWebmailCloudProxy(
   await platform.ssl.provisionCert(hostname);
 }
 
-/** Extract the mailServerId encoded in a `webmail-<id>` project slug. */
+/**
+ * Slug prefix for an EXTERNAL-backend webmail (BYO IMAP/SMTP — SES / custom).
+ * These have NO mail server / no mail-state.json: they're a standalone Zero
+ * client pointed at an arbitrary backend. Distinct prefix so the mail-state
+ * lifecycle hooks (markWebmailInstalled / cleanupWebmailInstall) skip them.
+ */
+const EXTERNAL_SLUG_PREFIX = "webmail-ext-";
+
+/**
+ * Extract the mailServerId encoded in a `webmail-<id>` project slug, or null
+ * when the slug isn't an iRedMail-backed webmail. External-backend webmail
+ * (`webmail-ext-*`) returns null: there's no mail server to mutate, so the
+ * mail-state success/teardown hooks cleanly no-op.
+ */
 export function mailServerIdFromWebmailSlug(slug: string): string | null {
+  if (slug.startsWith(EXTERNAL_SLUG_PREFIX)) return null;
   const m = slug.match(/^webmail-(.+)$/);
   return m?.[1] ?? null;
 }
@@ -442,41 +357,21 @@ export async function cleanupWebmailInstall(input: {
 // ─── Project ensure ──────────────────────────────────────────────────────────
 
 /**
- * Find-or-create the project row for this webmail install. Keyed off the
- * mail server ID so redeploys reuse the same project. `localPath` points
- * at the freshly built release dist for this deploy - the standard
- * pipeline streams that to the target, runs install, and starts.
+ * Fixed webmail project config. NOT user-editable — reconciled every deploy.
  *
- * The release dist already contains a pre-built client SPA and the
- * server source, so the target does NO build work. `buildCommand` is
- * intentionally empty - the pipeline detects that and skips the build
- * step entirely (see runBuildPipeline at line 211 in build-pipeline.ts).
+ * Layout of the shipped dist (see apps/email/scripts/build-release.ts):
+ *   <remoteDir>/
+ *     package.json        ← release orchestration
+ *     client/             ← pre-built SPA (no node_modules)
+ *     server/             ← runtime deps only; bun runs TS directly
+ *
+ * installCommand runs only in `server/` (client is already bundled);
+ * buildCommand is empty (nothing to build on the target — the pipeline skips
+ * the build step, see build-pipeline.ts); startCommand points the server at
+ * the bundled SPA so it serves /* as static files.
  */
-export async function ensureWebmailProject(
-  organizationId: string,
-  mailServerId: string,
-  releaseDistPath: string,
-): Promise<{ projectId: string; appId: string; project: Project }> {
-  const slug = `webmail-${mailServerId}`;
-
-  // Fixed config - the user can't edit these on the project row, and we
-  // reconcile every deploy.
-  //
-  // Layout of the shipped dist (see apps/email/scripts/build-release.ts):
-  //   <remoteDir>/
-  //     package.json        ← release orchestration
-  //     client/             ← pre-built SPA (no node_modules)
-  //     server/
-  //       package.json      ← runtime deps only
-  //       src/              ← bun runs TS directly
-  //       tsconfig.json
-  //
-  // installCommand:  `cd server && bun install --production` - only the
-  //                  server has deps (client is already bundled).
-  // buildCommand:    empty - there's nothing to build on the target.
-  // startCommand:    `CLIENT_BUILD_DIR=...` points the server at the
-  //                  bundled SPA so it can serve /* as static files.
-  const WEBMAIL_CONFIG = {
+function webmailProjectConfig(releaseDistPath: string, port: number) {
+  return {
     framework: "webmail",
     packageManager: "bun",
     // --frozen-lockfile fails the install if the dist's bun.lock and
@@ -489,34 +384,44 @@ export async function ensureWebmailProject(
     outputDirectory: "",
     startCommand: 'CLIENT_BUILD_DIR="$PWD/client" bun run server/src/main.ts',
     productionMode: "host" as const,
-    port: DEFAULT_INTERNAL_PORT,
+    port,
     hasServer: true,
     // hasBuild gates BOTH install and build in the build-config factory
     // (`installCommand: hasBuild ? cmd : ""`). Webmail has no build step
-    // (`buildCommand: ""`) but it DOES need an install - `bun install`
-    // resolves runtime deps in `server/` against the shipped lockfile.
-    // So we set hasBuild=true to let install through. buildCommand="" is
+    // (`buildCommand: ""`) but it DOES need an install. buildCommand="" is
     // honored downstream and the build step is cleanly skipped.
     hasBuild: true,
     buildImage: "oven/bun:latest",
     localPath: releaseDistPath,
   };
+}
 
-  // Webmail slug is `webmail-<mailServerId>` which is deterministically
-  // unique per mail server, but the row must also be scoped to the active
-  // org so a different org redeploying webmail against its own mail server
-  // creates a fresh project row instead of finding a cross-org one.
-  //
-  // Look up by globally-unique slug, then assert org ownership. If the
-  // existing row belongs to a different org, treat it as "not found" and
-  // create a fresh one — assertResourceInOrg throws NotFoundError for
-  // out-of-org rows, which we catch and fall through to create.
-  let app = await repos.projectApp.findFirstBySlug(slug);
+/**
+ * Find-or-create the webmail project row for a given slug + config. Shared by
+ * the iRedMail-backed (`webmail-<mailServerId>`) and external-backend
+ * (`webmail-ext-<host>`) deploys — both are the same dist-based Zero project;
+ * they differ only in slug + which backend the env map points Zero at.
+ *
+ * `localPath` points at the freshly-resolved release dist for this deploy; the
+ * standard pipeline streams it to the target, installs, and starts.
+ */
+async function ensureWebmailProjectRow(
+  organizationId: string,
+  slug: string,
+  releaseDistPath: string,
+  port: number,
+): Promise<{ projectId: string; groupId: string; project: Project }> {
+  const WEBMAIL_CONFIG = webmailProjectConfig(releaseDistPath, port);
+
+  // Slug is globally unique, but the row must be org-scoped so a different org
+  // deploying the same slug gets a fresh row instead of finding a cross-org
+  // one. Look up by slug, then treat an out-of-org hit as "not found".
+  let app = await repos.projectGroup.findFirstBySlug(slug);
   if (app && app.organizationId !== organizationId) {
     app = undefined;
   }
   if (!app) {
-    app = await repos.projectApp.create({
+    app = await repos.projectGroup.create({
       organizationId,
       name: PROJECT_NAME,
       slug,
@@ -530,13 +435,18 @@ export async function ensureWebmailProject(
   if (!project) {
     project = await repos.project.create({
       organizationId,
-      appId: app.id,
+      groupId: app.id,
       name: PROJECT_NAME,
       slug,
       environmentName: "Production",
       environmentSlug: "production",
       environmentType: "production",
       ...WEBMAIL_CONFIG,
+      // Webmail is a managed "app" — surfaces under the Apps tab, not Projects.
+      // The marker is additive; the slug + framework==="webmail" branches (the
+      // lifecycle install hook, teardown, /emails reconcile) are untouched.
+      isApp: true,
+      appTemplateId: "mail-webmail",
     });
   } else {
     // Defensive: confirm the row really is in this org before we mutate it.
@@ -551,9 +461,68 @@ export async function ensureWebmailProject(
       await repos.project.update(project.id, WEBMAIL_CONFIG);
       project = { ...project, ...WEBMAIL_CONFIG };
     }
+    // Backfill the Apps marker for webmail rows created before it existed.
+    if (!project.isApp) {
+      await repos.project.update(project.id, { isApp: true, appTemplateId: "mail-webmail" });
+      project = { ...project, isApp: true, appTemplateId: "mail-webmail" };
+    }
   }
 
-  return { projectId: project.id, appId: app.id, project };
+  return { projectId: project.id, groupId: app.id, project };
+}
+
+/**
+ * iRedMail-backed webmail project — keyed off the mail server ID so redeploys
+ * reuse the same project row.
+ */
+export async function ensureWebmailProject(
+  organizationId: string,
+  mailServerId: string,
+  releaseDistPath: string,
+): Promise<{ projectId: string; groupId: string; project: Project }> {
+  return ensureWebmailProjectRow(
+    organizationId,
+    `webmail-${mailServerId}`,
+    releaseDistPath,
+    DEFAULT_INTERNAL_PORT,
+  );
+}
+
+/**
+ * Stable, collision-free slug tail for an external webmail. The readable base
+ * is truncated for display, but a hash of the FULL hostname is appended so two
+ * distinct hostnames that share a truncated prefix never map to the same slug
+ * (which would repoint one webmail's route onto the other). Deterministic →
+ * redeploying the same hostname reuses its row.
+ */
+function externalWebmailSlug(hostname: string): string {
+  const h = hostname.toLowerCase();
+  const base = h
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  const hash = createHash("sha1").update(h).digest("hex").slice(0, 8);
+  return `${EXTERNAL_SLUG_PREFIX}${base || "app"}-${hash}`;
+}
+
+/**
+ * External-backend webmail project (BYO IMAP/SMTP). Keyed off the public
+ * hostname so redeploying the same webmail reuses its row — no mail server
+ * anchor, so the mail-state lifecycle hooks skip it (see
+ * mailServerIdFromWebmailSlug).
+ */
+export async function ensureExternalWebmailProject(
+  organizationId: string,
+  hostname: string,
+  releaseDistPath: string,
+  port: number,
+): Promise<{ projectId: string; groupId: string; project: Project }> {
+  return ensureWebmailProjectRow(
+    organizationId,
+    externalWebmailSlug(hostname),
+    releaseDistPath,
+    port,
+  );
 }
 
 // ─── Deploy lifecycle ────────────────────────────────────────────────────────
@@ -752,44 +721,48 @@ export async function startWebmailDeploy(
     plainEnvMap.BRANDING_PATH = REMOTE_BRANDING_DIR;
   }
 
-  // ── 8. Snapshot - same helper requestBuildAccess uses. The project row
-  //       owns build/install/start commands + port + localPath. We only
-  //       override the deploy-target picker bits the normal UI exposes. ──
+  // ── 8. Snapshot → target → preflight → queue (shared tail). Cloud → cloud
+  //       runtime; self → image built + run on the operator's server. ─────
+  return finalizeWebmailDeploy(ctx, project, projectId, routeState, plainEnvMap, {
+    deployTarget: input.target.kind === "cloud" ? "cloud" : "server",
+    serverId: input.target.kind === "self" ? input.target.serverId : undefined,
+  });
+}
+
+/**
+ * Snapshot → resolve target → preflight → queue → start. The tail shared by
+ * both webmail deploy paths (iRedMail-backed + external). The project row owns
+ * build/install/start + port + localPath; this only pins the deploy-target
+ * picker bits + the fixed "server" build strategy (image built AT the target —
+ * target host via dockerode-over-SSH, or the cloud builder — never on the API
+ * host). `plainEnvMap` is encrypted onto the deployment row; the pipeline
+ * decrypts + feeds it to runtime.build + runtime.deploy.
+ */
+async function finalizeWebmailDeploy(
+  ctx: RequestContext,
+  project: Project,
+  projectId: string,
+  routeState: Awaited<ReturnType<typeof syncProjectRouteState>>,
+  plainEnvMap: Record<string, string>,
+  target: { deployTarget: DeployTarget; serverId?: string },
+): Promise<StartWebmailDeployResult> {
   const snapshot = buildConfigSnapshot(project, "main");
   snapshot.serviceDeploymentMode = "single";
 
-  // Route the deploy target through the same authority the normal deploy entry
-  // points use, passing webmail's known intent as the override — instead of
-  // hand-pinning the fields (which re-implemented serverId-gating and could drift
-  // from resolveSnapshotTarget). Cloud → cloud runtime (docker-in-cloud); self →
-  // image built + run on the operator's server (docker sandbox over SSH).
-  const target = await resolveSnapshotTarget(project, {
-    deployTarget: input.target.kind === "cloud" ? "cloud" : "server",
-    serverId: input.target.kind === "self" ? input.target.serverId : undefined,
+  const resolved = await resolveSnapshotTarget(project, {
+    deployTarget: target.deployTarget,
+    serverId: target.serverId,
     runtimeMode: "docker",
   });
-  snapshot.deployTarget = target.deployTarget;
-  snapshot.serverId = target.serverId;
-  snapshot.runtimeMode = target.runtimeMode;
-
-  // `"server"` build strategy is webmail's INTENTIONAL explicit choice: the image
-  // build happens at the deploy target (target host via dockerode-over-SSH for
-  // self-hosted, or the cloud platform's builder for cloud), not on the API host.
-  // Pass it as the explicit value to the authority (which honors an explicit
-  // choice) so the decision still flows through resolveStrategy.
+  snapshot.deployTarget = resolved.deployTarget;
+  snapshot.serverId = resolved.serverId;
+  snapshot.runtimeMode = resolved.runtimeMode;
   snapshot.buildStrategy = await settingsService.resolveStrategy(snapshot.framework, "server", {
-    deployTarget: target.deployTarget,
+    deployTarget: resolved.deployTarget,
   });
 
-  // ── 9. Preflight - same call for both targets. The preflight dispatcher
-  //       in deployments/preflight.ts branches on snapshot.deployTarget
-  //       (cloud-side checks domain availability via Oblien, self-hosted
-  //       checks port availability + SSH reachability). ─────────────────
   await runDeploymentPreflight(snapshot, routeState, { ctx });
 
-  // ── 9. Encrypt + attach the env map directly to the deployment row.
-  //       executeBuildAndDeploy reads dep.envVars, decrypts, and feeds
-  //       them to runtime.build + runtime.deploy. ──────────────────────
   const dep = await createQueuedDeployment({
     projectId,
     organizationId: ctx.organizationId,
@@ -800,11 +773,128 @@ export async function startWebmailDeploy(
     envVars: encryptEnvVars(plainEnvMap),
     trigger: "manual",
   });
-
-  // Fire-and-forget - the standard pipeline owns logging, SSE, lifecycle.
   await startBuild(dep.id);
-
   return { deploymentId: dep.id, projectId };
+}
+
+// ─── External-backend webmail (BYO IMAP/SMTP — SES / custom) ───────────────────
+
+/** IMAP/SMTP backend Zero authenticates every sign-in against. */
+export type WebmailBackendProvider = "ses" | "custom";
+
+export interface WebmailExternalBackend {
+  /** UI hint only — the host/port fields are used verbatim. */
+  provider: WebmailBackendProvider;
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+}
+
+export interface StartExternalWebmailDeployInput {
+  hostname: string;
+  backend: WebmailExternalBackend;
+  target: { deployTarget: DeployTarget; serverId?: string };
+  internalPort?: number;
+}
+
+/**
+ * Read the session-encryption key + branding token from this webmail project's
+ * PREVIOUS deployment env so a redeploy doesn't log everyone out / reset
+ * branding. External webmail has no mail-state.json anchor (no mail server) —
+ * the deployment env IS the persistence store. Fail-soft → caller mints fresh.
+ */
+async function readPriorWebmailSecrets(projectId: string): Promise<{
+  sessionEncryptionKey: string | null;
+  brandingToken: string | null;
+}> {
+  try {
+    const last = await repos.deployment.findLatestByProject(projectId);
+    const enc = (last?.envVars ?? null) as Record<string, string> | null;
+    if (!enc) return { sessionEncryptionKey: null, brandingToken: null };
+    const dec = decryptEnvMap(enc);
+    return {
+      sessionEncryptionKey: dec.SESSION_ENCRYPTION_KEY ?? null,
+      brandingToken: dec.BRANDING_ADMIN_TOKEN ?? null,
+    };
+  } catch {
+    return { sessionEncryptionKey: null, brandingToken: null };
+  }
+}
+
+/**
+ * Deploy the Zero webmail UI pointed at an EXTERNAL IMAP/SMTP backend — the
+ * "Connect existing" provider path (SES for send + a read IMAP host, or fully
+ * custom). Same dist-based pipeline as the iRedMail webmail, but:
+ *
+ *   - No mail server / mail-state.json. The project row + its deployment env
+ *     are the only state; secrets are reused from the prior deployment.
+ *   - Zero's DEFAULT_IMAP_HOST/PORT + DEFAULT_SMTP_HOST/PORT are pinned to the
+ *     caller's backend instead of `mail.<installDomain>`.
+ *   - No mail-VPS proxy variant (there's no iRedMail behind it).
+ */
+export async function startExternalWebmailDeploy(
+  ctx: RequestContext,
+  input: StartExternalWebmailDeployInput,
+): Promise<StartWebmailDeployResult> {
+  // Org-scope guard: a specific server target must belong to the caller's org.
+  if (input.target.deployTarget === "server") {
+    if (!input.target.serverId) {
+      throw new Error("serverId is required when deploying to a server.");
+    }
+    const targetServer = await repos.server.get(input.target.serverId).catch(() => null);
+    assertResourceInOrg(targetServer, "server", ctx.organizationId, input.target.serverId);
+  }
+
+  const internalPort = input.internalPort ?? DEFAULT_INTERNAL_PORT;
+  const publicOrigin = `https://${input.hostname}`;
+
+  const releaseDistPath = await resolveWebmailDistDir();
+  const { project, projectId } = await ensureExternalWebmailProject(
+    ctx.organizationId,
+    input.hostname,
+    releaseDistPath,
+    internalPort,
+  );
+
+  // Always a standard custom-domain hostname (no mail-VPS proxy variant).
+  const projectDomains = await listProjectRouteRows(project.id);
+  const routeState = await syncProjectRouteState(project, {
+    projectDomains,
+    nextPublicEndpoints: [
+      { port: internalPort, customDomain: input.hostname, domainType: "custom" },
+    ],
+  });
+
+  const prior = await readPriorWebmailSecrets(projectId);
+  const sessionEncryptionKey = prior.sessionEncryptionKey ?? randomBytes(32).toString("hex");
+  const brandingToken = prior.brandingToken ?? randomBytes(32).toString("hex");
+
+  // Persistent host dirs only for a self-hosted server target.
+  if (input.target.deployTarget === "server" && input.target.serverId) {
+    await prepareTarget(input.target.serverId);
+  }
+
+  const plainEnvMap: Record<string, string> = {
+    PORT: String(internalPort),
+    HOST: "127.0.0.1",
+    NODE_ENV: "production",
+    COOKIE_DOMAIN: input.hostname,
+    TRUSTED_ORIGINS: publicOrigin,
+    SESSION_ENCRYPTION_KEY: sessionEncryptionKey,
+    BRANDING_ADMIN_TOKEN: brandingToken,
+    DEFAULT_IMAP_HOST: input.backend.imapHost,
+    DEFAULT_IMAP_PORT: String(input.backend.imapPort),
+    DEFAULT_SMTP_HOST: input.backend.smtpHost,
+    DEFAULT_SMTP_PORT: String(input.backend.smtpPort),
+    ACME_EMAIL: deriveAcmeEmail(input.hostname),
+  };
+  if (input.target.deployTarget === "server") {
+    plainEnvMap.SQLITE_PATH = REMOTE_SQLITE_PATH;
+    plainEnvMap.BRANDING_PATH = REMOTE_BRANDING_DIR;
+  }
+
+  return finalizeWebmailDeploy(ctx, project, projectId, routeState, plainEnvMap, input.target);
 }
 
 

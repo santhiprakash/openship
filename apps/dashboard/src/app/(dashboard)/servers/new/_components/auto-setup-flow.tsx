@@ -25,9 +25,9 @@ function ProgressRow({ component }: { component: SetupComponentProgress }) {
         {component.status === "installing" ? (
           <Loader2 className="size-4 text-primary animate-spin" />
         ) : component.status === "installed" ? (
-          <CheckCircle2 className="size-4 text-emerald-500" />
+          <CheckCircle2 className="size-4 text-success" />
         ) : component.status === "failed" ? (
-          <XCircle className="size-4 text-red-500" />
+          <XCircle className="size-4 text-danger" />
         ) : (
           <div className="size-4 rounded-full border-2 border-border/50" />
         )}
@@ -40,9 +40,9 @@ function ProgressRow({ component }: { component: SetupComponentProgress }) {
           component.status === "installing"
             ? "bg-primary/10 text-primary"
             : component.status === "installed"
-              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              ? "bg-success-bg text-success"
               : component.status === "failed"
-                ? "bg-red-500/10 text-red-600 dark:text-red-400"
+                ? "bg-danger-bg text-danger"
                 : "bg-muted text-muted-foreground"
         }`}
       >
@@ -223,16 +223,16 @@ export function AutoSetupFlow({
               className={`w-9 h-9 rounded-xl flex items-center justify-center ${
                 streamDone
                   ? streamFinalStatus === "completed"
-                    ? "bg-emerald-500/10"
-                    : "bg-red-500/10"
+                    ? "bg-success-bg"
+                    : "bg-danger-bg"
                   : "bg-primary/10"
               }`}
             >
               {streamDone ? (
                 streamFinalStatus === "completed" ? (
-                  <CheckCircle2 className="size-[18px] text-emerald-500" />
+                  <CheckCircle2 className="size-[18px] text-success" />
                 ) : (
-                  <XCircle className="size-[18px] text-red-500" />
+                  <XCircle className="size-[18px] text-danger" />
                 )
               ) : (
                 <Download className="size-[18px] text-primary" />
@@ -275,8 +275,8 @@ export function AutoSetupFlow({
       {step === "results" && overallReady && (
         <div className="bg-card rounded-2xl border border-border/50">
           <div className="flex items-center gap-3 px-5 py-4 border-b border-border/50">
-            <div className="w-9 h-9 bg-emerald-500/10 rounded-xl flex items-center justify-center">
-              <CheckCircle2 className="size-[18px] text-emerald-500" />
+            <div className="w-9 h-9 bg-success-bg rounded-xl flex items-center justify-center">
+              <CheckCircle2 className="size-[18px] text-success" />
             </div>
             <div>
               <h2 className="font-semibold text-foreground text-[15px]">{t.servers.setup.allRequirementsMetTitle}</h2>
@@ -326,9 +326,9 @@ export function AutoSetupFlow({
                         <span
                           className={
                             entry.level === "error"
-                              ? "text-red-500"
+                              ? "text-danger"
                               : entry.level === "warn"
-                                ? "text-yellow-500"
+                                ? "text-warning"
                                 : "text-foreground/70"
                           }
                         >

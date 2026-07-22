@@ -19,7 +19,8 @@
     "current": "Atual",
     "cloudLabel": "Cloud: {email}",
     "linkedToCloud": "Vinculado ao Openship Cloud como {email}",
-    "backToSetup": "Voltar à configuração"
+    "backToSetup": "Voltar à configuração",
+    "personal": "Pessoal"
   },
   "migration": {
     "inProgressTitle": "Migração em andamento",
@@ -43,6 +44,7 @@
     "descGlobal": "A página que você procura não existe ou foi movida.",
     "descDashboard": "Esta página não existe ou pode ter sido movida. Verifique a URL ou volte ao seu painel.",
     "backToDashboard": "Voltar ao painel",
-    "viewDeployments": "Ver implantações"
+    "viewDeployments": "Ver implantações",
+    "copyId": "Copiar ID"
   }
 }

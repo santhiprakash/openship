@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fires after `git merge` / `git pull` (merge mode).
+exec "$(dirname "$0")/_dev-stale-warn.sh"

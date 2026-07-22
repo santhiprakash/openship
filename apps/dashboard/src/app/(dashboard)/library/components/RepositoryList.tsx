@@ -311,7 +311,7 @@ export function RepositoryList({
                           refused at preflight; local builds work. */}
                       {repo.source === "cli" && (
                         <span
-                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/10 text-[10px] font-medium text-amber-600 dark:text-amber-400"
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-warning-bg text-[10px] font-medium text-warning"
                           title={interpolate(t.library.repositoryList.localOnlyTooltip, { owner: typeof repo.owner === "string" ? repo.owner : repo.owner.login })}
                         >
                           <AlertTriangle className="size-2.5" />

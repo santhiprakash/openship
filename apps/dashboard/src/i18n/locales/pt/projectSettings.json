@@ -4,6 +4,26 @@
     "save": "Guardar",
     "cancel": "Cancelar"
   },
+  "appSettings": {
+    "modeApp": "Definições da aplicação",
+    "modeDeployment": "Implementação",
+    "saveChanges": "Guardar alterações",
+    "saving": "A guardar…",
+    "saved": "Definições guardadas",
+    "saveHint": "Guarde para armazenar estas alterações — serão aplicadas na próxima vez que a aplicação for implementada.",
+    "applyNow": "Aplicar agora",
+    "applying": "A aplicar…",
+    "applied": "A aplicar alterações",
+    "restartNote": "Aplique agora para reiniciar a aplicação com as novas definições, ou serão aplicadas na próxima implementação.",
+    "redeployNote": "Aplicar estas alterações recria a aplicação — poderá ter de se autenticar novamente no respetivo painel ou CLI depois.",
+    "advancedShow": "Mostrar avançadas",
+    "advancedHide": "Ocultar avançadas",
+    "secretSet": "Definido — deixe em branco para manter o valor atual",
+    "loadError": "Não foi possível carregar as definições da aplicação.",
+    "saveFailed": "Não foi possível guardar as definições.",
+    "applyFailed": "Não foi possível aplicar as alterações.",
+    "unmanaged": "Esta aplicação ainda não tem definições configuráveis."
+  },
   "advanced": {
     "projectInfo": {
       "title": "Informação do projeto",

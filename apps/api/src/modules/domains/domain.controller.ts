@@ -3,13 +3,13 @@
  */
 
 import type { Context } from "hono";
-import { param } from "../../lib/controller-helpers";
+import { param, assertNotCloud } from "../../lib/controller-helpers";
 import { getRequestContext } from "../../lib/request-context";
 import { permission } from "../../lib/permission";
 import { audit, auditContextFrom } from "../../lib/audit";
 import * as domainService from "./domain.service";
 import { maybeProxyCloudProject } from "../../lib/cloud/project-router";
-import type { TAddDomainBody } from "./domain.schema";
+import type { TAddDomainBody, TUploadCertBody } from "./domain.schema";
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
@@ -140,6 +140,29 @@ export async function verifySsl(c: Context) {
   const id = param(c, "id");
   await permission.assert(getRequestContext(c), { resourceType: "domain", resourceId: id, action: "write" });
   const result = await domainService.verifyDomainSsl(ctx, id);
+  return c.json({ data: result });
+}
+
+/** POST /domains/:id/certificate - install an operator-supplied cert (BYO / Origin CA) */
+export async function uploadCert(c: Context) {
+  // Self-hosted only: installing an operator-supplied cert writes to the box's
+  // OpenResty. On Openship Cloud, TLS is owned by the managed edge — there's
+  // nothing to install, so refuse rather than run a no-op/misleading path.
+  const guard = assertNotCloud(c);
+  if (guard) return guard;
+
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  await permission.assert(getRequestContext(c), { resourceType: "domain", resourceId: id, action: "write" });
+  const body = await c.req.json<TUploadCertBody>();
+  const result = await domainService.uploadDomainCert(ctx, id, body);
+  audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
+    eventType: "domain.cert_uploaded",
+    resourceType: "domain",
+    resourceId: id,
+    // Never log the cert/key material — just the outcome.
+    after: { domain: result.domain, issuer: result.issuer, expiresAt: result.expiresAt },
+  });
   return c.json({ data: result });
 }
 

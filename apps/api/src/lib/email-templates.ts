@@ -94,6 +94,50 @@ export function verifyEmailTemplate(user: { name?: string | null; email: string 
 }
 
 /* ------------------------------------------------------------------ */
+/*  Verify email — OTP code (no link, for deliverability)              */
+/* ------------------------------------------------------------------ */
+
+/** Prominent, monospaced code block — the only "content" of an OTP email. */
+function codeBlock(code: string) {
+  return `
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0">
+  <tr><td align="center" style="background:#f3f4f6;border:1px solid #e5e7eb;border-radius:10px;padding:18px 28px">
+    <span style="font-family:'SF Mono',Menlo,Consolas,monospace;font-size:30px;font-weight:700;letter-spacing:8px;color:#111">${code}</span>
+  </td></tr>
+</table>`.trim();
+}
+
+/**
+ * Email-verification via a short numeric CODE the user types, NOT a magic link.
+ * Codes are far more deliverable — no clickable URL for spam filters to flag,
+ * no link-tracking heuristics — which is the whole point of using OTP here.
+ * Intentionally contains ZERO links.
+ */
+export function verifyOtpEmailTemplate(
+  code: string,
+  opts?: { name?: string | null; expiresMinutes?: number },
+) {
+  const mins = opts?.expiresMinutes ?? 10;
+  const html = layout(`
+    ${greeting(opts?.name)}
+    <p style="color:#374151;font-size:14px;line-height:1.6;margin:0 0 4px">
+      Your ${BRAND} verification code is:
+    </p>
+    ${codeBlock(code)}
+    <p style="color:#9ca3af;font-size:13px;margin:0">
+      Enter this code to verify your email. It expires in ${mins} minutes.
+      If you didn't create an account, you can ignore this email.
+    </p>
+  `);
+
+  return {
+    subject: `Your ${BRAND} verification code: ${code}`,
+    html,
+    text: `Your ${BRAND} verification code is: ${code}\n\nEnter it to verify your email. It expires in ${mins} minutes.\n\nIf you didn't create an account, ignore this email.`,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /*  Organization invitation                                            */
 /* ------------------------------------------------------------------ */
 

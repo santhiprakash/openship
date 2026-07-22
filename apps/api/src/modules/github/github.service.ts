@@ -14,6 +14,9 @@ import { ghFetch } from "./github.http";
 import { mapRepositories } from "./sources/mappers";
 import { isIgnoredRepoPath } from "../../lib/project-root-detector";
 import type { RequestContext } from "../../lib/request-context";
+import { buildBackgroundContext } from "../../lib/request-context";
+import { resolveOrgOwner } from "../../lib/org-actor";
+import { safeErrorMessage } from "@repo/core";
 import { repos as dbRepos } from "@repo/db";
 import { encrypt, decrypt } from "../../lib/encryption";
 import type {
@@ -27,7 +30,8 @@ import type {
   MappedAccount,
   RepositoryDetail,
 } from "./github.types";
-import { env, runtimeTarget } from "../../config/env";
+import { env } from "../../config/env";
+import { resolveApiPublicUrl, sharedWebhookUrl, domainWebhookUrl } from "../../lib/public-url";
 
 export const GITHUB_DEPLOY_WEBHOOK_EVENTS = ["push"] as const;
 const MAX_FALLBACK_TREE_ENTRIES = 5000;
@@ -322,6 +326,46 @@ export async function deleteRepository(
     ctx,
     owner,
     url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+    method: "DELETE",
+  });
+}
+
+// ─── Deploy keys ───────────────────────────────────────────────────────────────
+
+/**
+ * Register a read-only GitHub deploy key on a repo (`POST /repos/{o}/{r}/keys`).
+ * Requires repo Administration on the resolved token — callers surface a 403 as
+ * "grant the App Administration permission or use a repo-admin PAT". Returns the
+ * GitHub key id (stored for later revocation).
+ */
+export async function createDeployKey(
+  ctx: RequestContext,
+  owner: string,
+  repo: string,
+  title: string,
+  publicKey: string,
+  readOnly = true,
+): Promise<{ id: number }> {
+  return githubFetch<{ id: number }>({
+    ctx,
+    owner,
+    url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/keys`,
+    method: "POST",
+    params: { title, key: publicKey, read_only: readOnly },
+  });
+}
+
+/** Delete a deploy key by its GitHub id (`DELETE /repos/{o}/{r}/keys/{id}`). */
+export async function revokeDeployKey(
+  ctx: RequestContext,
+  owner: string,
+  repo: string,
+  keyId: number,
+): Promise<void> {
+  await githubFetch({
+    ctx,
+    owner,
+    url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/keys/${keyId}`,
     method: "DELETE",
   });
 }
@@ -732,8 +776,11 @@ export type WebhookStrategy = "app" | "domain" | "repo" | "none";
 export function getWebhookStrategy(): WebhookStrategy {
   if (getGitHubAuthMode() === "app") return "app";
 
-  // For non-app modes, check if the URL is publicly reachable
-  const url = runtimeTarget.api;
+  // For non-app modes, check if the URL is publicly reachable. Uses the
+  // resolved PUBLIC url (OPENSHIP_PUBLIC_URL via the same-origin proxy) so a
+  // `--public-url` VPS gets "repo" instead of "none" — the localhost fallback
+  // is only hit when no public URL is configured.
+  const url = resolveApiPublicUrl();
   if (isLocalUrl(url)) return "none";
   return "repo";
 }
@@ -781,7 +828,7 @@ export async function getAvailableStrategies(
   // Domain is always available if verified domains exist (handled by UI)
   available.push("domain");
 
-  if (!isLocalUrl(runtimeTarget.api)) {
+  if (!isLocalUrl(resolveApiPublicUrl())) {
     available.push("repo");
   }
 
@@ -907,31 +954,59 @@ export function resolveProjectWebhookSecret(
 }
 
 /**
+ * REGISTER-side per-project secret: reuse the project's existing (decrypted)
+ * secret when it has one — so re-registration is idempotent and never rotates
+ * a working hook — otherwise mint a fresh one and persist it. Unlike
+ * `resolveProjectWebhookSecret` (the VERIFY-side reader, which falls back to
+ * `env.GITHUB_WEBHOOK_SECRET`), this NEVER uses the env secret: every project
+ * gets its OWN secret, so self-hosted auto-deploy no longer depends on the
+ * (legacy) global env var and one project's leak can't verify another's.
+ */
+async function ensureProjectWebhookSecret(projectId: string): Promise<string> {
+  const proj = await dbRepos.project.findById(projectId).catch(() => null);
+  if (proj?.webhookSecret) {
+    try {
+      return decrypt(proj.webhookSecret);
+    } catch {
+      // Corrupted row / key rotation — mint a fresh one below and overwrite.
+      console.warn(
+        "[GitHub Webhook] existing project.webhookSecret failed to decrypt; minting a fresh secret",
+      );
+    }
+  }
+  const secret = mintWebhookSecret();
+  await persistProjectWebhookSecret(projectId, secret);
+  return secret;
+}
+
+/**
  * Register a deploy webhook on a repo.
  * If creation returns 422 (already exists), finds the existing hook.
  *
  * Callers should check `getWebhookStrategy()` before calling - this will
  * throw if the URL is unreachable (localhost).
  *
- * HIGH #9 — when a `projectId` is supplied, this generates a FRESH
- * webhook secret, sends it to GitHub in the hook config, and persists
- * the encrypted value on the project row. Each project gets its own
- * secret so a leak (or rotation of one) doesn't compromise others.
- * Without `projectId` we fall back to env.GITHUB_WEBHOOK_SECRET — used
- * by the legacy /github/repos/:owner/:repo/webhooks endpoint that
- * isn't tied to a project.
+ * HIGH #9 — when a `projectId` is supplied, this uses that project's OWN
+ * webhook secret (reused if already set, else freshly minted + persisted via
+ * `ensureProjectWebhookSecret`) and sends it to GitHub in the hook config.
+ * Re-registration is idempotent — it never rotates a working hook. Each
+ * project gets its own secret so a leak (or rotation of one) doesn't
+ * compromise others, and self-hosted auto-deploy no longer depends on the
+ * legacy global env secret. Without `projectId` we fall back to
+ * env.GITHUB_WEBHOOK_SECRET — the SaaS App secret + the legacy
+ * /github/repos/:owner/:repo/webhooks endpoint that isn't tied to a project.
  */
 export async function registerWebhook(
   ctx: RequestContext,
   owner: string,
   repo: string,
-  webhookUrl = `${runtimeTarget.api}/api/webhooks/github`,
+  webhookUrl = sharedWebhookUrl(),
   opts: { projectId?: string } = {},
 ): Promise<{ hookId: number | null; events: string[] }> {
-  // Per-project secret takes precedence; env stays the back-compat
-  // fallback for callers without a project context.
+  // Per-project secret (reuse-or-mint, persisted by ensureProjectWebhookSecret)
+  // for project-scoped registrations; env fallback for project-less callers.
   const secret = opts.projectId
-    ? mintWebhookSecret()
+    ? await ensureProjectWebhookSecret(opts.projectId)
     : env.GITHUB_WEBHOOK_SECRET || undefined;
 
   try {
@@ -942,9 +1017,6 @@ export async function registerWebhook(
       webhookUrl,
       secret || undefined,
     );
-    if (opts.projectId && secret) {
-      await persistProjectWebhookSecret(opts.projectId, secret);
-    }
     return { hookId: result.hookId, events: result.events };
   } catch (err) {
     /* 422 = webhook already exists - find it */
@@ -968,16 +1040,51 @@ export async function registerWebhook(
         events: [...GITHUB_DEPLOY_WEBHOOK_EVENTS],
         config,
       });
-      // We sent a new secret to GitHub on the update path — persist it
-      // locally so the verifier matches. (If we kept the OLD GitHub-
-      // side secret and only stored the new one locally, every future
-      // delivery would fail HMAC verify until GitHub re-rotated.)
-      if (opts.projectId && secret) {
-        await persistProjectWebhookSecret(opts.projectId, secret);
-      }
+      // We push `secret` into GitHub's hook config so the local verifier
+      // matches. It's already persisted (ensureProjectWebhookSecret for a
+      // project, or the env secret for a project-less caller) — no re-store.
       return { hookId: updated.id, events: updated.events };
     }
     throw err;
+  }
+}
+
+/**
+ * Self-hosted webhook-secret backfill (boot sweep). Existing auto-deploy
+ * projects whose hook was registered before per-project secrets were wired
+ * (webhookId set, webhookSecret null) either verify against the legacy env
+ * secret — or, if the operator followed the "GITHUB_WEBHOOK_SECRET is ignored"
+ * guidance, the hook was registered with NO secret and every delivery
+ * fails-closed. Re-register each (idempotent — hits registerWebhook's 422→
+ * update path) to mint + persist a per-project secret and push it to GitHub.
+ *
+ * Best-effort + bounded (one query; self-hosted = few projects), and runs once
+ * per project (the row drops out of the query once its secret is set). No-op in
+ * CLOUD_MODE — the SaaS App owns a single webhook secret, not per-repo hooks.
+ */
+export async function backfillWebhookSecrets(): Promise<void> {
+  if (env.CLOUD_MODE) return;
+  const projects = await dbRepos.project.listNeedingWebhookBackfill().catch(() => []);
+  for (const p of projects) {
+    if (!p.gitOwner || !p.gitRepo) continue;
+    try {
+      const owner = await resolveOrgOwner(p.organizationId).catch(() => null);
+      if (!owner?.userId) continue;
+      const ctx = buildBackgroundContext({
+        userId: owner.userId,
+        organizationId: p.organizationId,
+        label: "webhook:backfill-secret",
+      });
+      const url = p.webhookDomain ? domainWebhookUrl(p.webhookDomain) : sharedWebhookUrl();
+      await registerWebhook(ctx, p.gitOwner, p.gitRepo, url, { projectId: p.id });
+      console.log(
+        `[GitHub Webhook] backfilled per-project secret for ${p.gitOwner}/${p.gitRepo} (project ${p.id})`,
+      );
+    } catch (err) {
+      console.warn(
+        `[GitHub Webhook] webhook-secret backfill failed for project ${p.id}: ${safeErrorMessage(err)}`,
+      );
+    }
   }
 }
 
@@ -1005,7 +1112,12 @@ export async function rotateProjectWebhookSecret(
   }
 
   const fresh = mintWebhookSecret();
-  const webhookUrl = `${runtimeTarget.api}/api/webhooks/github`;
+  // Preserve the hook's delivery URL for its strategy — a domain-strategy hook
+  // must keep pointing at the project's `/_openship/hooks/` vhook, NOT get
+  // rewritten to the shared endpoint (which previously broke delivery on rotate).
+  const webhookUrl = project.webhookDomain
+    ? domainWebhookUrl(project.webhookDomain)
+    : sharedWebhookUrl();
   await updateWebhook(ctx, project.gitOwner, project.gitRepo, project.webhookId, {
     active: true,
     events: [...GITHUB_DEPLOY_WEBHOOK_EVENTS],

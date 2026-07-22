@@ -30,6 +30,7 @@ import {
   Send,
   Settings,
   DatabaseBackup,
+  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import type { MailSetupStatus } from "@/lib/api";
@@ -42,6 +43,7 @@ import { DnsTab } from "./dns-tab";
 import { HealthTab } from "./health-tab";
 import { TestTab } from "./test-tab";
 import { BackupTab } from "./backup-tab";
+import { SendingTab } from "./sending-tab";
 import { AdvancedTab } from "./advanced-tab";
 import { WelcomeModal } from "./welcome-modal";
 import { ReputationBanner } from "./reputation-banner";
@@ -64,6 +66,7 @@ type TabKey =
   | "health"
   | "test"
   | "backup"
+  | "sending"
   | "advanced";
 
 interface TabDef {
@@ -79,6 +82,7 @@ const TABS: TabDef[] = [
   { key: "health", icon: HeartPulse },
   { key: "test", icon: Send },
   { key: "backup", icon: DatabaseBackup },
+  { key: "sending", icon: Waypoints },
   { key: "advanced", icon: Settings },
 ];
 
@@ -178,6 +182,7 @@ export function MailAdminPanel({ status, serverId, onRefresh, onForgotten }: Mai
         {tab === "health" && <HealthTab serverId={serverId} />}
         {tab === "test" && <TestTab serverId={serverId} />}
         {tab === "backup" && <BackupTab serverId={serverId} domain={primaryDomain} />}
+        {tab === "sending" && <SendingTab serverId={serverId} primaryDomain={primaryDomain} />}
         {tab === "advanced" && (
           <AdvancedTab
             status={status}

@@ -18,7 +18,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bell, Mail, Webhook, MessageSquare, Smartphone, Plus, Trash2, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { Bell, Mail, Webhook, MessageSquare, Smartphone, Plus, Trash2, Loader2, AlertTriangle } from "lucide-react";
+import { systemApi } from "@/lib/api/system";
 import { useToast } from "@/context/ToastContext";
 import { SettingsSection } from "./SettingsSection";
 import { Toggle } from "@/components/project-settings/ServerSideSwitch";
@@ -59,8 +61,13 @@ export function NotificationsTab() {
 
   const isAdmin = role === "owner" || role === "admin";
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  // `silent` re-fetches without flipping the full-page `loading` flag — used after
+  // a toggle/mutation so only the clicked control shows its pending state (its
+  // own busy flag) instead of the whole tab collapsing to a centered spinner.
+  // The global spinner is reserved for the very first load.
+  const refresh = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent ?? false;
+    if (!silent) setLoading(true);
     try {
       const [cats, ch, subs, defs] = await Promise.all([
         notificationsApi.listCategories(),
@@ -75,7 +82,7 @@ export function NotificationsTab() {
     } catch (err) {
       showToast(getApiErrorMessage(err), "error", "Notifications");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [showToast]);
 
@@ -114,18 +121,18 @@ export function NotificationsTab() {
 
   return (
     <div className="space-y-6">
-      <ChannelsCard channels={channels} onChange={refresh} />
+      <ChannelsCard channels={channels} onChange={() => refresh({ silent: true })} />
       <SubscriptionsCard
         categories={categories}
         channels={channels}
         subscriptions={subscriptions}
-        onChange={refresh}
+        onChange={() => refresh({ silent: true })}
       />
       {isAdmin && (
         <OrgDefaultsCard
           categories={categories}
           defaults={defaults}
-          onChange={refresh}
+          onChange={() => refresh({ silent: true })}
         />
       )}
     </div>
@@ -179,9 +186,9 @@ function ChannelsCard({
                 </div>
                 <div className="flex items-center gap-2">
                   {ch.verified ? (
-                    <span className="text-[11px] uppercase tracking-wide text-emerald-500">{t.settings.notifications.channels.verified}</span>
+                    <span className="text-[11px] uppercase tracking-wide text-success">{t.settings.notifications.channels.verified}</span>
                   ) : ch.kind !== "in_app" ? (
-                    <span className="text-[11px] uppercase tracking-wide text-amber-500">{t.settings.notifications.channels.unverified}</span>
+                    <span className="text-[11px] uppercase tracking-wide text-warning">{t.settings.notifications.channels.unverified}</span>
                   ) : null}
                   <button
                     type="button"
@@ -255,6 +262,25 @@ function NewChannelForm({
   const [url, setUrl] = useState("");
   const [webhookUrl, setWebhookUrl] = useState("");
   const [busy, setBusy] = useState(false);
+  // Whether the instance can send email at all (instance SMTP / mail server /
+  // env). null = unknown (not yet loaded, or no permission to read). When false
+  // we nudge the operator to configure SMTP — email channels won't deliver.
+  const [emailDeliverable, setEmailDeliverable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    systemApi
+      .getEmailSettings()
+      .then((r) => {
+        if (!cancelled) setEmailDeliverable(!!r.deliverable);
+      })
+      .catch(() => {
+        if (!cancelled) setEmailDeliverable(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const submit = async () => {
     if (!label.trim()) {
@@ -308,6 +334,20 @@ function NewChannelForm({
           onChange={(e) => setAddress(e.target.value)}
           className="w-full bg-background border border-border/50 rounded-lg px-3 py-2 text-sm"
         />
+      )}
+      {kind === "email" && emailDeliverable === false && (
+        <div className="flex items-start gap-2 rounded-lg bg-warning-bg px-3 py-2 text-xs text-warning">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.7} />
+          <span>
+            {t.settings.notifications.form.noEmailTransport}{" "}
+            <Link
+              href="/settings?tab=email"
+              className="font-medium underline underline-offset-2 hover:opacity-80"
+            >
+              {t.settings.notifications.form.setUpSmtp}
+            </Link>
+          </span>
+        </div>
       )}
       {kind === "webhook" && (
         <input
@@ -493,7 +533,7 @@ function OrgDefaultsCard({
           return (
             <div
               key={cat.id}
-              className="flex items-center gap-4 py-2 border-b border-border/30 last:border-0"
+              className={`flex items-center gap-4 py-2 border-b border-border/30 last:border-0 transition-opacity ${isBusy ? "opacity-50" : ""}`}
             >
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-foreground">{cat.label}</p>

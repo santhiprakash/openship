@@ -4,6 +4,26 @@
     "save": "保存",
     "cancel": "取消"
   },
+  "appSettings": {
+    "modeApp": "应用设置",
+    "modeDeployment": "部署",
+    "saveChanges": "保存更改",
+    "saving": "正在保存…",
+    "saved": "设置已保存",
+    "saveHint": "保存以存储这些更改 — 它们将在下次部署应用时生效。",
+    "applyNow": "立即应用",
+    "applying": "正在应用…",
+    "applied": "正在应用更改",
+    "restartNote": "立即应用可使用新设置重启应用，否则将在下次部署时生效。",
+    "redeployNote": "应用这些更改会重新创建应用 — 之后你可能需要重新验证其仪表板或 CLI。",
+    "advancedShow": "显示高级选项",
+    "advancedHide": "隐藏高级选项",
+    "secretSet": "已设置 — 留空以保留当前值",
+    "loadError": "无法加载应用设置。",
+    "saveFailed": "无法保存设置。",
+    "applyFailed": "无法应用更改。",
+    "unmanaged": "此应用暂无可配置的设置。"
+  },
   "advanced": {
     "projectInfo": {
       "title": "项目信息",

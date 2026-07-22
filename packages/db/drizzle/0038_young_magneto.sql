@@ -1,0 +1,1 @@
+ALTER TABLE "domain" ADD COLUMN "manual_ssl" boolean DEFAULT false NOT NULL;

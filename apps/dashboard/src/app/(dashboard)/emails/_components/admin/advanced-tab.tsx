@@ -87,7 +87,7 @@ export function AdvancedTab({ status, serverId, onChanged, onForgotten }: Advanc
           }}
           onCancel={() => hideModal(id)}
         >
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-400 leading-relaxed">
+          <div className="rounded-xl border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning leading-relaxed">
             {t.emailsAdmin.advanced.resetBox}
           </div>
         </FormModalContent>
@@ -161,7 +161,7 @@ export function AdvancedTab({ status, serverId, onChanged, onForgotten }: Advanc
         <div>
           <div className="flex items-center gap-2">
             <AlertTriangle
-              className="size-4 text-amber-600 dark:text-amber-400"
+              className="size-4 text-warning"
               strokeWidth={2.25}
             />
             <h2 className="text-lg font-semibold text-foreground">{t.emailsAdmin.advanced.dangerTitle}</h2>
@@ -196,7 +196,7 @@ export function AdvancedTab({ status, serverId, onChanged, onForgotten }: Advanc
             <button
               onClick={openReset}
               disabled={resetting}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-xl bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-xl bg-danger-solid text-white hover:bg-danger-solid/90 transition-colors disabled:opacity-50"
             >
               {resetting ? (
                 <Loader2 className="size-3.5 animate-spin" />
@@ -218,7 +218,7 @@ export function AdvancedTab({ status, serverId, onChanged, onForgotten }: Advanc
             <button
               onClick={openForget}
               disabled={forgetting}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-xl bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-xl bg-danger-solid text-white hover:bg-danger-solid/90 transition-colors disabled:opacity-50"
             >
               {forgetting ? (
                 <Loader2 className="size-3.5 animate-spin" />
@@ -356,8 +356,8 @@ function DangerCard({
   return (
     <div className="bg-card rounded-2xl border border-border/50 p-5">
       <div className="flex items-start gap-4">
-        <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center shrink-0">
-          <Icon className="size-5 text-amber-600 dark:text-amber-400" strokeWidth={1.75} />
+        <div className="w-10 h-10 rounded-xl bg-warning-bg flex items-center justify-center shrink-0">
+          <Icon className="size-5 text-warning" strokeWidth={1.75} />
         </div>
         <div className="flex-1 min-w-0">
           <h4 className="text-sm font-semibold text-foreground">{title}</h4>
@@ -365,7 +365,7 @@ function DangerCard({
             {description}
           </p>
           {error && (
-            <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>
+            <p className="mt-2 text-xs text-danger">{error}</p>
           )}
         </div>
         <div className="shrink-0">{action}</div>

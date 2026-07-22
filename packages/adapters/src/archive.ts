@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -18,6 +18,17 @@ const NOOP_CLEANUP = async () => {};
 export interface TarTransferOptions {
   excludes?: string[];
   includes?: string[];
+  /**
+   * Paths (relative to `localPath`) to append ON TOP of the git-truth file
+   * list. Used to ship a gitignored build output (e.g. Next.js `.next`) that
+   * `git ls-files --exclude-standard` would otherwise drop — the compiled-stack
+   * `includes` path bypasses git entirely, but host-mode JS stacks want the
+   * git-tracked source AND the build output. Non-existent paths are skipped.
+   * Only consulted on the git-truth branch (ignored when `includes` is set or
+   * there's no git work tree — the no-git branch keeps the output via the
+   * exclude list instead).
+   */
+  alsoInclude?: string[];
 }
 
 export function getTarCreateEnv(): NodeJS.ProcessEnv {
@@ -68,6 +79,21 @@ export async function gitTrackedFiles(localPath: string): Promise<string[] | nul
   }
 }
 
+/** Filter `paths` (relative to `root`) to those that actually exist on disk. */
+async function existingRelativePaths(root: string, paths?: string[]): Promise<string[]> {
+  if (!paths?.length) return [];
+  const found: string[] = [];
+  for (const p of paths) {
+    try {
+      await stat(join(root, p));
+      found.push(p);
+    } catch {
+      // Missing (e.g. build produced no such dir) — skip; never abort the pack.
+    }
+  }
+  return found;
+}
+
 /**
  * Build the `tar` create args for packing `localPath` to stdout (`-czf -`),
  * plus a `cleanup` for any temp file created.
@@ -90,9 +116,15 @@ export async function prepareSourceTarArgs(
 
   const files = await gitTrackedFiles(localPath);
   if (files) {
+    // Add gitignored build-output dirs (e.g. `.next`) the git list omits. They
+    // go in as directory entries — tar recurses into them — and being gitignored
+    // they never collide with the tracked-file list. Filtered to those that
+    // exist so a missing path can't abort the whole pack.
+    const extra = await existingRelativePaths(localPath, options?.alsoInclude);
+    const entries = extra.length ? [...files, ...extra] : files;
     const tmpDir = await mkdtemp(join(tmpdir(), "openship-tarlist-"));
     const listFile = join(tmpDir, "files.null");
-    await writeFile(listFile, files.join("\0"));
+    await writeFile(listFile, entries.join("\0"));
     const args = [...tarCreateBaseArgs(localPath), "--null", "-T", listFile];
     return { args, cleanup: () => rm(tmpDir, { recursive: true, force: true }) };
   }

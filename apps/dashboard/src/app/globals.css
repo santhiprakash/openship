@@ -4,6 +4,8 @@
 
 /* Tailwind v4 - selector-based dark mode via data-theme */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+/* The third theme — lets `dim:` utilities target the neutral medium-dark. */
+@custom-variant dim (&:where([data-theme="dim"], [data-theme="dim"] *));
 
 /*
  * Desktop (Electron) frameless title bar. `DesktopChrome` adds `.is-desktop`
@@ -14,7 +16,9 @@
  * (e.g. the auth shell) that ignore the body padding. No effect on the web.
  */
 .is-desktop {
-  --titlebar-h: 2rem;
+  /* Covers the inset traffic lights (trafficLightPosition y:22 + ~14px button)
+   * so they sit fully within this reserved strip, never over page content. */
+  --titlebar-h: 2.25rem;
 }
 /*
  * The title bar is a fixed OVERLAY across the very top — it adds no layout
@@ -68,6 +72,31 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+
+  /* Semantic status utilities (text-success, bg-success-bg, border-danger-border,
+     text-warning, text-info, …) — theme-aware via the --st-* tokens per theme. */
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-success-border: var(--success-border);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-border: var(--danger-border);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-warning-border: var(--warning-border);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --color-info-border: var(--info-border);
+  --color-neutral: var(--neutral);
+  --color-neutral-bg: var(--neutral-bg);
+  --color-neutral-border: var(--neutral-border);
+
+  /* Vivid solid fills (bg-success-solid, etc.) for bars/dots/solid buttons. */
+  --color-success-solid: var(--success-solid);
+  --color-danger-solid: var(--danger-solid);
+  --color-warning-solid: var(--warning-solid);
+  --color-info-solid: var(--info-solid);
+  --color-neutral-solid: var(--neutral-solid);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);

@@ -23,13 +23,13 @@ export type PillTone = "success" | "warning" | "danger" | "info" | "neutral";
 
 const TONE_CLASSES: Record<PillTone, string> = {
   success:
-    "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20",
+    "bg-success-bg text-success border border-success-border",
   warning:
-    "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20",
+    "bg-warning-bg text-warning border border-warning-border",
   danger:
-    "bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20",
+    "bg-danger-bg text-danger border border-danger-border",
   info:
-    "bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20",
+    "bg-info-bg text-info border border-info-border",
   neutral:
     "bg-muted text-muted-foreground border border-border/60",
 };
@@ -44,10 +44,10 @@ interface StatusPillProps {
 }
 
 const DOT_CLASSES: Record<PillTone, string> = {
-  success: "bg-emerald-500",
-  warning: "bg-amber-500",
-  danger: "bg-red-500",
-  info: "bg-blue-500",
+  success: "bg-success-solid",
+  warning: "bg-warning-solid",
+  danger: "bg-danger-solid",
+  info: "bg-info-solid",
   neutral: "bg-muted-foreground/40",
 };
 

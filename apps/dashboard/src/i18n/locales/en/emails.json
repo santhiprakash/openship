@@ -101,6 +101,14 @@
     "adminPasswordLabel": "Admin Password",
     "passwordPlaceholder": "Strong password - or click Generate",
     "passwordHint": "Used to log into the mailbox after setup. You can change it later from the admin panel below.",
+    "relay": {
+      "toggle": "Relay outbound through Amazon SES",
+      "hint": "Recommended. Send via SES's trusted IPs (fresh-server IPs are often blocklisted, and many hosts block outbound port 25). Receiving stays on this server.",
+      "region": "SES region",
+      "username": "SMTP username",
+      "password": "SMTP password",
+      "perDomainNote": "Applies to all domains. Per-domain routing + each domain's SES DKIM records are configured after install in the Sending tab."
+    },
     "startSetup": "Start Setup",
     "adoptCta": "Already have a mail server? Adopt it",
     "whatInstalled": "What gets installed",

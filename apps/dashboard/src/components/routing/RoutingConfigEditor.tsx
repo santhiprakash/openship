@@ -62,7 +62,7 @@ const RowShell: React.FC<{ onRemove: () => void; children: React.ReactNode; disa
         type="button"
         onClick={onRemove}
         disabled={disabled}
-        className="p-1.5 rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-500/10 disabled:opacity-40"
+        className="p-1.5 rounded-md text-muted-foreground hover:text-danger hover:bg-danger-bg disabled:opacity-40"
         aria-label={t.widgets.routing.configEditor.remove}
       >
         <Trash2 className="size-3.5" />
@@ -274,7 +274,7 @@ export const RoutingConfigEditor: React.FC<{
                         ),
                       })
                     }
-                    className="p-1.5 rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-500/10 disabled:opacity-40"
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-danger hover:bg-danger-bg disabled:opacity-40"
                     aria-label={w.removeHeader}
                   >
                     <Trash2 className="size-3.5" />

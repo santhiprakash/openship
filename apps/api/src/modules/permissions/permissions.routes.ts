@@ -42,18 +42,23 @@ r.post(
   ctrl.materializeInvitation,
 );
 
-// ─── Admin-only endpoints (everything below requires admin/owner) ───────────
+// ─── Admin-only endpoints (each requires admin/owner) ───────────────────────
+//
+// requireRole("admin") is attached PER-ROUTE (not via `r.use("*", …)`).
+// secureRouter injects authMiddleware into each route's own handler chain, so a
+// router-level `use()` here would run BEFORE auth — requireRole would then read
+// an unset RequestContext and 401 every admin route. As a per-route handler it
+// runs AFTER authMiddleware + the permission check, so `ctx` is populated.
 
-r.use("*", requireRole("admin"));
-
-r.get("/grants", { tag: "permissions:read" }, ctrl.listGrants);
-r.post("/grants", { tag: "permissions:write" }, ctrl.upsertGrant);
-r.put("/grants", { tag: "permissions:write" }, ctrl.replaceGrants);
-r.delete("/grants/:id", { tag: "permissions:admin" }, ctrl.deleteGrant);
-r.get("/invitations", { tag: "permissions:read" }, ctrl.listInvitations);
+r.get("/grants", { tag: "permissions:read" }, requireRole("admin"), ctrl.listGrants);
+r.post("/grants", { tag: "permissions:write" }, requireRole("admin"), ctrl.upsertGrant);
+r.put("/grants", { tag: "permissions:write" }, requireRole("admin"), ctrl.replaceGrants);
+r.delete("/grants/:id", { tag: "permissions:admin" }, requireRole("admin"), ctrl.deleteGrant);
+r.get("/invitations", { tag: "permissions:read" }, requireRole("admin"), ctrl.listInvitations);
 r.post(
   "/invite-with-grants",
   { tag: "permissions:write" },
+  requireRole("admin"),
   ctrl.inviteWithGrants,
 );
 

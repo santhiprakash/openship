@@ -12,7 +12,22 @@
     "projectNamePlaceholder": "my-app",
     "create": "إنشاء مشروع",
     "creating": "جارٍ الإنشاء…",
-    "createdToast": "تم إنشاء المشروع من {count} خدمة"
+    "createdToast": "تم إنشاء المشروع من {count} خدمة",
+    "migrateN": "ترحيل {n} مشاريع",
+    "addProject": "إضافة مشروع",
+    "removeProject": "إزالة المشروع",
+    "transfer": {
+      "label": "النقل",
+      "default": "الافتراضي (الإعدادات)",
+      "auto": "تلقائي",
+      "stream": "تدفق",
+      "direct": "مباشر",
+      "rsync": "rsync"
+    }
+  },
+  "run": {
+    "queueHeader": "المشروع {index} من {total} · {name}",
+    "allSucceeded": "تم ترحيل {n} مشاريع"
   },
   "discover": {
     "nothing": "لم يتم العثور على حاويات Docker قابلة للتبني على هذا الخادم.",
@@ -26,6 +41,9 @@
     "standalone": "مستقلة",
     "selectAll": "تحديد الكل",
     "selectedCount": "{n} من {total} محدد",
+    "claimedIn": "في {project}",
+    "otherComposeHint": "جزء من {group} — أضِف مشروعًا منفصلًا لاستيراده",
+    "emptyProject": "لم يتم اختيار أي خدمات بعد — اختر من اليسار.",
     "running": "قيد التشغيل",
     "stopped": "متوقفة",
     "image": "الصورة",
@@ -36,10 +54,15 @@
     "dependsOn": "يعتمد على",
     "inUseBy": "مُستخدمة من",
     "reused": "معاد استخدامها في مكانها",
+    "volumeReuse": "الاستحواذ",
+    "volumeCopy": "نسخ",
+    "volumeCopyHint": "الاستحواذ يعيد استخدام وحدة التخزين الحالية في مكانها. النسخ ينشئ نسخة في وحدة تخزين جديدة خاصة بـ Openship ويترك الأصل دون تغيير (يستهلك مساحة إضافية).",
     "bind": "مسار مضيف",
     "nVolumes": "{n} وحدة تخزين",
     "nEnv": "{n} متغيّر",
-    "alreadyManaged": "تم تخطي {count} حاوية يديرها Openship بالفعل."
+    "alreadyManaged": "تم تخطي {count} حاوية يديرها Openship بالفعل.",
+    "proxyExcluded": "وكيل عكسي ({ports}) — لم يُستورد؛ حافة Openship تحل محله.",
+    "edgePortReserved": "المنافذ {ports} محجوزة لحافة Openship؛ لا تُنشر."
   },
   "scanFailed": "فشل فحص Docker",
   "adoptFailed": "تعذّر إنشاء المشروع",

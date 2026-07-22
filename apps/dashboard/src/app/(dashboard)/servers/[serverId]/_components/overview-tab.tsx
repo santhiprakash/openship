@@ -37,9 +37,9 @@ function formatUptime(seconds: string): string {
 function UsageBar({ pct }: { pct: number }) {
   const tone =
     pct >= 90
-      ? "bg-red-500"
+      ? "bg-danger-solid"
       : pct >= 70
-        ? "bg-amber-500"
+        ? "bg-warning-solid"
         : "bg-foreground/60";
   return (
     <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-3">
@@ -211,12 +211,12 @@ export function OverviewTab({
               >
                 {comp.healthy ? (
                   <CheckCircle2
-                    className="size-4 text-emerald-500 shrink-0"
+                    className="size-4 text-success shrink-0"
                     strokeWidth={2}
                   />
                 ) : (
                   <XCircle
-                    className="size-4 text-red-500 shrink-0"
+                    className="size-4 text-danger shrink-0"
                     strokeWidth={2}
                   />
                 )}
@@ -231,8 +231,8 @@ export function OverviewTab({
                 <span
                   className={`text-xs font-medium ${
                     comp.healthy
-                      ? "text-emerald-600 dark:text-emerald-400"
-                      : "text-red-600 dark:text-red-400"
+                      ? "text-success"
+                      : "text-danger"
                   }`}
                 >
                   {comp.healthy ? t.servers.overview.healthy : t.servers.overview.unhealthy}

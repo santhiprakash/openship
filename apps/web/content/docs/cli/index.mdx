@@ -142,13 +142,14 @@ Operate Openship itself: the local server, the CLI, and the desktop app.
 
 | Command | Purpose |
 |---|---|
-| `openship up` | Run Openship as a persistent service (starts on boot, auto-restarts). Add `--foreground` for a one-off attached run. |
-| `openship stop` | Stop the service started by `openship up` (won't restart or return on reboot). |
+| `openship up` | Run Openship as a persistent service (starts on boot, auto-restarts). Ports are dynamic — a busy port is switched automatically. Add `--foreground` for a one-off attached run. |
+| `openship stop` | Stop the service started by `openship up` (won't restart or return on reboot); also clears a stale database lock. |
+| `openship reset-admin-password` | Reset the local admin login from this machine, without signing in (forgot-password recovery). |
 | `openship update` | Update the CLI and bundled server to the latest release. |
 | `openship install` | Download and install the Openship desktop app for this OS. |
 | `openship install cache` | Manage the local download cache (list, verify, clean, path). |
 | `openship open` | Open the Openship dashboard in your browser. |
-| `openship status` | Show the active context's API health and deployment info. |
+| `openship status` | Show the local service (installed/running, resolved ports) and the active context's API health. |
 | `openship doctor` | Diagnose the CLI setup (config, active context, runtime). |
 
 ### Access & the raw API — [reference](/docs/cli/access)

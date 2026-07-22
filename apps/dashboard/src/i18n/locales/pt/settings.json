@@ -74,6 +74,10 @@
     "disconnectAppBody": "Isto remove o registro da conta OAuth do Openship. A instalação do GitHub App permanece até que você a desinstale no GitHub.",
     "cloudExplainer": "O Openship GitHub App pertence a openship.io. Conecte sua instância ao Openship Cloud para usar tokens de instalação com escopo definido para clonar repositórios privados (funciona para implantações locais E remotas).",
     "connectCloud": "Conectar Openship Cloud",
+    "noCloudTitle": "Clonar repositórios privados sem a nuvem",
+    "useSshPerServer": "Chave SSH por servidor",
+    "usePat": "Token de acesso",
+    "noCloudHint": "Configure uma chave SSH em cada servidor (Servidores → GitHub) ou adicione um token de acesso pessoal que funciona para deploys locais e remotos.",
     "linkExplainer": "Vincule sua conta do GitHub para importar repositórios, ativar a implantação automática ao fazer push e gerenciar branches diretamente do painel.",
     "connecting": "Conectando…",
     "connect": "Conectar GitHub",
@@ -282,6 +286,14 @@
       "saveLabel": "Salvar acesso"
     },
     "confirmRemove": "Remover este membro da organização?",
+    "workspace": {
+      "deleteWorkspace": "Excluir espaço de trabalho",
+      "leaveWorkspace": "Sair do espaço de trabalho",
+      "deleteBody": "Remover permanentemente este espaço de trabalho e tudo o que há nele.",
+      "leaveBody": "Saia deste espaço de trabalho — você precisará de um novo convite para voltar.",
+      "deleteConfirm": "Excluir este espaço de trabalho? Seus projetos, membros e configurações são removidos para todos. Isso não pode ser desfeito.",
+      "leaveConfirm": "Sair deste espaço de trabalho? Você perderá o acesso até ser convidado novamente."
+    },
     "toast": {
       "teamNameRequired": "O nome da equipe é obrigatório",
       "teamCreated": "Equipe \"{name}\" criada — trocando agora…",
@@ -291,7 +303,12 @@
       "removeFailed": "Falha ao remover",
       "cancelFailed": "Falha ao cancelar",
       "accessUpdated": "Acesso atualizado",
-      "loadGrantsFailed": "Falha ao carregar as concessões"
+      "loadGrantsFailed": "Falha ao carregar as concessões",
+      "deleteFailed": "Não foi possível excluir o espaço de trabalho",
+      "deleteBillingActive": "Cancele a assinatura ativa deste espaço de trabalho antes de excluí-lo.",
+      "deleted": "Espaço de trabalho excluído",
+      "leaveFailed": "Não foi possível sair do espaço de trabalho",
+      "left": "Você saiu do espaço de trabalho"
     }
   },
   "inviteMember": {
@@ -318,6 +335,7 @@
     "toast": {
       "failedSend": "Falha ao enviar o convite",
       "invitationSent": "Convite enviado para {email}",
+      "personalOrgBlocked": "Espaços de trabalho pessoais não podem convidar membros. Crie primeiro uma organização de equipe e depois envie os convites.",
       "updateMailSourceFailed": "Falha ao atualizar a fonte de e-mail"
     }
   },
@@ -328,7 +346,8 @@
     "currentMode": "Modo atual",
     "singleUserLocal": "Usuário único (local)",
     "migrate": "Migrar",
-    "ownerOnlyTitle": "Apenas o proprietário do espaço de trabalho pode migrar"
+    "ownerOnlyTitle": "Apenas o proprietário do espaço de trabalho pode migrar",
+    "comingSoon": "A vinculação direta a uma instância remota chegará em breve."
   },
   "cloud": {
     "checking": "Verificando…",

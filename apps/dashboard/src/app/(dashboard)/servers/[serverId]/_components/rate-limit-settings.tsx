@@ -259,7 +259,7 @@ export function RateLimitSettings({ serverId }: { serverId: string }) {
           </div>
         </div>
         <div className="p-5">
-          <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 px-4 py-3 flex items-center justify-between gap-4">
+          <div className="rounded-xl border border-warning-border bg-warning-bg px-4 py-3 flex items-center justify-between gap-4">
             <div>
               <p className="text-sm font-medium text-foreground">{t.servers.security.couldntRead}</p>
               <p className="mt-1 text-[12px] text-muted-foreground">
@@ -483,7 +483,7 @@ export function RateLimitSettings({ serverId }: { serverId: string }) {
               <div className="flex items-center gap-2 text-[12px]">
                 <span
                   className={`inline-block size-2 rounded-full ${
-                    hasChanges ? "bg-orange-500" : "bg-muted-foreground/40"
+                    hasChanges ? "bg-warning-solid" : "bg-muted-foreground/40"
                   }`}
                 />
                 <span className="text-muted-foreground">

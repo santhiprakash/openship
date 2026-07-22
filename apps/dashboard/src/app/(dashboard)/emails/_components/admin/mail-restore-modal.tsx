@@ -152,7 +152,7 @@ export function MailRestoreModal({
           )}
 
           {error && (
-            <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-3.5 py-2.5 text-sm text-red-600 dark:text-red-400">
+            <div className="rounded-xl border border-danger-border bg-danger-bg px-3.5 py-2.5 text-sm text-danger">
               {error}
             </div>
           )}
@@ -178,7 +178,7 @@ export function MailRestoreModal({
               <button
                 onClick={start}
                 disabled={!canStart || phase === "running"}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-xl bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-xl bg-danger-solid text-white hover:bg-danger-solid/90 disabled:opacity-50"
               >
                 {phase === "running" && <Loader2 className="size-3.5 animate-spin" />}
                 {mode === "to_fork" ? t.emailsAdmin.restore.migrate : t.emailsAdmin.restore.restore}
@@ -246,9 +246,9 @@ function ReviewStep({
         </label>
       )}
 
-      <div className="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3.5 py-2.5">
-        <AlertTriangle className="size-4 text-amber-500 mt-0.5 shrink-0" />
-        <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+      <div className="flex items-start gap-2 rounded-xl border border-warning-border bg-warning-bg px-3.5 py-2.5">
+        <AlertTriangle className="size-4 text-warning mt-0.5 shrink-0" />
+        <p className="text-xs text-warning leading-relaxed">
           {interpolate(r.warnMain, { which: mode === "to_fork" ? r.warnWhichTarget : r.warnWhichCurrent })}
           {mode === "to_fork" && ` ${r.warnForkExtra}`}
         </p>
@@ -284,15 +284,15 @@ function ProgressStep({
     <div className="flex flex-col items-center gap-3 py-6 text-center">
       <div
         className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
-          done ? "bg-emerald-500/10" : failed ? "bg-red-500/10" : "bg-blue-500/10"
+          done ? "bg-success-bg" : failed ? "bg-danger-bg" : "bg-info-bg"
         }`}
       >
         {done ? (
-          <Check className="size-6 text-emerald-600 dark:text-emerald-400" />
+          <Check className="size-6 text-success" />
         ) : failed ? (
-          <CircleX className="size-6 text-red-600 dark:text-red-400" />
+          <CircleX className="size-6 text-danger" />
         ) : (
-          <Loader2 className="size-6 text-blue-600 dark:text-blue-400 animate-spin" />
+          <Loader2 className="size-6 text-info animate-spin" />
         )}
       </div>
       <div>

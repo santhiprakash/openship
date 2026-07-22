@@ -16,6 +16,7 @@ import { Command } from "commander";
 import { spawnSync } from "node:child_process";
 import { resolveCliUpdatePlan, cliInstallCommand, type CliPackageManager } from "@repo/core";
 import { resolveLatestTag } from "../lib/github-releases";
+import { restart as restartService } from "../lib/service";
 import { err, info, isJsonMode, ok, printJson } from "../lib/output";
 
 declare const __CLI_VERSION__: string;
@@ -73,8 +74,16 @@ export const updateCommand = new Command("update")
       return;
     }
 
+    // Redeploy: restart the installed service so it picks up the new bundle.
+    // No service installed (e.g. `openship up --foreground`) → tell them to
+    // relaunch. The service manager (KeepAlive / Restart=always) handles the
+    // brief blip while the new version boots.
+    const { restarted } = restartService();
+
     if (isJsonMode()) {
-      printJson({ updated: true, from: current, to: latest, via: pm });
+      printJson({ updated: true, from: current, to: latest, via: pm, restarted });
+    } else if (restarted) {
+      ok(`Updated to v${latest} and restarted the service — you're on the new version.`);
     } else {
       ok(`Updated to v${latest}. Restart the server to run the new version: openship up`);
     }

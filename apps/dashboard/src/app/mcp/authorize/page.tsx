@@ -97,7 +97,10 @@ function McpAuthorizeInner() {
   // Explicit access mode so what's granted is obvious. full = act with the
   // user's own role (no resource grants); limited = scope to the picked
   // resources. Default to full — the common case for your own client.
-  const [mode, setMode] = useState<"full" | "limited">("full");
+  // full = act with the user's own role; limited = scope to the picked
+  // resources; own = "projects it creates" — a single {project,"*",[create]}
+  // grant so the client can create projects and control only what it makes.
+  const [mode, setMode] = useState<"full" | "limited" | "own">("full");
 
   const selfHosted = useDeploymentInfo()?.selfHosted ?? true;
 
@@ -156,7 +159,9 @@ function McpAuthorizeInner() {
   // contradicts the choice. Block it and steer the user.
   const limitedButEmpty = mode === "limited" && grants.length === 0;
   const summary =
-    mode === "full"
+    mode === "own"
+      ? interpolate(m.summaryOwn, { org: orgName })
+      : mode === "full"
       ? readOnly
         ? interpolate(m.summaryReadOnly, { org: orgName })
         : interpolate(m.summaryFull, { org: orgName })
@@ -179,10 +184,17 @@ function McpAuthorizeInner() {
         if (accept && clientId) {
           await tokensApi.mcpAuthorize({
             clientId,
-            readOnly,
-            // Full access → no resource grants (acts with the user's role);
-            // limited → only the picked grants.
-            grants: mode === "limited" ? grants : [],
+            // "own" is inherently read+write on what it creates — read-only is
+            // meaningless there, so never send it in that mode.
+            readOnly: mode === "own" ? false : readOnly,
+            // Full → no grants (acts with the user's role); limited → the picked
+            // grants; own → one create grant (the "projects it creates" scope).
+            grants:
+              mode === "limited"
+                ? grants
+                : mode === "own"
+                  ? [{ resourceType: "project", resourceId: "*", permissions: ["create"] }]
+                  : [],
             organizationId: orgId ?? undefined,
           });
         }
@@ -221,7 +233,7 @@ function McpAuthorizeInner() {
 
   if (!clientId) {
     return (
-      <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/[0.06] p-4 text-sm text-red-500">
+      <div className="flex items-start gap-2 rounded-xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
         <AlertCircle className="mt-0.5 size-4 shrink-0" />
         {m.missingClientId}
       </div>
@@ -232,7 +244,7 @@ function McpAuthorizeInner() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <div className="flex size-11 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-500">
+        <div className="flex size-11 items-center justify-center rounded-2xl bg-success-bg text-success">
           <Boxes className="size-5" />
         </div>
         <div>
@@ -313,6 +325,13 @@ function McpAuthorizeInner() {
           title={m.limitedTitle}
           desc={m.limitedDesc}
         />
+        <AccessOption
+          active={mode === "own"}
+          disabled={busy}
+          onClick={() => setMode("own")}
+          title={m.ownTitle}
+          desc={interpolate(m.ownDesc, { org: orgName })}
+        />
 
         {/* Limited → resource picker, inline under the option. */}
         {mode === "limited" && (
@@ -331,7 +350,9 @@ function McpAuthorizeInner() {
           </div>
         )}
 
-        {/* Read-only modifier — applies to whichever mode is selected. */}
+        {/* Read-only modifier — applies to Full/Limited. Meaningless for "own"
+            (that scope exists to create + manage), so it's hidden there. */}
+        {mode !== "own" && (
         <label className="flex cursor-pointer select-none items-start gap-3 rounded-xl border border-border/50 p-3">
           <input
             type="checkbox"
@@ -350,13 +371,14 @@ function McpAuthorizeInner() {
             </span>
           </span>
         </label>
+        )}
       </div>
 
       {/* Plain-language summary of exactly what this Authorize will grant. */}
       <div
         className={`flex items-start gap-2 rounded-lg px-3 py-2.5 text-xs ${
           limitedButEmpty
-            ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+            ? "bg-warning-bg text-warning"
             : "bg-muted/30 text-muted-foreground"
         }`}
       >
@@ -371,7 +393,7 @@ function McpAuthorizeInner() {
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/[0.06] p-3 text-sm text-red-500">
+        <div className="flex items-start gap-2 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
           <AlertCircle className="mt-0.5 size-4 shrink-0" />
           {error}
         </div>

@@ -12,7 +12,11 @@
  */
 
 import type { BuildConfig, BuildStep, LogEntry, LogCallback } from "../types";
-import { safeErrorMessage } from "@repo/core";
+import { safeErrorMessage, packageManagerEnsureCommand } from "@repo/core";
+import { sq, injectGitToken, assembleGitClone } from "./git-clone";
+
+// Re-exported for the docker adapters that import these from here.
+export { sq, injectGitToken, toGitHubSshUrl, assembleGitClone } from "./git-clone";
 
 // ─── BuildLogger - single source of truth for step + log events ─────────────
 
@@ -110,6 +114,15 @@ export interface BuildEnvironment {
    * Must reject/throw on non-zero exit code.
    */
   exec(command: string, onLog: LogCallback): Promise<void>;
+
+  /**
+   * Write a SECRET file (0600) to the build host WITHOUT its bytes appearing in
+   * the streamed log — used for the SSH private key + known_hosts in ssh clone
+   * mode. Runtimes that can't do this safely (no out-of-band write) omit it;
+   * the clone step then refuses SSH auth with an actionable error rather than
+   * risk leaking the key through `exec`.
+   */
+  writeSecretFile?(path: string, content: string): Promise<void>;
 }
 
 // ─── Pipeline ────────────────────────────────────────────────────────────────
@@ -198,43 +211,68 @@ export async function runBuildPipeline(
           //   GIT_ASKPASS=/bin/echo — backstop so a missing credential fails
           //     fast (token mode only; the relay supplies creds via the helper).
           //   --progress — keep the log stream alive on non-tty build pipes.
-          const useHelper = !!config.gitCredentialHelperPath;
-          const cloneUrl = useHelper
-            ? config.repoUrl
-            : injectGitToken(config.repoUrl, config.gitToken);
-          const GIT_ENV = useHelper
-            ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=${sq(config.gitCredentialHelperPath!)} GIT_CONFIG_KEY_1=credential.useHttpPath GIT_CONFIG_VALUE_1=true`
-            : "GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/echo";
-          // Disable host credential helpers in token mode; in relay mode the
-          // helper is exactly what we want, so leave it enabled.
-          const CRED = useHelper ? "" : "-c credential.helper=";
-          if (config.commitSha) {
-            // Depth 50 strikes a balance: deep enough to reach the
-            // commit for the vast majority of rollbacks, but still
-            // far cheaper than a full history fetch. Older rollback
-            // targets fall through to the unshallow fallback below.
-            try {
-              await exec(
-                `${GIT_ENV} git ${CRED} clone --progress --depth 50 --branch ${sq(config.branch)} ${sq(cloneUrl)} ${sq(env.projectDir)} && cd ${sq(env.projectDir)} && git ${CRED} -c advice.detachedHead=false checkout ${sq(config.commitSha)}`,
-              );
-            } catch (initialErr) {
-              // Fallback: SHA not in the shallow window (rollback
-              // targets more than 50 commits old). Unshallow the
-              // clone and retry the checkout. We rethrow the
-              // original error if the unshallow itself fails so the
-              // user sees the most actionable message.
-              logger.log(
-                `Checkout of ${config.commitSha} failed inside the depth-50 clone; running git fetch --unshallow and retrying.`,
-                "warn",
-              );
-              await exec(
-                `cd ${sq(env.projectDir)} && ${GIT_ENV} git ${CRED} fetch --progress --unshallow && git ${CRED} -c advice.detachedHead=false checkout ${sq(config.commitSha)}`,
+          // SSH mode (per-server key / deploy key): write the 0600 key +
+          // known_hosts OUT OF BAND (via writeSecretFile, never through `exec`,
+          // so the key bytes never reach the log) and clone over git@github.com.
+          // Requires a runtime that can write a secret file; otherwise refuse
+          // rather than risk leaking the key.
+          let sshFiles: { keyFile: string; knownHostsFile: string } | undefined;
+          let sshCleanup: string | null = null;
+          if (config.gitSsh) {
+            if (!env.writeSecretFile) {
+              throw new Error(
+                "SSH-based GitHub auth isn't supported on this build runtime — use a token or the tunnel relay.",
               );
             }
-          } else {
-            await exec(
-              `${GIT_ENV} git ${CRED} clone --progress --depth 1 --branch ${sq(config.branch)} ${sq(cloneUrl)} ${sq(env.projectDir)}`,
-            );
+            const dir = `${env.projectDir}.gitssh`;
+            const keyFile = `${dir}/id`;
+            const knownHostsFile = `${dir}/known_hosts`;
+            await exec(`mkdir -p ${sq(dir)} && chmod 700 ${sq(dir)}`);
+            await env.writeSecretFile(keyFile, config.gitSsh.privateKey);
+            await env.writeSecretFile(knownHostsFile, config.gitSsh.knownHosts);
+            await exec(`chmod 600 ${sq(keyFile)}`);
+            sshFiles = { keyFile, knownHostsFile };
+            sshCleanup = `rm -rf ${sq(dir)}`;
+          }
+
+          // Centralized clone assembly (token / relay / ssh) — see git-clone.ts.
+          const { cloneUrl, gitEnv: GIT_ENV, credFlag: CRED } = assembleGitClone({
+            repoUrl: config.repoUrl,
+            gitToken: config.gitToken,
+            gitCredentialHelperPath: config.gitCredentialHelperPath,
+            ssh: sshFiles,
+          });
+
+          try {
+            if (config.commitSha) {
+              // Depth 50 strikes a balance: deep enough to reach the
+              // commit for the vast majority of rollbacks, but still
+              // far cheaper than a full history fetch. Older rollback
+              // targets fall through to the unshallow fallback below.
+              try {
+                await exec(
+                  `${GIT_ENV} git ${CRED} clone --progress --depth 50 --branch ${sq(config.branch)} ${sq(cloneUrl)} ${sq(env.projectDir)} && cd ${sq(env.projectDir)} && git ${CRED} -c advice.detachedHead=false checkout ${sq(config.commitSha)}`,
+                );
+              } catch {
+                // Fallback: SHA not in the shallow window (rollback
+                // targets more than 50 commits old). Unshallow the
+                // clone and retry the checkout.
+                logger.log(
+                  `Checkout of ${config.commitSha} failed inside the depth-50 clone; running git fetch --unshallow and retrying.`,
+                  "warn",
+                );
+                await exec(
+                  `cd ${sq(env.projectDir)} && ${GIT_ENV} git ${CRED} fetch --progress --unshallow && git ${CRED} -c advice.detachedHead=false checkout ${sq(config.commitSha)}`,
+                );
+              }
+            } else {
+              await exec(
+                `${GIT_ENV} git ${CRED} clone --progress --depth 1 --branch ${sq(config.branch)} ${sq(cloneUrl)} ${sq(env.projectDir)}`,
+              );
+            }
+          } finally {
+            // Always remove the ephemeral SSH key material, success or fail.
+            if (sshCleanup) await exec(sshCleanup).catch(() => {});
           }
         },
       );
@@ -266,14 +304,22 @@ export async function runBuildPipeline(
       return prefix ? `${prefix} && ${full}` : full;
     };
 
+    // Ensure the detected package manager is on PATH before the first pnpm/yarn
+    // invocation (corepack for pnpm/yarn; no-op for npm/bun/non-node) — fixes
+    // "pnpm: not found". `corepack enable` persists the shim to disk, so once
+    // install has run the build step inherits it; only prepend it to build when
+    // install was skipped (build-command-only config).
+    const pmEnsure = packageManagerEnsureCommand(config.packageManager);
+
     // ── Step 2: Install ────────────────────────────────────────────
     currentStep = "install";
     if (config.installCommand) {
+      const installCmd = pmEnsure ? `${pmEnsure} && ${config.installCommand}` : config.installCommand;
       await logger.runStep(
         "install",
         `Installing dependencies (${config.packageManager})`,
         async () => {
-          await exec(inDir(config.installCommand));
+          await exec(inDir(installCmd));
         },
       );
     } else {
@@ -283,8 +329,12 @@ export async function runBuildPipeline(
     // ── Step 3: Build ──────────────────────────────────────────────
     if (config.buildCommand) {
       currentStep = "build";
+      const buildCmd =
+        pmEnsure && !config.installCommand
+          ? `${pmEnsure} && ${config.buildCommand}`
+          : config.buildCommand;
       await logger.runStep("build", `Building (${config.buildCommand})`, async () => {
-        await exec(inDir(config.buildCommand!));
+        await exec(inDir(buildCmd));
       });
     } else {
       logger.step("build", "skipped", "No build command configured");
@@ -311,9 +361,6 @@ function resolveBuildDirectory(projectDir: string, rootDirectory?: string): stri
 }
 
 /** Shell-quote a value for use in `sh -c` commands. */
-export function sq(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
 /** Detect log level from a raw log line. Shared across all runtimes. */
 export function parseLogLevel(message: string): LogEntry["level"] {
   if (/\b(error|fatal|panic)\b/i.test(message)) return "error";
@@ -345,24 +392,3 @@ export function detectBuildKillHint(output: string): string | null {
   return null;
 }
 
-/**
- * Inject a token into an HTTPS git URL for private repo access.
- *
- * Converts `https://github.com/owner/repo.git`
- * into    `https://x-access-token:<token>@github.com/owner/repo.git`
- *
- * Returns the original URL unchanged if no token is provided or
- * the URL is not HTTPS (e.g. ssh://).
- */
-export function injectGitToken(repoUrl: string, token?: string): string {
-  if (!token) return repoUrl;
-  try {
-    const url = new URL(repoUrl);
-    if (url.protocol !== "https:") return repoUrl;
-    url.username = "x-access-token";
-    url.password = token;
-    return url.toString();
-  } catch {
-    return repoUrl;
-  }
-}

@@ -52,6 +52,73 @@ export function getOblienClient(): Oblien {
   return _client;
 }
 
+// ─── Webhook registration ────────────────────────────────────────────────────
+
+/**
+ * The billing events our receiver (`/api/billing/oblien-webhook`) handles.
+ * Account-wide (no `namespace` scope) so one webhook covers every org's
+ * namespace — Oblien caps accounts at 10 webhooks, so we keep exactly one.
+ */
+const OBLIEN_WEBHOOK_EVENTS = [
+  "credits.usage",
+  "credits.low",
+  "credits.depleted",
+  "namespace.quota.threshold",
+] as const;
+
+/**
+ * Ensure our billing webhook is registered with Oblien. Idempotent: if a
+ * webhook already targets our URL we refresh its events + secret + active flag
+ * (self-heals a rotated secret or an event-set change); otherwise we create it.
+ * No-op + warn when the secret or public URL isn't configured — without both
+ * the receiver can't verify deliveries or even be reached. CLOUD_MODE only.
+ */
+export async function ensureOblienWebhook(): Promise<void> {
+  if (!env.CLOUD_MODE) return;
+
+  const secret = env.OBLIEN_WEBHOOK_SECRET;
+  const base = env.OPENSHIP_PUBLIC_URL?.trim();
+  if (!secret) {
+    console.warn(
+      "[oblien] OBLIEN_WEBHOOK_SECRET unset — skipping webhook registration (deliveries would be unverifiable)",
+    );
+    return;
+  }
+  if (!base) {
+    console.warn(
+      "[oblien] OPENSHIP_PUBLIC_URL unset — skipping webhook registration (no public URL for Oblien to reach)",
+    );
+    return;
+  }
+
+  const url = `${base.replace(/\/+$/, "")}/api/billing/oblien-webhook`;
+  const events = [...OBLIEN_WEBHOOK_EVENTS];
+
+  try {
+    const client = getOblienClient();
+    const { webhooks } = await client.webhooks.list();
+    const existing = webhooks.find((w) => w.url === url);
+
+    if (existing) {
+      await client.webhooks.update(existing.id, { events, secret, active: true });
+      console.log(`[oblien] webhook ${existing.id} refreshed → ${url}`);
+      return;
+    }
+
+    const created = await client.webhooks.create({
+      url,
+      events,
+      secret,
+      description: "Openship billing (credits + quota)",
+    });
+    console.log(`[oblien] webhook ${created.webhook?.id ?? "?"} registered → ${url}`);
+  } catch (err) {
+    // Non-fatal at boot — the receiver still works once a webhook exists;
+    // log loudly so operators notice a persistent failure.
+    console.error(`[oblien] webhook registration failed: ${safeErrorMessage(err)}`);
+  }
+}
+
 // ─── Namespace management ────────────────────────────────────────────────────
 
 // Org ↔ namespace is effectively immutable — 1h TTL is generous and

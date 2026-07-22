@@ -15,11 +15,11 @@ const DeploymentCard = ({ deployment }: Props) => {
   const getStatusColor = (status: string) => {
     switch (status) {
       case "success":
-        return "text-green-600 bg-green-50";
+        return "text-success bg-success-bg";
       case "failed":
-        return "text-red-600 bg-red-50";
+        return "text-danger bg-danger-bg";
       default:
-        return "text-yellow-600 bg-yellow-50";
+        return "text-warning bg-warning-bg";
     }
   };
 

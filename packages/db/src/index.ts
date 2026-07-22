@@ -6,7 +6,7 @@ export { withAdvisoryLock, hashStringToInt } from "./advisory-lock";
 
 // ─── Schema (table definitions) ──────────────────────────────────────────────
 export * as schema from "./schema";
-export type { ComposeServiceSpec } from "./schema/service";
+export type { ComposeServiceSpec, ServicePublicEndpoint } from "./schema/service";
 
 // ─── Dump / restore (team-mode migration + project transfer) ─────────────────
 export {
@@ -32,7 +32,7 @@ export {
   createSessionRepo,
   createAccountRepo,
   createGitInstallationRepo,
-  createProjectAppRepo,
+  createProjectGroupRepo,
   createProjectRepo,
   createDeploymentRepo,
   createDomainRepo,
@@ -45,6 +45,8 @@ export {
   composeSpecDiff,
   createSettingsRepo,
   createServerRepo,
+  createServerGithubAuthRepo,
+  createGithubDeployKeyRepo,
   createServerTunnelRepo,
   createAnalyticsRepo,
   createTerminalSessionRepo,
@@ -55,8 +57,8 @@ export {
   type Account,
   type GitInstallation,
   type NewGitInstallation,
-  type ProjectApp,
-  type NewProjectApp,
+  type ProjectGroup,
+  type NewProjectGroup,
   type Project,
   type NewProject,
   type EnvVar,
@@ -80,6 +82,10 @@ export {
   type NewUserSettings,
   type Server,
   type NewServer,
+  type ServerGithubAuth,
+  type NewServerGithubAuth,
+  type GithubDeployKey,
+  type NewGithubDeployKey,
   type ServerTunnel,
   type NewServerTunnel,
   type ServerAnalyticsRow,
@@ -101,11 +107,20 @@ export {
   type NewBackupRestore,
   type BackupRunStatus,
   type BackupRestoreStatus,
+  type DockerMigrationRun,
+  type NewDockerMigrationRun,
+  type DockerMigrationStatus,
   type Member,
   type MemberRole,
   type Invitation,
   type AuditEvent,
   type NewAuditEvent,
+  createJobRunRepo,
+  type JobRun,
+  type NewJobRun,
+  createJobRepo,
+  type Job,
+  type NewJob,
   type OrphanedResource,
   type NewOrphanedResource,
   type ResourceGrant,
@@ -121,6 +136,9 @@ export {
   type NotificationDelivery,
   type ChannelKind,
   type DeliveryStatus,
+  createUpdateStatusRepo,
+  type UpdateStatus,
+  type NewUpdateStatus,
 } from "./repos";
 
 // ─── Drizzle operators (re-exported for convenience) ─────────────────────────

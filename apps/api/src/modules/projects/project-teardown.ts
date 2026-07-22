@@ -68,7 +68,8 @@ export interface TeardownStep {
 export type TeardownRejectionKind =
   | "claim_lock_held"
   | "already_deleted"
-  | "org_mismatch";
+  | "org_mismatch"
+  | "control_plane";
 
 /** A remote resource we couldn't destroy now (server unreachable, or a
  *  force-orphaned failure) and recorded for the GC sweep to reclaim later. */
@@ -193,6 +194,19 @@ export async function teardownProject(
     steps.push(s);
     return s;
   };
+
+  // The Openship control plane is the host service, not a torn-down workload —
+  // refuse BEFORE claiming the lock so we never mangle its row. (The controller
+  // guards this too; this is defense-in-depth for any other caller.)
+  const preload = await repos.project.findById(projectId).catch(() => undefined);
+  if (preload?.appTemplateId === "openship") {
+    push({
+      step: "guard_control_plane",
+      status: "failed",
+      error: "The Openship control plane can't be torn down via the API — manage it with the CLI.",
+    });
+    return finalize(steps, false, "control_plane");
+  }
 
   // Claim the deletion lock. Two concurrent DELETEs lose the same row
   // race otherwise — a failed claim has three distinct causes:
@@ -344,7 +358,7 @@ export async function teardownProject(
 
     // ── Step 5: Drop the DB row. FK CASCADE on project.id sweeps
     //   deployment, service, env_var, domain, backup_policy.
-    rowDeleted = await stepDeleteRow(projectId, project.appId, push);
+    rowDeleted = await stepDeleteRow(projectId, project.groupId, push);
 
     return finalize(steps, rowDeleted, undefined, orphaned);
   } finally {
@@ -547,6 +561,31 @@ async function stepRuntimeCleanup(
     return orphans;
   }
 
+  // Force-orphan short-circuit: the operator chose "delete from storage anyway",
+  // so DON'T attempt the inline SSH destroy at all (that's the call that can hang
+  // ~80s on a slow/failing runtime and is why the escape felt stuck). Record
+  // every reachable resource as an orphan for the GC sweep and let the row drop
+  // now. Reachable manifest items don't carry their own serverId/runtimeMode, so
+  // stamp them with the project's primary target (same as the post-failure path).
+  if (forceOrphan) {
+    const target = await resolvePrimaryTarget(project.id);
+    for (const r of destroyable) {
+      orphans.push({
+        serverId: r.serverId ?? target.serverId,
+        resourceType: r.type === "unreachable" ? "container" : r.type,
+        ref: r.ref,
+        label: r.label,
+        runtimeMode: r.runtimeMode ?? target.runtimeMode,
+      });
+    }
+    push({
+      step: "runtime_cleanup",
+      status: "ok",
+      details: `${destroyable.length} force-orphaned (storage-only delete)${orphanNote}`,
+    });
+    return orphans;
+  }
+
   const result = await executeCleanup({ projectId: manifest.projectId, resources: destroyable });
   const realFailures = result.failed;
   const details =
@@ -557,29 +596,10 @@ async function stepRuntimeCleanup(
     return orphans;
   }
 
-  // Reachable server, but destroy kept failing. Default: mark failed so the
-  // atomicity gate keeps the row and a later retry can reclaim (a transient
-  // docker error might clear). forceOrphan: give up, orphan them, let the row
-  // drop — stamped with the project's primary target so GC can retry.
-  if (forceOrphan) {
-    const target = await resolvePrimaryTarget(project.id);
-    for (const f of realFailures) {
-      orphans.push({
-        serverId: target.serverId,
-        resourceType: f.type === "unreachable" ? "container" : f.type,
-        ref: f.ref,
-        label: f.label,
-        runtimeMode: target.runtimeMode,
-      });
-    }
-    push({
-      step: "runtime_cleanup",
-      status: "ok",
-      details: `${details}; ${realFailures.length} force-orphaned`,
-    });
-    return orphans;
-  }
-
+  // Reachable server, but destroy kept failing WITHOUT forceOrphan (the
+  // forceOrphan case short-circuited above, before executeCleanup). Mark failed
+  // so the atomicity gate keeps the row and surfaces canForceOrphan — a later
+  // retry with forceOrphan drops it via the fast path.
   push({
     step: "runtime_cleanup",
     status: "failed",
@@ -651,7 +671,7 @@ async function stepWebmailTeardown(
 
 async function stepDeleteRow(
   projectId: string,
-  appId: string,
+  groupId: string,
   push: (s: TeardownStep) => void,
 ): Promise<boolean> {
   try {
@@ -664,9 +684,9 @@ async function stepDeleteRow(
     // for other orgs (theoretical) would CASCADE-drop, but the app row
     // is org-scoped so leaving it soft-deleted keeps audit history
     // intact for the org.
-    const remaining = await repos.project.listByApp(appId).catch(() => []);
+    const remaining = await repos.project.listByGroup(groupId).catch(() => []);
     if (remaining.length === 0) {
-      await repos.projectApp.softDelete(appId).catch(() => {});
+      await repos.projectGroup.softDelete(groupId).catch(() => {});
     }
 
     push({ step: "delete_db_row", status: "ok" });

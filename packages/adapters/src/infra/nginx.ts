@@ -24,13 +24,13 @@ import {
   rename as fsRename,
 } from "node:fs/promises";
 import { execFile as cpExecFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, X509Certificate, createPrivateKey } from "node:crypto";
 import { promisify } from "node:util";
 import { dirname, join } from "node:path";
 
-import type { CommandExecutor, RouteConfig, SslResult } from "../types";
+import type { CommandExecutor, ManualCert, RouteConfig, SslResult } from "../types";
 import type { RoutingProvider, SslProvider } from "./types";
-import { LUA_LOGGER_PATH, buildReloadCommand, detectOpenRestyPaths, type OpenRestyPaths } from "./openresty-lua";
+import { LUA_LOGGER_PATH, RULES_GUARD_PATH, luaSourceAvailable, buildReloadCommand, detectOpenRestyPaths, type OpenRestyPaths } from "./openresty-lua";
 import { safeErrorMessage } from "@repo/core";
 
 /** Reverse-proxy headers shared by every proxy_pass location. */
@@ -227,8 +227,11 @@ export class NginxProvider implements RoutingProvider, SslProvider {
 
   private async _exec(command: string, args: string[] = []): Promise<string> {
     if (this.executor) {
-      // Remote: executor handles the command as a single string
-      const full = args.length ? `${command} ${args.join(" ")}` : command;
+      // Remote path runs through a login shell (ssh2 exec), so every arg MUST
+      // be shell-quoted — otherwise a value like an ACME email carrying `;`,
+      // `$()`, or backticks executes as a command on the managed server (root).
+      // The local branch below is argv-based (execFile) and needs no quoting.
+      const full = args.length ? `${command} ${args.map(sq).join(" ")}` : command;
       return this.executor.exec(full);
     }
     const { stdout } = await execFileAsync(command, args);
@@ -298,6 +301,17 @@ export class NginxProvider implements RoutingProvider, SslProvider {
 `
       : "";
 
+    // Fail-safe: only emit the Lua directives when the scripts are actually
+    // installable. On a build that dropped the Lua from its bundle, referencing
+    // a missing file makes OpenResty 500 EVERY request (total outage). Omitting
+    // them means the edge rules-engine + analytics logging are off, but the site
+    // SERVES. luaSourceAvailable() is the same signal the installer gates on.
+    const edgeLua = luaSourceAvailable();
+    const luaLogOnly = edgeLua ? `    log_by_lua_file ${LUA_LOGGER_PATH};` : "";
+    const luaProxy = edgeLua
+      ? `    log_by_lua_file ${LUA_LOGGER_PATH};\n    access_by_lua_file ${RULES_GUARD_PATH};`
+      : "";
+
     let serverBlock: string;
 
     if (route.tls && (await this.certsExist(route.domain))) {
@@ -309,7 +323,7 @@ server {
     listen 80;
     server_name ${route.domain};
 
-    log_by_lua_file ${LUA_LOGGER_PATH};
+${luaLogOnly}
 
     location /.well-known/acme-challenge/ {
         root /var/www/acme;
@@ -324,7 +338,7 @@ server {
     listen 443 ssl;
     server_name ${route.domain};
 
-    log_by_lua_file ${LUA_LOGGER_PATH};
+${luaProxy}
 
     ssl_certificate ${certPath};
     ssl_certificate_key ${keyPath};
@@ -342,7 +356,7 @@ server {
     listen 80;
     server_name ${route.domain};
 
-    log_by_lua_file ${LUA_LOGGER_PATH};
+${luaProxy}
 ${serverHeaders}
     location /.well-known/acme-challenge/ {
         root /var/www/acme;
@@ -417,8 +431,12 @@ ${webhookLocation}${extraLocations}
       return this.readCertInfo(domain);
     }
 
-    const emailArgs = this.acmeEmail
-      ? ["--email", this.acmeEmail]
+    // Defense-in-depth: only pass acmeEmail when it's a plausible address.
+    // (_exec now shell-quotes every arg, but a garbage/injection-shaped value
+    // has no business reaching certbot — drop it rather than register with it.)
+    const validEmail = !!this.acmeEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.acmeEmail);
+    const emailArgs = validEmail
+      ? ["--email", this.acmeEmail as string]
       : ["--register-unsafely-without-email"];
 
     await this._exec("certbot", [
@@ -483,6 +501,49 @@ ${webhookLocation}${extraLocations}
     await this.reload();
 
     return this.readCertInfo(domain);
+  }
+
+  /**
+   * Install an operator-supplied certificate (no ACME). Validates the PEM pair,
+   * writes it to the same on-disk path certbot uses, then re-registers the vhost
+   * with TLS — mirroring provisionCert's tail so composite routes are preserved.
+   */
+  async installCert(domain: string, cert: ManualCert): Promise<SslResult> {
+    assertValidDomain(domain);
+
+    // Validate before touching disk: the cert must parse and the key must
+    // actually match it, or OpenResty would fail to reload on a broken pair.
+    let expiresAt: string;
+    try {
+      const x509 = new X509Certificate(cert.certPem);
+      const key = createPrivateKey(cert.keyPem);
+      if (!x509.checkPrivateKey(key)) {
+        throw new Error("private key does not match certificate");
+      }
+      expiresAt = new Date(x509.validTo).toISOString();
+    } catch (err) {
+      throw new Error(`Invalid certificate: ${safeErrorMessage(err)}`);
+    }
+
+    const dir = join(this.certDir, domain);
+    await this._mkdir(dir);
+    await this._writeFile(join(dir, "fullchain.pem"), cert.certPem);
+    await this._writeFile(join(dir, "privkey.pem"), cert.keyPem);
+
+    // Re-register the vhost with TLS now that the cert is on disk. Prefer the
+    // persisted RouteConfig sidecar so every location survives (same as
+    // provisionCert); if there's no route yet, the next deploy's route plan
+    // picks up tls:true from the manualSsl gate.
+    const slug = this.domainSlug(domain);
+    try {
+      const state = await this._readFile(this.routeStatePath(slug));
+      const saved = JSON.parse(state) as RouteConfig;
+      await this.registerRoute({ ...saved, domain, tls: true });
+    } catch {
+      // No sidecar (domain not routed yet) — cert is staged on disk regardless.
+    }
+
+    return { domain, expiresAt, issuer: "manual", verified: true, reason: "issued" };
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────

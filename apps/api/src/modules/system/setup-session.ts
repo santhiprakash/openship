@@ -26,6 +26,14 @@ export interface SetupLogEntry {
   level: "info" | "warn" | "error";
 }
 
+export interface SetupPrompt {
+  promptId: string;
+  title: string;
+  message: string;
+  actions: Array<{ id: string; label: string; variant?: string }>;
+  details?: Record<string, unknown>;
+}
+
 export interface SetupSessionState {
   id: string;
   serverId: string;
@@ -35,6 +43,8 @@ export interface SetupSessionState {
   subscribers: Set<SseWriter>;
   startedAt: number;
   finishedAt?: number;
+  /** The prompt the pipeline is currently blocked on (replayed to reattachers). */
+  pendingPrompt?: SetupPrompt;
 }
 
 export type SseWriter = (event: string, data: string) => boolean;
@@ -154,6 +164,81 @@ export function appendSetupLog(
   }));
 }
 
+// ─── Interactive prompts (the "hold" mechanism) ────────────────────────────────
+
+/**
+ * A prompt the install pipeline is blocked on while the user decides in the
+ * dashboard. Mirrors the deploy session manager's prompt/respond so the SAME
+ * generic prompt modal drives both flows (e.g. OpenResty edge takeover).
+ */
+interface PendingSetupPrompt {
+  resolve: (action: string) => void;
+  reject: (reason: Error) => void;
+  timeoutId: ReturnType<typeof setTimeout>;
+}
+
+const pendingSetupPrompts = new Map<string, PendingSetupPrompt>();
+const SETUP_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
+
+export function rejectPendingSetupPrompt(sessionId: string, reason: string): void {
+  const pending = pendingSetupPrompts.get(sessionId);
+  const session = sessions.get(sessionId);
+  if (session) session.pendingPrompt = undefined;
+  if (!pending) return;
+  clearTimeout(pending.timeoutId);
+  pendingSetupPrompts.delete(sessionId);
+  pending.reject(new Error(reason));
+}
+
+/** Is a session currently blocked on a prompt, and does anyone hold its stream? */
+export function setupPromptState(sessionId: string): { pending: boolean; subscribers: number } {
+  const session = sessions.get(sessionId);
+  return { pending: Boolean(session?.pendingPrompt), subscribers: session?.subscribers.size ?? 0 };
+}
+
+/**
+ * Broadcast a `prompt` SSE event and block until the user responds (or timeout).
+ * Returns the chosen action id (e.g. "override", "cancel").
+ */
+export function promptSetupUser(
+  sessionId: string,
+  prompt: {
+    promptId: string;
+    title: string;
+    message: string;
+    actions: Array<{ id: string; label: string; variant?: string }>;
+    details?: Record<string, unknown>;
+  },
+): Promise<string> {
+  const session = sessions.get(sessionId);
+  if (!session) throw new Error("No active setup session for prompt");
+
+  // Persist so a reattaching client (page reload / dropped socket) can re-render
+  // the modal — the broadcast only reaches sockets open right now.
+  session.pendingPrompt = prompt;
+  broadcast(session, "prompt", JSON.stringify({ type: "prompt", ...prompt }));
+
+  return new Promise<string>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      pendingSetupPrompts.delete(sessionId);
+      reject(new Error("Prompt timed out - no response from user"));
+    }, SETUP_PROMPT_TIMEOUT_MS);
+    pendingSetupPrompts.set(sessionId, { resolve, reject, timeoutId });
+  });
+}
+
+/** Resolve a pending prompt with the user's chosen action. */
+export function respondToSetupPrompt(sessionId: string, action: string): boolean {
+  const pending = pendingSetupPrompts.get(sessionId);
+  if (!pending) return false;
+  const session = sessions.get(sessionId);
+  if (session) session.pendingPrompt = undefined;
+  clearTimeout(pending.timeoutId);
+  pendingSetupPrompts.delete(sessionId);
+  pending.resolve(action);
+  return true;
+}
+
 /** Mark the session as completed or failed and notify subscribers. */
 export function finishSetupSession(
   sessionId: string,
@@ -161,6 +246,9 @@ export function finishSetupSession(
 ): void {
   const session = sessions.get(sessionId);
   if (!session) return;
+
+  // A finished session can't answer a prompt - unblock the pipeline.
+  rejectPendingSetupPrompt(sessionId, "Setup session finished");
 
   session.status = status;
   session.finishedAt = Date.now();
@@ -216,7 +304,13 @@ export function subscribeSetupSession(
     }
   }
 
-  // If session already finished, send completion + end  
+  // Re-surface an unanswered prompt so a reattached stream (page reload / dropped
+  // socket) can render the modal — otherwise the pipeline hangs until timeout.
+  if (session.status === "running" && session.pendingPrompt) {
+    writer("prompt", JSON.stringify({ type: "prompt", ...session.pendingPrompt }));
+  }
+
+  // If session already finished, send completion + end
   if (session.status !== "running") {
     writer("complete", JSON.stringify({
       type: "complete",
@@ -236,6 +330,7 @@ export function subscribeSetupSession(
 
 /** Remove a session. */
 export function removeSetupSession(id: string): void {
+  rejectPendingSetupPrompt(id, "Setup session removed");
   const session = sessions.get(id);
   if (session) {
     for (const writer of session.subscribers) {

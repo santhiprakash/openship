@@ -1,4 +1,5 @@
-import { getDeploymentInfo } from "@/lib/server/session";
+import { getDeploymentInfoOrNull } from "@/lib/server/session";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import { OnboardingProviders } from "./providers";
 
 /**
@@ -7,7 +8,8 @@ import { OnboardingProviders } from "./providers";
  * Used by desktop app (Electron), CLI (opens browser), and direct first-run access.
  */
 export default async function OnboardingLayout({ children }: { children: React.ReactNode }) {
-  const deploymentInfo = await getDeploymentInfo();
+  const deploymentInfo = await getDeploymentInfoOrNull();
+  if (!deploymentInfo) return <ApiUnavailable />;
 
   return (
     <OnboardingProviders

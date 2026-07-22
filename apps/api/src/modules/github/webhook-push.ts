@@ -18,10 +18,28 @@ import {
 } from "./webhook-changed-files";
 import { webhookActorCtx } from "./webhook-shared";
 import { resolveOrgOwner } from "../../lib/org-actor";
+import { notification } from "../../lib/notification-dispatcher";
 import type { WebhookHandlerResult } from "../webhooks/webhook.types";
 import type { GitHubPushPayload } from "./github.types";
 
 // ─── Branch deployment events ────────────────────────────────────────────────
+
+/** Surface a webhook auto-deploy that failed before a deployment row existed
+ *  (so the pipeline's own deployment.failed never fired). Org-scoped +
+ *  fire-and-forget — reaches members/channels even when there's no owner. */
+function notifyAutoDeployFailed(project: Project, err: unknown): void {
+  notification.emit({
+    organizationId: project.organizationId,
+    eventType: "deployment.failed",
+    resourceType: "project",
+    resourceId: project.id,
+    payload: {
+      projectName: project.name,
+      trigger: "webhook",
+      reason: safeErrorMessage(err),
+    },
+  });
+}
 
 export async function handlePush(payload: GitHubPushPayload): Promise<WebhookHandlerResult> {
   const owner = payload.repository?.owner?.login;
@@ -256,7 +274,17 @@ async function triggerBranchDeployments(
   }
 
   const results = await Promise.allSettled(
-    autoDeployProjects.map((p) => deployProjectFromPush(p, input)),
+    autoDeployProjects.map((p) =>
+      // A webhook has no interactive user watching for errors. When a redeploy
+      // is blocked BEFORE a deployment row exists (preflight throws with no
+      // clone credential, or the org has no owner), the pipeline's own
+      // deployment.failed never fires — emit it here so auto-deploy doesn't
+      // silently go dark. Rethrow to preserve the failed count + log below.
+      deployProjectFromPush(p, input).catch((err) => {
+        notifyAutoDeployFailed(p, err);
+        throw err;
+      }),
+    ),
   );
 
   let succeeded = 0;

@@ -93,29 +93,29 @@ export function ReputationBanner({ serverId, domain }: ReputationBannerProps) {
   if (!visible) return null;
 
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-amber-200/70 dark:border-amber-500/30 bg-gradient-to-br from-amber-50 via-amber-50/60 to-orange-50/40 dark:from-amber-500/[0.08] dark:via-amber-500/[0.04] dark:to-orange-500/[0.03]">
+    <div className="relative overflow-hidden rounded-2xl border border-warning-border bg-warning-bg">
       <div
         aria-hidden
-        className="absolute -top-12 -end-12 size-44 rounded-full bg-amber-300/30 dark:bg-amber-400/15 blur-3xl pointer-events-none"
+        className="absolute -top-12 -end-12 size-44 rounded-full bg-warning-bg blur-3xl pointer-events-none"
       />
       <div className="relative flex items-start gap-3.5 p-4 pe-12">
-        <div className="size-9 rounded-xl bg-amber-100 dark:bg-amber-500/20 border border-amber-200/80 dark:border-amber-500/30 flex items-center justify-center shrink-0">
+        <div className="size-9 rounded-xl bg-warning-bg border border-warning-border flex items-center justify-center shrink-0">
           <Clock3
-            className="size-4 text-amber-700 dark:text-amber-300"
+            className="size-4 text-warning"
             strokeWidth={2}
           />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-[13.5px] font-semibold text-amber-900 dark:text-amber-100 leading-snug">
+          <p className="text-[13.5px] font-semibold text-warning leading-snug">
             {t.emailsAdmin.reputation.titlePrefix}
             <span className="font-mono font-medium">{domain}</span>
           </p>
-          <p className="text-[13px] text-amber-900/85 dark:text-amber-100/85 leading-relaxed mt-0.5">
+          <p className="text-[13px] text-warning leading-relaxed mt-0.5">
             {t.emailsAdmin.reputation.body}
             <button
               type="button"
               onClick={dismiss}
-              className="font-medium text-amber-900 dark:text-amber-100 underline-offset-4 hover:underline"
+              className="font-medium text-warning underline-offset-4 hover:underline"
             >
               {t.emailsAdmin.reputation.dismissLink}
             </button>
@@ -125,7 +125,7 @@ export function ReputationBanner({ serverId, domain }: ReputationBannerProps) {
           type="button"
           onClick={dismiss}
           aria-label={t.emailsAdmin.reputation.dismiss}
-          className="absolute top-3 end-3 p-1 rounded-md text-amber-700/70 dark:text-amber-200/60 hover:text-amber-900 dark:hover:text-amber-100 hover:bg-amber-100/60 dark:hover:bg-amber-500/15 transition-colors"
+          className="absolute top-3 end-3 p-1 rounded-md text-warning hover:bg-warning-bg transition-colors"
         >
           <X className="size-3.5" strokeWidth={2.25} />
         </button>

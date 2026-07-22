@@ -224,6 +224,69 @@ server
     }),
   );
 
+/* ── update (native-module migrations) ──────────────────────────── */
+// --check: report drift only. Default: apply pending migrations (incl. consent).
+interface ModuleRow {
+  moduleName: string;
+  installedVersion: string | null;
+  migrationVersion: string | null;
+  availableVersion: string | null;
+  behind: boolean;
+  detail: { pendingConsent?: { id: string; version: string; warning?: string }[] } | null;
+}
+interface ModuleApplyResult {
+  module: string; fromVersion: string; toVersion: string;
+  appliedSteps: string[]; ok: boolean; error?: string;
+}
+server
+  .command("update <serverId>")
+  .description("Check for and apply native-module migrations (OpenResty, …)")
+  .option("-c, --component <name...>", "Limit to specific modules")
+  .option("--check", "Only report drift; don't apply")
+  .action(
+    guard(async (serverId: string, o: { component?: string[]; check?: boolean }) => {
+      const base = `/system/servers/${encodeURIComponent(serverId)}/modules`;
+      // Refresh the drift cache from the live box first (best-effort).
+      await apiRequest(`${base}/scan`, { method: "POST", body: "{}" }).catch(() => {});
+      let mods = await apiRequest<ModuleRow[]>(base);
+      if (o.component?.length) mods = mods.filter((m) => o.component!.includes(m.moduleName));
+
+      if (o.check) {
+        if (isJsonMode()) return printJson(mods);
+        printTable(
+          mods.map((m) => ({
+            module: m.moduleName,
+            installed: m.installedVersion ?? "-",
+            current: m.migrationVersion ?? "-",
+            available: m.availableVersion ?? "-",
+            behind: m.behind ? "yes" : "no",
+            consent: String(m.detail?.pendingConsent?.length ?? 0),
+          })),
+          ["module", "installed", "current", "available", "behind", "consent"],
+        );
+        return;
+      }
+
+      const behind = mods.filter((m) => m.behind);
+      if (!behind.length) return ok("  All modules up to date.");
+      for (const m of behind) {
+        const consent = m.detail?.pendingConsent ?? [];
+        if (consent.length && !isJsonMode()) {
+          info(`  ${m.moduleName}: includes consent migrations — ${consent.map((c) => c.warning ?? c.id).join("; ")}`);
+        }
+        const spinner = isJsonMode() ? null : ora(`Updating ${m.moduleName}…`).start();
+        const res = await apiRequest<ModuleApplyResult>(`${base}/${encodeURIComponent(m.moduleName)}/apply`, {
+          method: "POST",
+          body: "{}",
+        });
+        spinner?.stop();
+        if (isJsonMode()) { printJson(res); continue; }
+        if (res.ok) ok(`  ${m.moduleName}: ${res.fromVersion} → ${res.toVersion} (${res.appliedSteps.length} step(s))`);
+        else err(`  ${m.moduleName}: ${res.error ?? "update failed"}`);
+      }
+    }),
+  );
+
 /* ── install ────────────────────────────────────────────────────── */
 // Without --follow: POST /system/install once per component (JSON result).
 // With --follow:    POST /system/install/stream and render the SSE log feed.

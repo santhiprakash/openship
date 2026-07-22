@@ -25,7 +25,7 @@ export function BackupRunCard({ runId, initial }: Props): React.JSX.Element {
 
   if (error && !run) {
     return (
-      <div className="rounded-2xl border border-red-500/40 bg-red-500/5 p-4 text-sm text-red-600 dark:text-red-400">
+      <div className="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
         {interpolate(w.streamError, { message: error.message })}
       </div>
     );
@@ -46,10 +46,10 @@ export function BackupRunCard({ runId, initial }: Props): React.JSX.Element {
       : Loader2;
   const color =
     run.status === "succeeded"
-      ? "text-emerald-600 dark:text-emerald-400"
+      ? "text-success"
       : ["failed", "server_error", "cancelled"].includes(run.status)
-        ? "text-red-600 dark:text-red-400"
-        : "text-blue-600 dark:text-blue-400";
+        ? "text-danger"
+        : "text-info";
 
   return (
     <div className="rounded-2xl border border-border/50 bg-card p-4">
@@ -87,7 +87,7 @@ export function BackupRunCard({ runId, initial }: Props): React.JSX.Element {
       </div>
 
       {run.errorMessage && (
-        <p className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+        <p className="mt-3 rounded-lg bg-danger-bg px-3 py-2 text-xs text-danger">
           {run.errorMessage}
         </p>
       )}

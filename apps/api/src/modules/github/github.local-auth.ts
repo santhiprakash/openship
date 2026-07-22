@@ -330,7 +330,18 @@ const activeFlows = new Map<string, DeviceFlowState>();
  *
  * Requires `GITHUB_CLIENT_ID` in env. No-op in cloud modes.
  */
-export async function startDeviceFlow(userId: string): Promise<Verification> {
+/**
+ * Core GitHub OAuth device-flow engine. Keyed by an arbitrary `flowKey` so it
+ * serves both the API-host gh-cli login (`flowKey = userId`) and per-server
+ * logins (`flowKey = "server:<id>"`). On completion it invokes `onComplete`
+ * with the token — the ONLY difference between the two callers (gh-cli caches
+ * it locally; a server login stores it encrypted per-server). One engine, no
+ * duplicated octokit wiring.
+ */
+async function runDeviceFlow(
+  flowKey: string,
+  onComplete: (token: string) => Promise<void> | void,
+): Promise<Verification> {
   // HARD multi-tenant floor (see getLocalGhToken) — device flow logs the
   // SaaS host's gh CLI in, which must never happen.
   if (env.CLOUD_MODE) {
@@ -347,8 +358,8 @@ export async function startDeviceFlow(userId: string): Promise<Verification> {
     throw new Error("GITHUB_CLIENT_ID is required for the device flow");
   }
 
-  // Cancel any existing flow for this user
-  activeFlows.delete(userId);
+  // Cancel any existing flow for this key
+  activeFlows.delete(flowKey);
 
   const state: DeviceFlowState = {
     status: "pending",
@@ -356,7 +367,7 @@ export async function startDeviceFlow(userId: string): Promise<Verification> {
     token: null,
     error: null,
   };
-  activeFlows.set(userId, state);
+  activeFlows.set(flowKey, state);
 
   return new Promise<Verification>((resolveVerification, rejectVerification) => {
     const auth = createOAuthDeviceAuth({
@@ -375,9 +386,7 @@ export async function startDeviceFlow(userId: string): Promise<Verification> {
       .then(async (result) => {
         state.status = "complete";
         state.token = result.token;
-        // Cache the token so getLocalGhToken() picks it up
-        const store = await cacheStore<string>("gh-cli-token");
-        await store.set(GH_CLI_TOKEN_KEY, result.token, 8 * 60 * 60);
+        await onComplete(result.token);
       })
       .catch((err: Error) => {
         state.status = "error";
@@ -388,6 +397,31 @@ export async function startDeviceFlow(userId: string): Promise<Verification> {
         }
       });
   });
+}
+
+/**
+ * Start a GitHub OAuth device flow for the API-host operator. The resulting
+ * token is cached into the gh-cli token store so `getLocalGhToken()` picks it
+ * up. Requires `GITHUB_CLIENT_ID`. No-op in cloud modes.
+ */
+export async function startDeviceFlow(userId: string): Promise<Verification> {
+  return runDeviceFlow(userId, async (token) => {
+    const store = await cacheStore<string>("gh-cli-token");
+    await store.set(GH_CLI_TOKEN_KEY, token, 8 * 60 * 60);
+  });
+}
+
+/**
+ * Start a device flow for a specific SERVER. Same engine as the operator flow,
+ * but the completed token is handed to `onComplete` (which stores it encrypted
+ * per-server) instead of the gh-cli cache. Poll via `getDeviceFlowStatus` and
+ * cancel via `cancelDeviceFlow` using the same `flowKey`.
+ */
+export async function startServerDeviceFlow(
+  flowKey: string,
+  onComplete: (token: string) => Promise<void> | void,
+): Promise<Verification> {
+  return runDeviceFlow(flowKey, onComplete);
 }
 
 /**

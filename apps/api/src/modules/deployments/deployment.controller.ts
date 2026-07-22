@@ -228,6 +228,23 @@ export async function keep(c: Context) {
   }
 }
 
+export async function skipPortCheck(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  await permission.assert(getRequestContext(c), { resourceType: "deployment", resourceId: id, action: "write" });
+  const body = await c.req.json<{ target?: number | string }>().catch(() => ({}) as { target?: number | string });
+  if (body.target === undefined) {
+    return c.json({ success: false, error: "Missing 'target' (port or service id)" }, 400);
+  }
+  try {
+    const result = await deploymentService.skipPortCheck(id, ctx.organizationId, body.target);
+    return c.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to skip port check";
+    return c.json({ success: false, error: message }, 400);
+  }
+}
+
 export async function cancel(c: Context) {
   const ctx = getRequestContext(c);
   const id = param(c, "id");

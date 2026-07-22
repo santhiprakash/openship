@@ -11,7 +11,7 @@
  */
 
 import { repos, type BackupDestination } from "@repo/db";
-import { resolveDestination, type DestinationKind } from "@repo/adapters";
+import { type DestinationKind, type BackupDestinationRow } from "@repo/adapters";
 import crypto from "node:crypto";
 import path from "node:path";
 import { realpath } from "node:fs/promises";
@@ -19,8 +19,10 @@ import { encryptSecretField } from "../../lib/credential-encryption";
 import { assertResourceInOrg } from "../../lib/controller-helpers";
 import type { RequestContext } from "../../lib/request-context";
 import { env } from "../../config/env";
-import { toAdapterRow } from "./hydrate-server";
-import { safeErrorMessage } from "@repo/core";
+import { toAdapterRow, hydrateServerAdapterRow } from "./hydrate-server";
+import { safeErrorMessage, type ConnectivityCode } from "@repo/core";
+import { runConnectivityCheck } from "../../lib/connectivity";
+import "../../lib/connectivity-checks"; // registers the backup-destination check
 
 /**
  * Resolve + sandbox a local destination endpoint. Refuses any path
@@ -162,9 +164,15 @@ export interface SerializedDestination {
   isDefault: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Storage rollup (bytes stored, backup count, last run). Populated by the
+   *  list endpoint; null on single-destination fetches. */
+  stats: { storedBytes: number; runCount: number; lastRunAt: string | null } | null;
 }
 
-export function serializeDestination(row: BackupDestination): SerializedDestination {
+export function serializeDestination(
+  row: BackupDestination,
+  stats: SerializedDestination["stats"] = null,
+): SerializedDestination {
   return {
     id: row.id,
     name: row.name,
@@ -187,14 +195,25 @@ export function serializeDestination(row: BackupDestination): SerializedDestinat
     isDefault: row.isDefault,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    stats,
   };
 }
 
 // ─── CRUD ────────────────────────────────────────────────────────────────────
 
 export async function listDestinations(ctx: RequestContext): Promise<SerializedDestination[]> {
-  const rows = await repos.backupDestination.listByOrganization(ctx.organizationId);
-  return rows.map(serializeDestination);
+  const [rows, stats] = await Promise.all([
+    repos.backupDestination.listByOrganization(ctx.organizationId),
+    repos.backupRun.statsByDestination(ctx.organizationId),
+  ]);
+  const statsById = new Map(stats.filter((s) => s.destinationId).map((s) => [s.destinationId!, s]));
+  return rows.map((row) => {
+    const s = statsById.get(row.id);
+    return serializeDestination(
+      row,
+      s ? { storedBytes: s.storedBytes, runCount: s.runCount, lastRunAt: s.lastRunAt?.toISOString() ?? null } : null,
+    );
+  });
 }
 
 export async function getDestination(
@@ -204,6 +223,90 @@ export async function getDestination(
   const row = await repos.backupDestination.findById(id);
   assertResourceInOrg(row, "Destination", ctx.organizationId, id);
   return serializeDestination(row);
+}
+
+/** One policy that targets a destination, resolved for the detail page's
+ *  "used by" view. */
+export interface DestinationUsagePolicy {
+  policyId: string;
+  sourceKind: string;
+  projectId: string | null;
+  projectName: string | null;
+  projectSlug: string | null;
+  serviceId: string | null;
+  serviceName: string | null;
+  mailServerId: string | null;
+  payloadKind: string;
+  cronExpression: string | null;
+  enabled: boolean;
+  lastRun:
+    | { id: string; status: string; startedAt: string; finishedAt: string | null; bytesTransferred: number | null }
+    | null;
+}
+
+export interface DestinationUsage {
+  destination: SerializedDestination;
+  policies: DestinationUsagePolicy[];
+}
+
+/**
+ * A destination plus everything that backs up to it: its storage rollup and the
+ * policies (project/service or mail-server) targeting it, each with its last
+ * run. Powers the destination detail page — the "what owns this" view.
+ */
+export async function getDestinationUsage(ctx: RequestContext, id: string): Promise<DestinationUsage> {
+  const row = await repos.backupDestination.findById(id);
+  assertResourceInOrg(row, "Destination", ctx.organizationId, id);
+
+  const [stats, policies] = await Promise.all([
+    repos.backupRun.statsByDestination(ctx.organizationId),
+    repos.backupPolicy.listByDestination(id),
+  ]);
+  const st = stats.find((s) => s.destinationId === id) ?? null;
+  const destination = serializeDestination(
+    row,
+    st ? { storedBytes: st.storedBytes, runCount: st.runCount, lastRunAt: st.lastRunAt?.toISOString() ?? null } : null,
+  );
+
+  const projectCache = new Map<string, Awaited<ReturnType<typeof repos.project.findById>>>();
+  const serviceCache = new Map<string, Awaited<ReturnType<typeof repos.service.findById>>>();
+  const out: DestinationUsagePolicy[] = [];
+  for (const p of policies) {
+    let project: Awaited<ReturnType<typeof repos.project.findById>> = undefined;
+    if (p.projectId) {
+      if (!projectCache.has(p.projectId)) projectCache.set(p.projectId, await repos.project.findById(p.projectId));
+      project = projectCache.get(p.projectId);
+    }
+    let service: Awaited<ReturnType<typeof repos.service.findById>> = undefined;
+    if (p.serviceId) {
+      if (!serviceCache.has(p.serviceId)) serviceCache.set(p.serviceId, await repos.service.findById(p.serviceId));
+      service = serviceCache.get(p.serviceId);
+    }
+    const lastRun = await repos.backupRun.latestByPolicy(p.id);
+    out.push({
+      policyId: p.id,
+      sourceKind: p.sourceKind,
+      projectId: p.projectId,
+      projectName: project?.name ?? null,
+      projectSlug: project?.slug ?? null,
+      serviceId: p.serviceId,
+      serviceName: service?.name ?? null,
+      mailServerId: p.mailServerId,
+      payloadKind: p.payloadKind,
+      cronExpression: p.cronExpression,
+      enabled: p.enabled,
+      lastRun: lastRun
+        ? {
+            id: lastRun.id,
+            status: lastRun.status,
+            startedAt: lastRun.startedAt.toISOString(),
+            finishedAt: lastRun.finishedAt?.toISOString() ?? null,
+            bytesTransferred: lastRun.bytesTransferred,
+          }
+        : null,
+    });
+  }
+  return { destination, policies: out };
 }
 
 export async function createDestination(
@@ -338,24 +441,93 @@ export async function deleteDestination(ctx: RequestContext, id: string): Promis
 export async function preflightDestination(
   ctx: RequestContext,
   id: string,
-): Promise<{ ok: boolean; reason?: string }> {
+): Promise<{ ok: boolean; reason?: string; code?: ConnectivityCode }> {
   const row = await repos.backupDestination.findById(id);
   assertResourceInOrg(row, "Destination", ctx.organizationId, id);
 
   try {
     const adapterRow = await toAdapterRow(row);
-    const destination = resolveDestination(adapterRow);
-    const result = await destination.preflight();
-    if (result.ok) {
-      await repos.backupDestination.setLastVerified(id, true);
-      return { ok: true };
-    }
-    await repos.backupDestination.setLastVerified(id, false, result.reason);
-    return { ok: false, reason: result.reason };
+    const result = await runConnectivityCheck("backup-destination", adapterRow);
+    await repos.backupDestination.setLastVerified(
+      id,
+      result.ok,
+      result.ok ? undefined : result.message,
+    );
+    return result.ok
+      ? { ok: true, code: result.code }
+      : { ok: false, reason: result.message, code: result.code };
   } catch (err) {
     const reason = safeErrorMessage(err);
     await repos.backupDestination.setLastVerified(id, false, reason);
     return { ok: false, reason };
+  }
+}
+
+/**
+ * Preflight an UNSAVED destination — the "Test connection" button in the create/
+ * edit modal. Builds an ephemeral adapter row from the submitted input (nothing
+ * is persisted) and runs the same probe as {@link preflightDestination}. When
+ * editing (`existingId` set), secret fields left blank fall back to the stored
+ * ciphertext so a user can test without re-typing credentials.
+ */
+export async function preflightDraft(
+  ctx: RequestContext,
+  input: CreateDestinationInput,
+  existingId?: string,
+): Promise<{ ok: boolean; reason?: string; code?: ConnectivityCode }> {
+  let stored: BackupDestination | null = null;
+  if (existingId) {
+    stored = (await repos.backupDestination.findById(existingId)) ?? null;
+    assertResourceInOrg(stored, "Destination", ctx.organizationId, existingId);
+  }
+
+  // Non-secret: prefer the submitted value, else the stored one. Blank ("") is
+  // treated as "not provided" so it never blanks a stored field mid-test.
+  const val = (v: string | null | undefined, kept: string | null): string | null =>
+    v != null && v !== "" ? v : kept;
+  // Secret: a typed value is encrypted now; blank keeps the stored ciphertext.
+  const enc = (v: string | null | undefined, kept: string | null): string | null =>
+    v ? encryptSecretField(v) : kept;
+
+  let adapterRow: BackupDestinationRow;
+  try {
+    if (input.kind === "openship_server") {
+      const serverId = input.serverId ?? stored?.serverId ?? null;
+      if (!serverId) return { ok: false, reason: "Select a server to test" };
+      adapterRow = await hydrateServerAdapterRow({
+        id: existingId ?? "bkd_draft",
+        organizationId: ctx.organizationId,
+        name: input.name || "draft",
+        pathPrefix: val(input.pathPrefix, stored?.pathPrefix ?? null),
+        serverId,
+      });
+    } else {
+      adapterRow = {
+        id: existingId ?? "bkd_draft",
+        organizationId: ctx.organizationId,
+        name: input.name || "draft",
+        kind: input.kind,
+        endpoint: val(input.endpoint, stored?.endpoint ?? null),
+        region: val(input.region, stored?.region ?? null),
+        bucket: val(input.bucket, stored?.bucket ?? null),
+        pathPrefix: val(input.pathPrefix, stored?.pathPrefix ?? null),
+        sshHost: val(input.sshHost, stored?.sshHost ?? null),
+        sshPort: input.sshPort ?? stored?.sshPort ?? null,
+        sshUser: val(input.sshUser, stored?.sshUser ?? null),
+        serverId: null,
+        accessKeyIdEnc: enc(input.accessKeyId, stored?.accessKeyIdEnc ?? null),
+        secretAccessKeyEnc: enc(input.secretAccessKey, stored?.secretAccessKeyEnc ?? null),
+        sftpPasswordEnc: enc(input.sftpPassword, stored?.sftpPasswordEnc ?? null),
+        sftpPrivateKeyEnc: enc(input.sftpPrivateKey, stored?.sftpPrivateKeyEnc ?? null),
+        sftpKeyPassphraseEnc: enc(input.sftpKeyPassphrase, stored?.sftpKeyPassphraseEnc ?? null),
+      };
+    }
+    const result = await runConnectivityCheck("backup-destination", adapterRow);
+    return result.ok
+      ? { ok: true, code: result.code }
+      : { ok: false, reason: result.message, code: result.code };
+  } catch (err) {
+    return { ok: false, reason: safeErrorMessage(err) };
   }
 }
 

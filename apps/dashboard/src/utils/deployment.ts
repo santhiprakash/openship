@@ -33,49 +33,49 @@ export const getStatusConfig = (status: string) => {
     case "success":
       return {
         icon: 'checkmark-72-1658234612.png',
-        color: "var(--color-emerald-500)",
-        bgColor: "bg-emerald-50",
-        borderColor: "border-emerald-200",
+        color: "var(--color-success)",
+        bgColor: "bg-success-bg",
+        borderColor: "border-success-border",
         label: "Deployed",
       };
     case "failed":
       return {
         icon: 'close remove-802-1662363936.png',
-        color: "var(--color-red-500)",
-        bgColor: "bg-red-50",
-        borderColor: "border-red-200",
+        color: "var(--color-danger)",
+        bgColor: "bg-danger-bg",
+        borderColor: "border-danger-border",
         label: "Failed",
       };
     case "canceled":
       return {
         icon: 'close%20circle-73-1658234612.png',
-        color: "var(--color-gray-600)",
-        bgColor: "bg-gray-50",
-        borderColor: "border-gray-200",
+        color: "var(--color-neutral)",
+        bgColor: "bg-neutral-bg",
+        borderColor: "border-neutral-border",
         label: "Canceled",
       };
     case "building":
       return {
         icon: 'loading-51-1663582768.png',
-        color: "var(--color-blue-600)",
-        bgColor: "bg-blue-50",
-        borderColor: "border-blue-200",
+        color: "var(--color-info)",
+        bgColor: "bg-info-bg",
+        borderColor: "border-info-border",
         label: "Building",
       };
     case "reconciling":
       return {
         icon: 'loading-51-1663582768.png',
-        color: "var(--color-amber-600)",
-        bgColor: "bg-amber-50",
-        borderColor: "border-amber-200",
+        color: "var(--color-warning)",
+        bgColor: "bg-warning-bg",
+        borderColor: "border-warning-border",
         label: "Verifying",
       };
     default:
       return {
         icon: 'circle%20clock-39-1658435834.png',
-        color: "var(--color-gray-600)",
-        bgColor: "bg-gray-50",
-        borderColor: "border-gray-200",
+        color: "var(--color-neutral)",
+        bgColor: "bg-neutral-bg",
+        borderColor: "border-neutral-border",
         label: "Pending",
       };
   }

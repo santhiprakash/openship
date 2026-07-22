@@ -11,6 +11,7 @@ import {
   type ProjectFilter,
 } from "./components/ProjectFilters";
 import EmptyState from "@/components/overview/EmptyState";
+import { ProjectIllustration } from "@/components/overview/ProjectIllustration";
 import { projectsApi } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { useI18n, interpolate } from "@/components/i18n-provider";
@@ -58,6 +59,8 @@ export default function ProjectsPage() {
   const hasServers = projects.some((p) => p.deployTarget === "server");
 
   const filteredProjects = projects.filter((p) => {
+    // Apps (catalog-installed: Convex, webmail, …) live under the Apps tab.
+    if (p.isApp) return false;
     if (!projectMatchesFilter(p, filter)) return false;
     const q = searchQuery.toLowerCase();
     return (
@@ -137,12 +140,25 @@ export default function ProjectsPage() {
                     ))}
                   </div>
                 ) : (
-                  <div className="bg-card rounded-2xl border border-border/50 py-16 text-center">
-                    <p className="text-sm text-muted-foreground">
-                      {searchQuery
-                        ? t.dashboard.pages.projects.noResultsFound.replace("{query}", searchQuery)
-                        : t.projects.list.noTargetProjects}
-                    </p>
+                  <div className="flex min-h-[380px] flex-col items-center justify-center px-6 py-12 text-center">
+                    <ProjectIllustration className="relative mx-auto mb-6 h-40 w-56" />
+                    {searchQuery ? (
+                      <p className="mx-auto max-w-sm text-sm text-muted-foreground/70">
+                        {t.dashboard.pages.projects.noResultsFound.replace("{query}", searchQuery)}
+                      </p>
+                    ) : (
+                      <>
+                        <h3 className="mb-2 text-xl font-medium text-foreground/80" style={{ letterSpacing: "-0.2px" }}>
+                          {t.projects.list.noTargetProjects}
+                        </h3>
+                        {/* No CTA button here — the page header already owns the
+                            primary "Create Project" action, and the right card
+                            owns "Connect a server". This copy just points to both. */}
+                        <p className="mx-auto max-w-sm text-sm leading-relaxed text-muted-foreground/70">
+                          {t.projects.list.noTargetDesc}
+                        </p>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -155,8 +171,8 @@ export default function ProjectsPage() {
                 )}
                 {!hasServers && (
                   <div className="bg-card rounded-2xl border border-border/50 p-5">
-                    <div className="w-9 h-9 bg-blue-500/10 rounded-xl flex items-center justify-center mb-3">
-                      <Server className="size-[18px] text-blue-500" />
+                    <div className="w-9 h-9 bg-info-bg rounded-xl flex items-center justify-center mb-3">
+                      <Server className="size-[18px] text-info" />
                     </div>
                     <h3 className="font-semibold text-foreground text-sm mb-1">
                       {t.projects.serverCta.title}

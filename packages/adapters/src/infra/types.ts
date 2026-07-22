@@ -13,7 +13,7 @@
  *   - NoopInfra        → No-op (desktop/dev)
  */
 
-import type { RouteConfig, SslResult } from "../types";
+import type { ManualCert, RouteConfig, SslResult } from "../types";
 
 // ─── Routing ─────────────────────────────────────────────────────────────────
 
@@ -33,6 +33,15 @@ export interface SslProvider {
 
   /** Renew an existing TLS certificate */
   renewCert(domain: string): Promise<SslResult>;
+
+  /**
+   * Install an operator-supplied certificate (bring-your-own / Cloudflare
+   * Origin CA) for a domain — no ACME. Writes the cert + key to the same
+   * on-disk location certbot would use, then re-registers the vhost with TLS.
+   * Powers origin TLS behind an upstream proxy (Cloudflare Full-strict) and
+   * plain BYO certs on direct domains.
+   */
+  installCert(domain: string, cert: ManualCert): Promise<SslResult>;
 
   /**
    * Read-only verification: report whether a valid cert is currently present

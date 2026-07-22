@@ -39,6 +39,7 @@ r.patch("/clone-credentials", { tag: "settings:write" }, ctrl.updateCloneCredent
 
 /** PATCH /clone-strategy-preference - save the first-time deploy nudge choice */
 r.patch("/clone-strategy-preference", { tag: "settings:write", mcp: { description: "Set the default clone strategy (api-host / server)." } }, ctrl.updateCloneStrategyPreference);
+r.patch("/transfer", { tag: "settings:write", mcp: { description: "Set the default volume-transfer mode (auto/stream/direct/rsync) and compression (auto/zstd/gzip/none) for migrations." } }, ctrl.updateTransferPrefs);
 
 export const settingsRoutes = r.hono;
 

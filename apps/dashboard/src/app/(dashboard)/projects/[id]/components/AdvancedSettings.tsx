@@ -26,8 +26,8 @@ interface Props {
 
 const ICON_TONES = {
   primary: "bg-primary/10 text-primary",
-  amber: "bg-amber-500/10 text-amber-500",
-  red: "bg-red-500/10 text-red-500",
+  amber: "bg-warning-bg text-warning",
+  red: "bg-danger-bg text-danger",
 } as const;
 
 // Cache and Transfer & Clone are mock UI — not wired to real actions yet.
@@ -148,11 +148,11 @@ export const AdvancedSettings = ({ onDeleteProject }: Props) => {
       >
           <div className="flex items-center justify-between rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
             <div className="flex items-center gap-3">
-              <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${isProjectActive ? "bg-emerald-500/10" : "bg-amber-500/10"}`}>
+              <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${isProjectActive ? "bg-success-bg" : "bg-warning-bg"}`}>
                 {isProjectActive ? (
-                  <Pause className="size-4 text-emerald-500" />
+                  <Pause className="size-4 text-success" />
                 ) : (
-                  <Play className="size-4 text-amber-500" />
+                  <Play className="size-4 text-warning" />
                 )}
               </div>
               <div>
@@ -169,7 +169,7 @@ export const AdvancedSettings = ({ onDeleteProject }: Props) => {
               disabled={loading.disableProject}
               className={`inline-flex h-9 items-center gap-1.5 rounded-xl px-4 text-[13px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 isProjectActive
-                  ? "bg-amber-500/10 text-amber-600 hover:bg-amber-500/20"
+                  ? "bg-warning-bg text-warning hover:bg-warning-solid/20"
                   : "bg-primary/10 text-primary hover:bg-primary/20"
               }`}
             >
@@ -242,13 +242,13 @@ export const AdvancedSettings = ({ onDeleteProject }: Props) => {
         )}
 
         {/* Danger Zone */}
-        <div className="overflow-hidden rounded-2xl border border-red-500/20 bg-card">
-          <div className="flex items-start gap-3 border-b border-red-500/15 px-5 py-4">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-500/10">
-              <AlertTriangle className="size-4 text-red-500" />
+        <div className="overflow-hidden rounded-2xl border border-danger-border bg-card">
+          <div className="flex items-start gap-3 border-b border-danger-border px-5 py-4">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-danger-bg">
+              <AlertTriangle className="size-4 text-danger" />
             </div>
             <div className="min-w-0 flex-1">
-              <h3 className="text-[14px] font-semibold text-red-600 dark:text-red-400">{t.projectSettings.advanced.danger.title}</h3>
+              <h3 className="text-[14px] font-semibold text-danger">{t.projectSettings.advanced.danger.title}</h3>
               <p className="mt-0.5 text-[12px] text-muted-foreground">{t.projectSettings.advanced.danger.description}</p>
             </div>
           </div>
@@ -258,7 +258,7 @@ export const AdvancedSettings = ({ onDeleteProject }: Props) => {
             </p>
             <button
               onClick={() => setShowDeleteModal(true)}
-              className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl bg-red-600 px-4 text-[13px] font-medium text-white transition-colors hover:bg-red-700"
+              className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl bg-danger-solid px-4 text-[13px] font-medium text-white transition-colors hover:bg-danger-solid/90"
             >
               <Trash2 className="size-3.5" />
               {t.projectSettings.advanced.danger.delete}
@@ -329,7 +329,7 @@ function TransferOptions({
             )}
           </div>
           <span className="inline-flex items-center gap-1 shrink-0 text-[12px] text-muted-foreground">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            <span className="h-1.5 w-1.5 rounded-full bg-success-solid" />
             {t.projectSettings.advanced.transfer.current}
           </span>
         </div>

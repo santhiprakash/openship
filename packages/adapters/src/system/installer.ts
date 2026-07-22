@@ -10,6 +10,7 @@ import type { CommandExecutor, LogEntry } from "../types";
 import type { InstallerConfig, InstallResult, SystemLogCallback, SystemLog } from "./types";
 import { systemCatalog } from "./catalog";
 import { resolveEnvironment, type EnvironmentProfile } from "./environment";
+import { elevatedExecutor } from "./elevated-executor";
 import { safeErrorMessage } from "@repo/core";
 import {
   deployLuaScripts,
@@ -19,6 +20,17 @@ import {
   OPENRESTY_DEFAULT_PATHS,
   type OpenRestyPaths,
 } from "../infra/openresty-lua";
+import {
+  EdgeConflictError,
+  EdgeMigrateRequested,
+  freeEdgeTargets,
+  isOpenshipManagedEdge,
+  probeEdge,
+  stopTargetsForStatus,
+} from "./edge-preflight";
+import { probeListeningPort } from "../runtime/port-conflict";
+import { canImportProxy, scanImportableSites } from "./proxy-import";
+import type { ProxyScanResult } from "./types";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -55,6 +67,35 @@ async function ensureAptReady(
   await executor.streamExec("dpkg --configure -a 2>&1", onLog as (log: LogEntry) => void);
 }
 
+type ExecutorPrep =
+  | { ok: true; executor: CommandExecutor; profile: EnvironmentProfile }
+  | { ok: false; result: InstallResult };
+
+/**
+ * Resolve the environment and pick the executor to run privileged install/remove
+ * commands through. Root → the executor as-is. Non-root with passwordless sudo →
+ * an {@link elevatedExecutor} that prefixes every command with `sudo -n`. Neither
+ * → fail fast with an actionable message (component installs run apt/systemctl/
+ * writes under /etc, which need root — running them unelevated is the #84 apt-lock
+ * failure). Call this BEFORE touching the box (e.g. before stopping OpenResty).
+ */
+async function prepareExecutor(
+  executor: CommandExecutor,
+  component: string,
+): Promise<ExecutorPrep> {
+  const profile = await resolveEnvironment(executor);
+  if (profile.isRoot) return { ok: true, executor, profile };
+  if (profile.canSudo) return { ok: true, executor: elevatedExecutor(executor), profile };
+  return {
+    ok: false,
+    result: {
+      component,
+      success: false,
+      error: `Installing ${component} needs root. Connect this server as root, or as a user with passwordless sudo.`,
+    },
+  };
+}
+
 /** Build the package-manager remove command. */
 function buildRemoveCommand(pm: EnvironmentProfile["packageManager"], packages: string[]): string | null {
   const names = packages.join(" ");
@@ -74,7 +115,10 @@ export async function installDocker(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  const prep = await prepareExecutor(executor, "docker");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
   const plan = systemCatalog.installs.docker(profile);
   if (!plan.supported || !plan.installCommand || !plan.verifyCommand) {
     return { component: "docker", success: false, error: plan.unsupportedReason ?? "Docker install not supported" };
@@ -108,7 +152,10 @@ export async function installGit(
   onLog: SystemLogCallback,
   opts?: { label?: string },
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  const prep = await prepareExecutor(executor, "git");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
   const plan = systemCatalog.installs.git(profile);
   if (!plan.supported || !plan.installCommand || !plan.verifyCommand) {
     return { component: "git", success: false, error: plan.unsupportedReason ?? "Git install not supported" };
@@ -136,7 +183,10 @@ export async function installRsync(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  const prep = await prepareExecutor(executor, "rsync");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
   const plan = systemCatalog.installs.rsync(profile);
   if (!plan.supported || !plan.installCommand || !plan.verifyCommand) {
     return { component: "rsync", success: false, error: plan.unsupportedReason ?? "rsync install not supported" };
@@ -164,7 +214,10 @@ export async function installCertbot(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  const prep = await prepareExecutor(executor, "certbot");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
   const plan = systemCatalog.installs.certbot(profile);
   if (!plan.supported || !plan.installCommand || !plan.verifyCommand) {
     return { component: "certbot", success: false, error: plan.unsupportedReason ?? "Certbot install not supported" };
@@ -188,11 +241,101 @@ export async function installCertbot(
 
 // ─── OpenResty ───────────────────────────────────────────────────────────────
 
+/**
+ * Make ports 80/443 ours to bind — without ever blind-killing a foreign proxy.
+ *
+ * Resolution order:
+ *   1. free / ours              → proceed.
+ *   2. pre-accepted edgePolicy  → stop the identified targets (no prompt).
+ *   3. interactive promptUser   → HOLD and ask (same mechanism as the deploy
+ *      "a service is already running" prompt): "override" stops it and takes
+ *      over; "cancel" aborts. ("migrate" is signalled to the caller.)
+ *   4. neither                  → throw EdgeConflictError (never guess).
+ */
+async function ensureEdgeClear(
+  executor: CommandExecutor,
+  config: InstallerConfig | undefined,
+  onLog: SystemLogCallback,
+): Promise<{ tookOver: boolean }> {
+  const status = await probeEdge(executor);
+  if (status.canProceedClean) return { tookOver: false };
+
+  const takeover = async () => {
+    onLog(log(
+      `Taking over ports from ${status.occupants.map((o) => o.command ?? o.port).join(", ")}...`,
+      "warn",
+    ));
+    const configured = config?.edgePolicy?.stopTargets ?? [];
+    const targets = configured.length ? configured : stopTargetsForStatus(status);
+    await freeEdgeTargets(executor, targets, (m, l) => onLog(log(m, l)));
+  };
+
+  if (config?.edgePolicy?.mode === "takeover") {
+    await takeover();
+    return { tookOver: true };
+  }
+
+  if (config?.promptUser) {
+    const known = status.classification === "known";
+    const owner = status.occupants.map((o) => o.command ?? `port ${o.port}`).join(", ");
+
+    // For a known, importable proxy, scan its sites so we can offer migration.
+    const proxy = status.occupants.find((o) => o.proxy)?.proxy;
+    let scan: ProxyScanResult | undefined;
+    if (known && canImportProxy(proxy)) {
+      scan = await scanImportableSites(executor, proxy!);
+    }
+    const migratable = scan && scan.sites.length > 0;
+
+    const message = migratable
+      ? `Openship needs ports 80 and 443, but ${owner} is already serving them ` +
+        `(${scan!.sites.length} site${scan!.sites.length === 1 ? "" : "s"}). Migrate those sites ` +
+        `into Openship and take over, just stop it and take over, or cancel?`
+      : known
+        ? `Openship needs ports 80 and 443, but ${owner} is already serving them. ` +
+          `Stop it and take over, or cancel and leave it running?`
+        : `Openship needs ports 80 and 443, but ${owner} is already using them and ` +
+          `we can't identify it. Stop it and take over, or cancel and leave it running?`;
+
+    const action = await config.promptUser({
+      promptId: "edge_conflict",
+      title: known ? "Existing reverse proxy detected" : "Ports 80/443 are in use",
+      message,
+      actions: [
+        ...(migratable
+          ? [{ id: "migrate", label: `Migrate ${scan!.sites.length} site(s) & take over`, variant: "primary" }]
+          : []),
+        { id: "override", label: "Stop it & take over", variant: "danger" },
+        { id: "cancel", label: "Cancel", variant: "secondary" },
+      ],
+      details: { edge: status, sites: scan?.sites ?? [], warnings: scan?.warnings ?? [] },
+    });
+
+    if (action === "migrate" && scan) {
+      throw new EdgeMigrateRequested(status, scan.sites, scan.warnings);
+    }
+    if (action === "override") {
+      await takeover();
+      return { tookOver: true };
+    }
+    // "cancel" (or anything unexpected) → leave the box untouched.
+    throw new EdgeConflictError(status);
+  }
+
+  throw new EdgeConflictError(status);
+}
+
 export async function installOpenResty(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
+  config?: InstallerConfig,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  // Gate on privilege BEFORE touching the box, so a non-privileged run bails
+  // out cleanly instead of stopping a running OpenResty and then failing at apt.
+  const prep = await prepareExecutor(executor, "openresty");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
   onLog(log(describeEnvironment(profile)));
   const plan = systemCatalog.installs.openresty(profile);
   if (!plan.supported || !plan.installCommand || !plan.verifyCommand) {
@@ -201,9 +344,17 @@ export async function installOpenResty(
 
   onLog(log("Installing OpenResty..."));
   try {
-    // Stop existing if present
+    // Resolve the edge conflict FIRST — before touching any process — so we
+    // never kill a foreign proxy (even a foreign OpenResty) without consent.
+    // May stop the foreign owner (takeover), throw EdgeMigrateRequested
+    // (migrate → caller runs the takeover orchestration), or throw
+    // EdgeConflictError (no consent).
+    const { tookOver } = await ensureEdgeClear(executor, config, onLog);
+
+    // Stop an existing OpenResty only if it's OURS (reinstall/upgrade). A
+    // foreign OpenResty was already handled by the consent gate above.
     const hasIt = await executor.exec("command -v openresty >/dev/null 2>&1 && echo y || echo n").then((r) => r.trim() === "y");
-    if (hasIt) {
+    if (hasIt && (await isOpenshipManagedEdge(executor))) {
       onLog(log("Stopping existing OpenResty..."));
       await execSafe(executor, "systemctl stop openresty 2>/dev/null || true");
       await execSafe(executor, "pkill -f '[o]penresty' 2>/dev/null || true");
@@ -235,19 +386,26 @@ export async function installOpenResty(
     // Start service
     if (plan.startCommand) {
       onLog(log("Starting OpenResty..."));
-      const start = await executor.streamExec(plan.startCommand, onLog as (log: LogEntry) => void);
-      if (start.code !== 0) {
-        onLog(log("Start failed - clearing port 80...", "warn"));
-        await execSafe(executor, "fuser -k 80/tcp 2>/dev/null || true");
+      let start = await executor.streamExec(plan.startCommand, onLog as (log: LogEntry) => void);
+
+      // If it failed and a takeover was authorized (policy or prompt), reclaim
+      // the identified ports and retry once.
+      if (start.code !== 0 && tookOver) {
+        onLog(log("Start failed - reclaiming authorized ports...", "warn"));
+        const targets = config?.edgePolicy?.stopTargets?.length
+          ? config.edgePolicy.stopTargets
+          : stopTargetsForStatus(await probeEdge(executor));
+        await freeEdgeTargets(executor, targets, (m, l) => onLog(log(m, l)));
         await execSafe(executor, "systemctl reset-failed openresty 2>/dev/null || true");
-        const retry = await executor.streamExec(plan.startCommand, onLog as (log: LogEntry) => void);
-        if (retry.code !== 0) {
-          const journal = await executor.exec(
-            "journalctl -xeu openresty.service --no-pager -n 30 2>/dev/null || echo '(unavailable)'",
-          ).catch(() => "(could not read journal)");
-          onLog(log(`Service journal:\n${journal}`, "error"));
-          return { component: "openresty", success: false, error: "OpenResty installed but failed to start" };
-        }
+        start = await executor.streamExec(plan.startCommand, onLog as (log: LogEntry) => void);
+      }
+
+      if (start.code !== 0) {
+        const journal = await executor.exec(
+          "journalctl -xeu openresty.service --no-pager -n 30 2>/dev/null || echo '(unavailable)'",
+        ).catch(() => "(could not read journal)");
+        onLog(log(`Service journal:\n${journal}`, "error"));
+        return { component: "openresty", success: false, error: "OpenResty installed but failed to start" };
       }
     }
 
@@ -261,6 +419,9 @@ export async function installOpenResty(
     onLog(log(`OpenResty ${parsed} installed`));
     return { component: "openresty", success: true, version: parsed };
   } catch (err) {
+    // The migrate signal must reach the caller (which runs the takeover
+    // orchestration) — don't swallow it into a failed InstallResult.
+    if (err instanceof EdgeMigrateRequested) throw err;
     const msg = safeErrorMessage(err);
     onLog(log(`OpenResty installation failed: ${msg}`, "error"));
     return { component: "openresty", success: false, error: msg };
@@ -273,8 +434,10 @@ export async function uninstallRsync(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
-  const cmd = buildRemoveCommand(profile.packageManager, ["rsync"]);
+  const prep = await prepareExecutor(executor, "rsync");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const cmd = buildRemoveCommand(prep.profile.packageManager, ["rsync"]);
   if (!cmd) return { component: "rsync", success: false, error: "rsync removal not supported" };
 
   onLog(log("Removing rsync..."));
@@ -293,8 +456,10 @@ export async function uninstallCertbot(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
-  const cmd = buildRemoveCommand(profile.packageManager, ["certbot"]);
+  const prep = await prepareExecutor(executor, "certbot");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const cmd = buildRemoveCommand(prep.profile.packageManager, ["certbot"]);
   if (!cmd) return { component: "certbot", success: false, error: "Certbot removal not supported" };
 
   onLog(log("Removing certbot..."));
@@ -313,14 +478,30 @@ export async function uninstallOpenResty(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  const prep = await prepareExecutor(executor, "openresty");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
 
   try {
     // 1. Stop
     onLog(log("Stopping OpenResty..."));
     await execSafe(executor, "systemctl stop openresty 2>/dev/null || true");
     await execSafe(executor, "pkill -f '[o]penresty' 2>/dev/null || true");
-    await execSafe(executor, "fuser -k 80/tcp 2>/dev/null || true");
+    // Force-clear port 80 only if it's not held by a foreign proxy — we never
+    // take down someone else's service while removing our own. And free it by
+    // killing only what still LISTENS on :80 (a lingering openresty worker),
+    // never a blind `fuser -k 80/tcp` — fuser matches ANY socket on the port,
+    // so a process merely holding an outbound/established :80 connection would
+    // be killed too. probeListeningPort is LISTEN-state filtered.
+    const edge = await probeEdge(executor).catch(() => null);
+    const foreignOn80 = edge?.occupants.some((o) => o.port === 80) ?? false;
+    if (!foreignOn80) {
+      const stray = await probeListeningPort(executor, 80).catch(() => null);
+      if (stray?.pid) {
+        await execSafe(executor, `kill -9 ${stray.pid} 2>/dev/null || true`);
+      }
+    }
 
     // 2. Remove package
     const removeCmd = buildRemoveCommand(profile.packageManager, ["openresty"]);
@@ -388,7 +569,7 @@ type InstallerFn = (
 
 export const COMPONENT_INSTALLERS: Record<string, InstallerFn> = {
   docker: (exec, log) => installDocker(exec, log),
-  openresty: (exec, log) => installOpenResty(exec, log),
+  openresty: (exec, log, config) => installOpenResty(exec, log, config),
   certbot: (exec, log) => installCertbot(exec, log),
   git: (exec, log) => installGit(exec, log),
   rsync: (exec, log) => installRsync(exec, log),

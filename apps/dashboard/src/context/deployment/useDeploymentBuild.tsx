@@ -14,6 +14,7 @@ import { randomUUID } from "@/lib/random-uuid";
 import { invalidateProjectCaches } from "@/hooks/useProjectEndpoints";
 import { ApiError, getApiErrorMessage } from "@/lib/api/client";
 import { DeployCredentialModal } from "@/components/deployments/DeployCredentialModal";
+import { useServerGitHubConnectModal } from "@/components/github/ServerGitHubConnect";
 import type { DeploymentConfig, DeploymentState, DeploymentStatus, ServiceDeployStatus } from "./types";
 import { syncActiveModeSnapshot } from "./mode-config";
 import {
@@ -201,6 +202,7 @@ export function useDeploymentBuild(
   const { requireCloud } = useCloud();
   const { baseDomain, selfHosted, deployMode } = usePlatform();
   const { showModal, hideModal } = useModal();
+  const openGithubConnect = useServerGitHubConnectModal();
   const { installUrl, state: githubState } = useGitHub();
   const [state, setState] = useState<DeploymentState>(INITIAL_STATE);
 
@@ -280,6 +282,9 @@ export function useDeploymentBuild(
         // over on refresh (loadBuildSession) — false once the user keeps it.
         decisionPending: data?.decisionPending ?? !!warningMessage,
         decisionFailedServiceIds: data?.partial?.failed ?? prev.decisionFailedServiceIds,
+        // Advisory port-check rides the `complete` event; skips only ever arrive
+        // via refresh (build-status), so keep the prior skip list here.
+        portCheck: data?.portCheck ?? prev.portCheck,
         screenshots: data?.screenshots || prev.screenshots,
         projectId: data?.project_id || prev.projectId,
         phaseDurations: nextDurations,
@@ -498,13 +503,22 @@ export function useDeploymentBuild(
   const startDeployment = useCallback(async (
     overrides?: {
       runtimeMode?: DeploymentConfig["runtimeMode"];
+      // Applied to THIS deploy's payload directly, bypassing async React state
+      // — lets the clone-strategy gate flip build-local for the in-flight
+      // deploy without waiting for a re-render (updateConfig alone wouldn't be
+      // seen by this closure).
+      buildStrategy?: DeploymentConfig["buildStrategy"];
       saveConfigOnly?: boolean;
     },
   ): Promise<string | null> => {
     const saveConfigOnly = overrides?.saveConfigOnly === true;
     const isLocal = !!config.localPath;
     const isUpload = !!config.uploadSessionId;
-    if (!isLocal && !isUpload && (!config.repo || !config.owner || !config.branch)) {
+    // A one-click app is a repo-less services project — no git/local source (its
+    // prebuilt images are the source), so skip the git-completeness guard and the
+    // git fields on ensure, exactly like local/upload.
+    const isSourceless = isLocal || isUpload || !!config.isApp;
+    if (!isSourceless && (!config.repo || !config.owner || !config.branch)) {
       showToast("Repository data is incomplete", "error", "Error");
       return null;
     }
@@ -536,6 +550,8 @@ export function useDeploymentBuild(
         warningMessage: "",
         decisionPending: false,
         decisionFailedServiceIds: [],
+        portCheck: [],
+        portCheckSkipped: [],
         errorCode: "",
         errorDetails: null,
         pendingPrompt: null,
@@ -604,9 +620,9 @@ export function useDeploymentBuild(
       const projectData = await projectsApi.ensure({
         projectId: config.projectId || undefined,
         name: config.projectName || config.repo || config.localPath?.split("/").pop() || "project",
-        gitOwner: isLocal || isUpload ? undefined : config.owner || undefined,
-        gitRepo: isLocal || isUpload ? undefined : config.repo || undefined,
-        gitBranch: isLocal || isUpload ? undefined : config.branch || undefined,
+        gitOwner: isSourceless ? undefined : config.owner || undefined,
+        gitRepo: isSourceless ? undefined : config.repo || undefined,
+        gitBranch: isSourceless ? undefined : config.branch || undefined,
         localPath: config.localPath || undefined,
         // Folder-upload projects: mark the source so it renders correctly and
         // can later be switched to a GitHub repo (Source tab / linkRepo).
@@ -693,7 +709,7 @@ export function useDeploymentBuild(
         buildStrategy:
           config.projectType === "docker" || isServiceDeployment
             ? "server"
-            : config.buildStrategy,
+            : (overrides?.buildStrategy ?? config.buildStrategy),
         deployTarget: config.deployTarget,
         // Only a server target uses serverId — never let a stale id ride along
         // with a cloud/local deploy (backend gates it too, but be explicit).
@@ -705,11 +721,15 @@ export function useDeploymentBuild(
           config.deployTarget === "server" && config.forwardGitCredentials === true
             ? true
             : undefined,
-        // Clone location — only meaningful for a server target. Default
-        // "api-host" is left implicit (undefined) so the backend keeps today's
-        // clone-on-orchestrator behavior unless the user opted into "server".
+        // Clone location — only meaningful for a server target. Clone-on-server
+        // is now the DEFAULT (secure, atomic: credential forwarded over the SSH
+        // relay for the clone, never stored). Only an explicit "api-host" pick
+        // (the advanced "clone on your device, then upload" option) sends
+        // undefined so the backend clones on the orchestrator. The backend
+        // degrades a server clone back to api-host if no credential can reach
+        // the build host, so this default can never block a deploy.
         cloneStrategy:
-          config.deployTarget === "server" && config.cloneStrategy === "server"
+          config.deployTarget === "server" && config.cloneStrategy !== "api-host"
             ? "server"
             : undefined,
         runtimeMode:
@@ -752,6 +772,14 @@ export function useDeploymentBuild(
               domain: service.domain,
               customDomain: service.customDomain,
               domainType: service.domainType,
+              // Multi-route: one entry per public port. Drop the UI-only id/
+              // targetPath; the backend mirrors entry[0] → the scalar fields.
+              publicEndpoints: service.publicEndpoints?.map((endpoint) => ({
+                port: endpoint.port,
+                domain: endpoint.domainType === "custom" ? undefined : endpoint.domain,
+                customDomain: endpoint.domainType === "custom" ? endpoint.customDomain : undefined,
+                domainType: endpoint.domainType,
+              })),
             }))
           : undefined,
       });
@@ -826,6 +854,7 @@ export function useDeploymentBuild(
               owner={config.owner}
               installUrl={installUrl ?? null}
               projectId={ensuredProjectId}
+              serverId={config.serverId ?? null}
               deployTarget={config.deployTarget}
               buildStrategy={config.buildStrategy}
               selfHosted={selfHosted}
@@ -833,6 +862,15 @@ export function useDeploymentBuild(
               onChoice={(choice) => {
                 if (choice.kind === "build-local") {
                   setConfig((prev) => ({ ...prev, buildStrategy: "local" }));
+                } else if (choice.kind === "connect-server-github" && config.serverId) {
+                  openGithubConnect(config.serverId, {
+                    onConnected: () =>
+                      showToast(
+                        "GitHub connected — deploy again to continue.",
+                        "success",
+                        "GitHub",
+                      ),
+                  });
                 }
                 hideModal(modalId);
               }}
@@ -847,7 +885,7 @@ export function useDeploymentBuild(
       setState((prev) => ({ ...prev, isDeploying: false }));
       return null;
     }
-  }, [baseDomain, config, deployMode, hideModal, installUrl, requireCloud, selfHosted, setConfig, showModal, showToast]);
+  }, [baseDomain, config, deployMode, hideModal, installUrl, openGithubConnect, requireCloud, selfHosted, setConfig, showModal, showToast]);
 
   // `startBuild` controls which SSE endpoint to hit:
   //   - true  → POST /:id/build, which ALSO kicks off the build. Now only
@@ -917,6 +955,8 @@ export function useDeploymentBuild(
                 warningMessage: data.warningMessage || prev.warningMessage,
                 decisionPending: !!data.decisionPending,
                 decisionFailedServiceIds: data.partial?.failed ?? prev.decisionFailedServiceIds,
+                portCheck: data.portCheck ?? prev.portCheck,
+                portCheckSkipped: data.portCheckSkipped ?? prev.portCheckSkipped,
                 errorCode: data.errorCode || prev.errorCode,
               }
             : {}),
@@ -1086,6 +1126,8 @@ export function useDeploymentBuild(
           warningMessage: !isActive ? (data.warningMessage || "") : "",
           decisionPending: !isActive ? !!data.decisionPending : false,
           decisionFailedServiceIds: !isActive ? (data.partial?.failed ?? []) : [],
+          portCheck: !isActive ? (data.portCheck ?? []) : [],
+          portCheckSkipped: !isActive ? (data.portCheckSkipped ?? []) : [],
           errorCode: !isActive ? (data.errorCode || "") : "",
           errorDetails: null,
           buildLogs,
@@ -1234,6 +1276,8 @@ export function useDeploymentBuild(
           warningMessage: "",
           decisionPending: false,
           decisionFailedServiceIds: [],
+          portCheck: [],
+          portCheckSkipped: [],
           errorCode: "",
           errorDetails: null,
           pendingPrompt: null,

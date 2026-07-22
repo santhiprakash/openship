@@ -120,6 +120,17 @@
   /* ─ Spinner ─ */
   --th-spinner-track:   rgba(0,0,0,.08);
   --th-spinner-fill:    rgba(0,0,0,.92);
+
+  /* ─ Semantic status (light: solid pastel -100 bg + -700 text + -200 border —
+       the standard readable/colorful badge recipe. Solid hues, not low-opacity
+       RGBA, which grays out over white and looks flat.) ─ */
+  /* Pre-token hardcoded recipe restored: bg-X-500/10 + border-X-500/20 (shared
+     with dark), text-X-600 on light. */
+  --st-success-fg: #059669;  --st-success-bg: rgba(16,185,129,.10);  --st-success-bd: rgba(16,185,129,.20);
+  --st-danger-fg:  #dc2626;  --st-danger-bg:  rgba(239,68,68,.10);   --st-danger-bd:  rgba(239,68,68,.20);
+  --st-warning-fg: #d97706;  --st-warning-bg: rgba(245,158,11,.10);  --st-warning-bd: rgba(245,158,11,.20);
+  --st-info-fg:    #2563eb;  --st-info-bg:    rgba(59,130,246,.10);  --st-info-bd:    rgba(59,130,246,.20);
+  --st-neutral-fg: #52525b;  --st-neutral-bg: #f4f4f5;  --st-neutral-bd: #e4e4e7;
 }
 
 
@@ -216,6 +227,126 @@
   /* ─ Spinner ─ */
   --th-spinner-track:   rgba(255,255,255,.06);
   --th-spinner-fill:    #ffffff;
+
+  /* ─ Semantic status (dark: brighter fg on near-black, lifted bg) ─ */
+  /* Pre-token hardcoded recipe restored: bg-X-500/10 + border-X-500/20 (shared
+     with light), text-X-400 on hard-black. */
+  --st-success-fg: #34d399;  --st-success-bg: rgba(16,185,129,.10);  --st-success-bd: rgba(16,185,129,.20);
+  --st-danger-fg:  #f87171;  --st-danger-bg:  rgba(239,68,68,.10);   --st-danger-bd:  rgba(239,68,68,.20);
+  --st-warning-fg: #fbbf24;  --st-warning-bg: rgba(245,158,11,.10);  --st-warning-bd: rgba(245,158,11,.20);
+  --st-info-fg:    #60a5fa;  --st-info-bg:    rgba(59,130,246,.10);  --st-info-bd:    rgba(59,130,246,.20);
+  --st-neutral-fg: rgba(255,255,255,.50);  --st-neutral-bg: rgba(255,255,255,.05);  --st-neutral-bd: rgba(255,255,255,.10);
+}
+
+
+/* ── Dim ──────────────────────────────────────────────────────────
+   A neutral dark that sits between light and the extreme pure-black
+   dark: a true-gray page lifted just off #000 (no color tint) with
+   better text contrast and a clear page → card → dropdown ladder. */
+[data-theme="dim"] {
+
+  /* Foreground scale - white on slate */
+  --th-on-05: rgba(255,255,255,.05);
+  --th-on-08: rgba(255,255,255,.08);
+  --th-on-10: rgba(255,255,255,.10);
+  --th-on-12: rgba(255,255,255,.12);
+  --th-on-16: rgba(255,255,255,.16);
+  --th-on-20: rgba(255,255,255,.20);
+  --th-on-30: rgba(255,255,255,.30);
+  --th-on-40: rgba(255,255,255,.40);
+  --th-on-50: rgba(255,255,255,.50);
+  --th-on-60: rgba(255,255,255,.60);
+  --th-on-70: rgba(255,255,255,.70);
+  --th-on-80: rgba(255,255,255,.80);
+  --th-on-90: rgba(255,255,255,.90);
+  --th-on-95: rgba(255,255,255,.95);
+
+  /* Surface fill scale */
+  --th-sf-01: rgba(255,255,255,.01);
+  --th-sf-02: rgba(255,255,255,.02);
+  --th-sf-03: rgba(255,255,255,.03);
+  --th-sf-04: rgba(255,255,255,.04);
+  --th-sf-05: rgba(255,255,255,.05);
+  --th-sf-06: rgba(255,255,255,.06);
+  --th-sf-08: rgba(255,255,255,.08);
+
+  /* ─ Text ─ Comfortable contrast on a lifted background. */
+  --th-text-heading:   #ffffff;
+  --th-text-title:     rgba(255,255,255,.95);
+  --th-text-strong:    rgba(255,255,255,.86);
+  --th-text-body:      rgba(255,255,255,.72);
+  --th-text-secondary: rgba(255,255,255,.66);
+  --th-text-muted:     rgba(255,255,255,.58);
+  --th-text-label:     rgba(255,255,255,.58);
+  --th-text-hint:      rgba(255,255,255,.46);
+  --th-text-ghost:     rgba(255,255,255,.30);
+
+  /* ─ Page / layout ─ Neutral gray lifted off black (no tint). */
+  --th-bg-page:        #141414;
+  --th-bg-card:        #1e1e1e;
+  --th-bg-subtle:      rgba(255,255,255,.03);
+  --th-bg-hover:       rgba(255,255,255,.05);
+  --th-bg-inset:       rgba(255,255,255,.02);
+
+  /* ─ Borders ─ Eased down after the bg darkened (higher bg→border
+     contrast made these read too heavy). */
+  --th-bd-default:     rgba(255,255,255,.08);
+  --th-bd-subtle:      rgba(255,255,255,.06);
+  --th-bd-strong:      rgba(255,255,255,.14);
+  --th-bd-card:        rgba(255,255,255,.08);
+
+  /* ─ Input ─ */
+  --th-input-bg:           rgba(255,255,255,.04);
+  --th-input-bd:           rgba(255,255,255,.10);
+  --th-input-text:         rgba(255,255,255,.85);
+  --th-input-placeholder:  rgba(255,255,255,.38);
+  --th-input-bg-focus:     rgba(255,255,255,.06);
+  --th-input-bd-focus:     rgba(255,255,255,.22);
+
+  /* ─ Button - primary ─ */
+  --th-btn-bg:       #ffffff;
+  --th-btn-text:     #000000;
+  --th-btn-bg-hover: rgba(255,255,255,.90);
+
+  /* ─ Button - ghost / outline ─ */
+  --th-btn-ghost-bd:         rgba(255,255,255,.14);
+  --th-btn-ghost-text:       rgba(255,255,255,.62);
+  --th-btn-ghost-bd-hover:   rgba(255,255,255,.24);
+  --th-btn-ghost-text-hover: rgba(255,255,255,.88);
+  --th-btn-ghost-bg-hover:   rgba(255,255,255,.05);
+
+  /* ─ Card ─ Elevated above the page. */
+  --th-card-bg:       rgba(255,255,255,.03);
+  --th-card-bg-solid: #1e1e1e;
+  --th-card-bd:       rgba(255,255,255,.08);
+  --th-card-bd-hover: rgba(255,255,255,.14);
+  --th-card-shadow:   none;
+
+  /* ─ Divider ─ */
+  --th-divider:       rgba(255,255,255,.07);
+
+  /* ─ Overlay ─ */
+  --th-overlay:       rgba(0,0,0,.55);
+
+  /* ─ Dropdown ─ Highest surface in the ladder. */
+  --th-dropdown-bg:     #282828;
+  --th-dropdown-bd:     rgba(255,255,255,.10);
+  --th-dropdown-shadow: 0 20px 48px rgba(0,0,0,.45), 0 4px 12px rgba(0,0,0,.28);
+
+  /* ─ Spinner ─ */
+  --th-spinner-track:   rgba(255,255,255,.08);
+  --th-spinner-fill:    #ffffff;
+
+  /* ─ Semantic status (dim: warm, softer, lower-contrast for the lifted gray) ─ */
+  /* Success takes the dark theme's emerald verbatim (#34d399 text over the
+     rgba(16,185,129,…) overlay) — the comfortable native green, at the exact
+     temperature of its own bg/icon overlay. No bespoke dim hue. Amber warning,
+     red danger, blue info keep their distinct temperatures below. */
+  --st-success-fg: #34d399;  --st-success-bg: rgba(16,185,129,.14);  --st-success-bd: rgba(16,185,129,.26);
+  --st-danger-fg:  hsl(6 76% 67%);  --st-danger-bg:  hsl(6 70% 52% / .20);   --st-danger-bd:  hsl(6 66% 56% / .36);
+  --st-warning-fg: hsl(40 88% 62%);  --st-warning-bg: hsl(40 82% 50% / .18);  --st-warning-bd: hsl(40 78% 54% / .34);
+  --st-info-fg:    hsl(214 80% 71%);  --st-info-bg:    hsl(214 72% 54% / .18);  --st-info-bd:    hsl(214 68% 58% / .34);
+  --st-neutral-fg: rgba(255,255,255,.70);  --st-neutral-bg: rgba(255,255,255,.09);  --st-neutral-bd: rgba(255,255,255,.18);
 }
 
 
@@ -333,4 +464,16 @@
   --input: var(--th-input-bd);
   --ring: var(--th-on-20);
   --radius: 0.75rem;
+
+  /* Semantic status → stable names (auto-switch via the --st-* per theme). */
+  --success: var(--st-success-fg);  --success-bg: var(--st-success-bg);  --success-border: var(--st-success-bd);
+  --danger:  var(--st-danger-fg);   --danger-bg:  var(--st-danger-bg);   --danger-border:  var(--st-danger-bd);
+  --warning: var(--st-warning-fg);  --warning-bg: var(--st-warning-bg);  --warning-border: var(--st-warning-bd);
+  --info:    var(--st-info-fg);     --info-bg:    var(--st-info-bg);     --info-border:    var(--st-info-bd);
+  --neutral: var(--st-neutral-fg);  --neutral-bg: var(--st-neutral-bg);  --neutral-border: var(--st-neutral-bd);
+
+  /* Vivid SOLID fills for bars / dots / solid buttons — a saturated mid tone
+     that reads on any background (the -fg above is text-tuned = too dark on
+     white for a big fill). Theme-independent on purpose. */
+  --success-solid: #10b981;  --danger-solid: #ef4444;  --warning-solid: #f59e0b;  --info-solid: #3b82f6;  --neutral-solid: #9ca3af;
 }

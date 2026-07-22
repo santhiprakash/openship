@@ -15,7 +15,8 @@ import { repos } from "@repo/db";
 import { env } from "../../config/env";
 import { decrypt } from "../../lib/encryption";
 import { verifyHmacSha256 } from "../webhooks/webhook.service";
-import { resolveProjectWebhookSecret } from "./github.service";
+// resolveProjectWebhookSecret (github.service) was the old single-secret reader;
+// verify() now collects ALL candidate secrets via collectDeliverySecrets below.
 import { handleInstallation } from "./webhook-installation";
 import { handlePush } from "./webhook-push";
 import { handleCheckRun } from "./webhook-check-run";
@@ -51,53 +52,63 @@ import type {
  * in turn so a rotation that hasn't propagated to every environment row
  * still verifies.
  */
-async function resolveDeliverySecret(
+/**
+ * Collect EVERY candidate per-project (+ cloud-binding) signing secret for a
+ * delivery's repo. Multiple projects can share one owner/repo (monorepo
+ * sub-projects, branch envs) — each with its OWN secret — and a delivery is
+ * signed with exactly one hook's secret, so `verify()` must try them all and
+ * accept on any match. Returning the FIRST project's secret (the old behavior)
+ * silently rejected valid deliveries whenever N>1 projects shared a repo.
+ *
+ * Excludes the env secret — `verify()` appends that as the final legacy
+ * fallback so a decrypt failure (key rotation) still degrades to it.
+ */
+async function collectDeliverySecrets(
   payload: string | Buffer,
   headers: Record<string, string>,
-): Promise<string | null> {
+): Promise<string[]> {
   const event = headers["x-github-event"];
-  // installation / ping events aren't repo-scoped on the deploy side —
-  // they hit api.openship.io's App webhook, which is verified with the
-  // env secret (no project context exists there).
-  if (event !== "push" && event !== "check_run") return null;
+  // installation / ping events aren't repo-scoped on the deploy side — they hit
+  // api.openship.io's App webhook, verified with the env secret (no project).
+  if (event !== "push" && event !== "check_run") return [];
 
   let parsed: unknown;
   try {
     const text = Buffer.isBuffer(payload) ? payload.toString("utf8") : payload;
     parsed = JSON.parse(text);
   } catch {
-    return null;
+    return [];
   }
-  const repoFull =
-    (parsed as { repository?: { full_name?: string } })?.repository?.full_name;
-  if (!repoFull || typeof repoFull !== "string") return null;
+  const repoFull = (parsed as { repository?: { full_name?: string } })?.repository?.full_name;
+  if (!repoFull || typeof repoFull !== "string") return [];
   const [owner, repo] = repoFull.split("/");
-  if (!owner || !repo) return null;
+  if (!owner || !repo) return [];
+
+  const secrets = new Set<string>();
 
   const projects = await repos.project.findByGitRepo(owner, repo).catch(() => []);
   for (const p of projects) {
-    const secret = resolveProjectWebhookSecret(p);
-    // resolveProjectWebhookSecret may return the env secret as a
-    // fallback when project.webhookSecret is null. We want THIS path
-    // to surface only the per-project value — verify() handles the env
-    // fallback itself. So short-circuit when we get a real per-project
-    // value (project.webhookSecret was non-null).
-    if (p.webhookSecret && secret) return secret;
+    if (!p.webhookSecret) continue;
+    try {
+      secrets.add(decrypt(p.webhookSecret));
+    } catch {
+      // corrupted / key-rotated row — skip; env fallback handles it in verify()
+    }
   }
 
-  // No local project → may be a CLOUD project this box forwards for. The binding
-  // holds the same per-project secret, preserved across promote, so a forged push
-  // still rejects. Decrypt failure (key rotation) falls through to env.
+  // Cloud projects this box forwards for: the binding holds the same per-project
+  // secret (preserved across promote), so a forged push still rejects.
   const bindings = await repos.cloudWebhookBinding.findByRepo(owner, repo).catch(() => []);
   for (const b of bindings) {
     if (!b.webhookSecret) continue;
     try {
-      return decrypt(b.webhookSecret);
+      secrets.add(decrypt(b.webhookSecret));
     } catch {
       // try the next binding, then env fallback
     }
   }
-  return null;
+
+  return [...secrets];
 }
 
 // ─── GitHub Webhook Provider ─────────────────────────────────────────────────
@@ -115,24 +126,28 @@ export const githubWebhookProvider: WebhookProvider = {
   ): Promise<WebhookVerifyResult> {
     const signature = headers["x-hub-signature-256"];
 
-    // First, identify the project for this delivery so we can look up
-    // ITS secret. Best-effort: deliveries without a routable repo
-    // (installation events, pings) fall through to the env secret.
-    const projectSecret = await resolveDeliverySecret(payload, headers);
-    const secret = projectSecret ?? env.GITHUB_WEBHOOK_SECRET ?? null;
+    // Every candidate secret for this delivery's repo (each project's own +
+    // cloud bindings), plus env.GITHUB_WEBHOOK_SECRET as the final legacy
+    // fallback. Deliveries without a routable repo (installation/ping) yield no
+    // per-project candidates and rely on env — the SaaS App secret.
+    const candidates = await collectDeliverySecrets(payload, headers);
+    if (env.GITHUB_WEBHOOK_SECRET && !candidates.includes(env.GITHUB_WEBHOOK_SECRET)) {
+      candidates.push(env.GITHUB_WEBHOOK_SECRET);
+    }
 
     // No unsigned path — a delivery with no resolvable secret can't be verified,
     // even self-hosted. Register the webhook through Openship (sets a per-project
     // secret) or configure GITHUB_WEBHOOK_SECRET.
-    if (!secret) {
+    if (candidates.length === 0) {
       return { valid: false, error: "No webhook secret configured — signature cannot be verified" };
     }
-
     if (!signature) {
       return { valid: false, error: "Missing x-hub-signature-256 header" };
     }
 
-    const valid = verifyHmacSha256(payload, secret, signature);
+    // A delivery is signed with exactly one hook's secret — accept on the first
+    // candidate that matches (each comparison is constant-time).
+    const valid = candidates.some((secret) => verifyHmacSha256(payload, secret, signature));
     return valid ? { valid: true } : { valid: false, error: "Invalid signature" };
   },
 

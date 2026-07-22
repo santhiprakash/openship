@@ -261,7 +261,7 @@ export function EnvVarsEditor({
                       title={r.isSecret ? t.projectSettings.envVars.markedSecret : t.projectSettings.envVars.markSecret}
                       className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors ${
                         r.isSecret
-                          ? "border-amber-500/30 bg-amber-500/10 text-amber-500"
+                          ? "border-warning-border bg-warning-bg text-warning"
                           : "border-border/60 bg-muted/30 text-muted-foreground hover:bg-muted/50"
                       }`}
                     >
@@ -270,7 +270,7 @@ export function EnvVarsEditor({
                     <button
                       type="button"
                       onClick={() => removeRow(r.uid)}
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/30 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/30 text-muted-foreground transition-colors hover:bg-danger-bg hover:text-danger"
                       aria-label={t.projectSettings.envVars.removeVariable}
                     >
                       <Trash2 className="size-3.5" />

@@ -1,21 +1,20 @@
 /**
- * SSL renewal - on-demand batch renewal of expiring certificates.
+ * SSL renewal — batch renewal of expiring certbot certificates.
  *
- * Not a background scheduler. Call `renewExpiringCerts()` from:
- *   - An admin / internal API endpoint (e.g. POST /api/domains/renew)
- *   - An external cron job (Kubernetes CronJob, systemd timer, etc.)
+ * Wired to the shared JobRunner as the "ssl:renew" system job on self-hosted
+ * installs (registered via the generic jobs module — see
+ * modules/jobs/job.registry.ts). Still callable directly from an admin endpoint
+ * or external cron.
  *
- * In most setups renewal is handled by the infrastructure layer itself:
- *   - Docker: Traefik / Caddy auto-renew Let's Encrypt certs
- *   - Cloud:  Provider manages TLS termination
- *
- * This function exists as a fallback for setups where we provision certs
- * ourselves via the adapter's `provisionCert` / `renewCert` methods.
+ * Each expiring domain is renewed via `manageDomainSsl`, which resolves the SSL
+ * provider on the SAME host that serves the domain (per-project, not the global
+ * orchestrator) — so multi-server self-hosted renews on the right box. Manual
+ * (BYO) certs are skipped: certbot never issued them, so they can't be renewed.
  */
 
 import { repos } from "@repo/db";
 import { SYSTEM } from "@repo/core";
-import { platform } from "./controller-helpers";
+import { manageDomainSsl } from "./domain-ssl";
 import { notification } from "./notification-dispatcher";
 
 // ─── Core renewal logic ──────────────────────────────────────────────────────
@@ -36,11 +35,15 @@ export interface RenewalResult {
  * - Returns a structured result for the caller to log or return to the client
  */
 export async function renewExpiringCerts(): Promise<RenewalResult> {
-  const { ssl } = platform();
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() + SYSTEM.DOMAINS.SSL_RENEW_BEFORE_DAYS);
 
-  const allDomains = await repos.domain.findExpiringSsl(cutoff);
+  // Manually-uploaded certs (BYO / Cloudflare Origin CA) can't be ACME-renewed —
+  // certbot never issued them, so `renew` would error and flip them to "error".
+  // Skip them here; the operator re-uploads before expiry.
+  const allDomains = (await repos.domain.findExpiringSsl(cutoff)).filter(
+    (d) => !d.manualSsl,
+  );
 
   if (allDomains.length === 0) {
     return { renewed: 0, failed: 0, total: 0, details: [] };
@@ -73,13 +76,20 @@ export async function renewExpiringCerts(): Promise<RenewalResult> {
     const ctx = projectCache.get(domain.projectId);
 
     try {
-      const result = await ssl.renewCert(domain.hostname);
-
-      await repos.domain.updateSsl(domain.id, {
-        sslStatus: "active",
-        sslExpiresAt: new Date(result.expiresAt),
-        sslIssuer: result.issuer,
+      // manageDomainSsl resolves the provider on the serving host and persists
+      // the outcome (no-clobber). A non-verified result means no valid cert
+      // landed — treat as a failure so it's surfaced, not silently "renewed".
+      const result = await manageDomainSsl(domain.hostname, {
+        action: "renew",
+        projectId: domain.projectId,
       });
+      if (!result.verified) {
+        throw new Error(
+          result.reason === "missing"
+            ? "no certificate present after renew"
+            : "renew did not produce a valid certificate",
+        );
+      }
 
       renewed++;
       details.push({ domain: domain.hostname, status: "renewed" });

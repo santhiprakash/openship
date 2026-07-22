@@ -64,7 +64,7 @@ export function FormModalContent({
 
   const submitClass =
     submitVariant === "danger"
-      ? "bg-red-600 text-white hover:bg-red-700"
+      ? "bg-danger-solid text-white hover:bg-danger-solid/90"
       : "bg-primary text-primary-foreground hover:bg-primary/90";
 
   return (
@@ -81,7 +81,7 @@ export function FormModalContent({
       <div className="space-y-4">{children}</div>
 
       {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-3.5 py-2.5 text-sm text-red-600 dark:text-red-400">
+        <div className="rounded-xl border border-danger-border bg-danger-bg px-3.5 py-2.5 text-sm text-danger">
           {error}
         </div>
       )}

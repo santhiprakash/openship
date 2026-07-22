@@ -186,6 +186,22 @@ point at it and does **not** issue a certificate — your edge is doing that job
 
 </Tabs>
 
+## Bring your own certificate
+
+For setups where your upstream needs the **origin** to present a real certificate too — most commonly
+**Cloudflare Full (strict)** — upload your own instead of using Let's Encrypt.
+
+1. On a verified domain, open its menu and choose **Upload certificate**.
+2. Paste the **certificate** (full chain, PEM) and the matching **private key** (PEM). A free
+   [Cloudflare Origin CA](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/) certificate
+   (15-year) is a great fit here.
+3. Openship serves HTTPS from that certificate and stops running Let's Encrypt for this domain.
+
+<Callout title="Uploaded certificates don't auto-renew" type="info">
+There's nothing for Openship to renew, so it watches the expiry and reminds you — upload a fresh certificate
+before it lapses.
+</Callout>
+
 ## Prefer the terminal?
 
 Every step above has a CLI equivalent. The `add` command prints the DNS records and the domain's ID; use that

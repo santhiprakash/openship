@@ -491,6 +491,11 @@ async function main(): Promise<void> {
       join(API_DIR, "tsconfig.json"),
       join(apiTarget, "tsconfig.json"),
     );
+    // Vendored static assets (e.g. the GeoLite2 DB) — geo-ip.ts resolves them
+    // relative to the module, i.e. api/assets/ next to api/src/.
+    if (existsSync(join(API_DIR, "assets"))) {
+      await cp(join(API_DIR, "assets"), join(apiTarget, "assets"), { recursive: true });
+    }
   });
 
   // 4. Copy each workspace package source + (for db) drizzle/. We

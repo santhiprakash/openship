@@ -1,4 +1,35 @@
 {
+  "github": {
+    "title": "وصول GitHub",
+    "desc": "كيف يصادق هذا الخادم على GitHub لاستنساخ المستودعات الخاصة.",
+    "loadFailed": "تعذّر تحميل حالة GitHub",
+    "connected": "متصل",
+    "modeToken": "رمز",
+    "modeSshKey": "مفتاح SSH",
+    "modeDeployKey": "مفاتيح النشر",
+    "connectDevice": "الاتصال بـ GitHub",
+    "deviceHint": "افتح الرابط وأدخل هذا الرمز:",
+    "open": "فتح GitHub",
+    "connecting": "في انتظار التفويض…",
+    "connectFailed": "فشل الاتصال",
+    "connectedToast": "تم ربط GitHub لهذا الخادم",
+    "patPlaceholder": "ghp_… (ألصق رمزًا)",
+    "patHint": "رمز وصول شخصي مُخزَّن مشفّرًا لهذا الخادم.",
+    "save": "حفظ",
+    "savedToast": "تم الحفظ",
+    "saveFailed": "فشل الحفظ",
+    "tokenAs": "مُصادَق باسم",
+    "sshGenerate": "إنشاء مفتاح SSH",
+    "sshAddHint": "أضف هذا المفتاح إلى حساب GitHub الخاص بك ثم انشر:",
+    "openGithubKeys": "فتح مفاتيح SSH في GitHub",
+    "copy": "نسخ",
+    "deployKeyUse": "استخدام مفاتيح النشر لكل مستودع",
+    "deployKeyHint": "يسجّل Openship مفتاح نشر للقراءة فقط لكل مستودع عند أول نشر.",
+    "deployKeyActive": "وضع مفتاح النشر مُفعّل — تُنشأ المفاتيح عند أول نشر.",
+    "deployKeysRegistered": "مفاتيح نشر مُسجَّلة",
+    "disconnect": "قطع الاتصال",
+    "disconnectedToast": "تم قطع اتصال GitHub"
+  },
   "list": {
     "title": "الخوادم",
     "subtitle": "أدر خوادم النشر والبنية التحتية",
@@ -19,7 +50,14 @@
     "serverOverview": "نظرة عامة على الخادم",
     "totalServers": "إجمالي الخوادم",
     "connectedLabel": "متصل",
-    "errors": "الأخطاء"
+    "errors": "الأخطاء",
+    "checking": "جارٍ الفحص",
+    "online": "متصل",
+    "offline": "غير متصل",
+    "authKey": "مفتاح",
+    "authPassword": "كلمة مرور",
+    "projects": "المشاريع",
+    "regions": "المناطق"
   },
   "form": {
     "sshConnection": "اتصال SSH",
@@ -68,6 +106,7 @@
     "tabs": {
       "overview": "نظرة عامة",
       "components": "المكوّنات",
+      "github": "Git",
       "security": "الأمان",
       "ports": "المنافذ",
       "terminal": "الطرفية"
@@ -77,6 +116,7 @@
     "edit": "تعديل",
     "removeServer": "إزالة الخادم",
     "serverNotFound": "لم يتم العثور على الخادم",
+    "serverNotFoundDesc": "هذا الخادم غير موجود في مساحة عملك، أو ليس لديك صلاحية الوصول إليه. ربما تم حذفه.",
     "noServerConfigured": "لا يوجد خادم مُهيّأ بالمعرّف “{id}”.",
     "editServer": "تعديل الخادم",
     "editSubtitle": "تحديث تفاصيل الاتصال لـ {name}",
@@ -267,6 +307,8 @@
     "autoDesc": "افحص المتطلبات وثبّت كل شيء تلقائيًا. بنقرة واحدة - يتولى Openship إعداد Docker وOpenResty وGit.",
     "stepTitle": "الإعداد خطوة بخطوة",
     "stepDesc": "راجع كل مكوّن واختر ما تريد تثبيته. اطّلع على الحالة التفصيلية قبل المتابعة.",
+    "skipTitle": "تخطَّ الآن",
+    "skipDesc": "أضِف الخادم دون تثبيت أي شيء — فقط راقب حالته. يمكنك تشغيل الإعداد لاحقًا من صفحة الخادم.",
     "connecting": "جارٍ الاتصال بالخادم…",
     "runningChecks": "جارٍ تشغيل فحوصات صحة النظام عبر SSH",
     "connectionFailed": "فشل الاتصال",
@@ -318,5 +360,17 @@
     "serverCheck": "فحص الخادم",
     "security": "الأمان",
     "portForwarding": "إعادة توجيه المنافذ"
+  },
+  "tabsNav": {
+    "servers": "الخوادم",
+    "cluster": "المجموعة",
+    "networking": "الشبكات"
+  },
+  "comingSoon": {
+    "badge": "قريبًا",
+    "clusterTitle": "المجموعات",
+    "clusterBody": "اجمع الخوادم في مجموعة ودع Openship يوزّع عمليات النشر ويوازنها بينها.",
+    "networkingTitle": "الشبكات",
+    "networkingBody": "روابط خاصة وتوجيه شبكي وقواعد جدار حماية عبر خوادمك — تُدار من مكان واحد."
   }
 }

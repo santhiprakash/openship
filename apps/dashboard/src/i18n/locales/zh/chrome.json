@@ -19,7 +19,8 @@
     "current": "当前",
     "cloudLabel": "云端：{email}",
     "linkedToCloud": "已作为 {email} 关联到 Openship Cloud",
-    "backToSetup": "返回设置"
+    "backToSetup": "返回设置",
+    "personal": "个人"
   },
   "migration": {
     "inProgressTitle": "迁移进行中",
@@ -43,6 +44,7 @@
     "descGlobal": "你要访问的页面不存在或已被移动。",
     "descDashboard": "此页面不存在或可能已被移动。请检查网址，或返回你的控制台。",
     "backToDashboard": "返回控制台",
-    "viewDeployments": "查看部署"
+    "viewDeployments": "查看部署",
+    "copyId": "复制 ID"
   }
 }

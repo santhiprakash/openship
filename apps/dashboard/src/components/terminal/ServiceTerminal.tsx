@@ -414,7 +414,7 @@ export const ServiceTerminal = forwardRef<
           <span
             className={
               "text-xs " +
-              (banner.tone === "error" ? "text-red-500" : "text-muted-foreground")
+              (banner.tone === "error" ? "text-danger" : "text-muted-foreground")
             }
           >
             {banner.message}

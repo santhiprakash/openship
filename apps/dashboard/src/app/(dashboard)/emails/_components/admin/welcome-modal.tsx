@@ -180,7 +180,7 @@ function IntroStage({
           className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-[14px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-foreground/20 focus:border-foreground/40 transition-colors disabled:opacity-60"
         />
         {error && (
-          <p className="mt-2 text-[12.5px] text-red-600 dark:text-red-400">
+          <p className="mt-2 text-[12.5px] text-danger">
             {error}
           </p>
         )}

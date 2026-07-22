@@ -7,6 +7,8 @@ export const stopCommand = new Command("stop")
   .action(() => {
     try {
       const res = stop();
+      // No lock cleanup here: the server reclaims a dead-owner PGlite lock itself
+      // on the next boot, so a later `openship up` isn't blocked by a stale lock.
       console.log(chalk.green("\n  ✔ Openship stopped.\n") + chalk.dim(`  ${res.detail}\n`));
     } catch (e) {
       console.error(chalk.red(`\n  Couldn't stop the service: ${(e as Error).message}\n`));

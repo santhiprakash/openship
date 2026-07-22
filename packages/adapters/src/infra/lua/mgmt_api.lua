@@ -26,6 +26,55 @@ if uri == "/health" then
     return ngx.exit(200)
 end
 
+-- ── /rules - per-route rules cache (written by the API, read by rules_guard) ──
+-- POST /rules  body: { "host": "...", "rules": [ { "pathPrefix": "/", "spec": {...} } ] }
+--   → replaces the ruleset for that host in the `rules` shared dict (reload-free).
+--   An empty/absent `rules` array clears the host.
+-- GET  /rules?host=...   → the stored ruleset (debug).
+-- DELETE /rules?host=... → clear the host's ruleset.
+-- Handled BEFORE the analytics guard: rules use their own dict.
+if uri == "/rules" then
+    local rules = ngx.shared.rules
+    if not rules then return json({ error = "rules dict unavailable" }, 503) end
+    local method = ngx.req.get_method()
+
+    if method == "GET" then
+        local host = ngx.var.arg_host
+        if not host or host == "" then return bad("missing ?host=") end
+        host = host:lower()
+        local raw = rules:get(host)
+        return json({ host = host, rules = raw and cjson.decode(raw) or {} })
+    end
+
+    if method == "DELETE" then
+        local host = ngx.var.arg_host
+        if not host or host == "" then return bad("missing ?host=") end
+        rules:delete(host:lower())
+        return json({ ok = true })
+    end
+
+    if method == "POST" then
+        ngx.req.read_body()
+        local body = ngx.req.get_body_data()
+        if not body then return bad("empty body") end
+        local payload = cjson.decode(body)
+        if type(payload) ~= "table" or not payload.host then
+            return bad("expected { host, rules: [...] }")
+        end
+        local host = tostring(payload.host):lower()
+        local list = payload.rules
+        if type(list) ~= "table" or #list == 0 then
+            rules:delete(host)                 -- empty set = clear the host
+            return json({ ok = true, host = host, count = 0 })
+        end
+        local ok, err = rules:set(host, cjson.encode(list))
+        if not ok then return json({ error = "set failed: " .. (err or "?") }, 500) end
+        return json({ ok = true, host = host, count = #list })
+    end
+
+    return json({ error = "method not allowed" }, 405)
+end
+
 if not analytics then
     return json({ error = "analytics dict unavailable" }, 503)
 end

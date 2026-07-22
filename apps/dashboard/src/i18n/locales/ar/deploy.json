@@ -119,6 +119,8 @@
     "addServer": "أضف خادمك الخاص",
     "continue": "متابعة",
     "chooseServer": "اختر خادمًا",
+    "searchPlaceholder": "ابحث عن الخوادم…",
+    "noServersMatch": "لا توجد خوادم تطابق بحثك.",
     "requireCloudFeature": "النشر إلى Openship Cloud",
     "saveDefault": "حفظه كإعدادي الافتراضي لكل عملية نشر.",
     "saveDefaultHint": "غيّره لاحقًا من الإعدادات، أو لكل عملية نشر من المُحدِّد في هذه الصفحة.",

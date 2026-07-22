@@ -115,6 +115,28 @@ function validateQuotaMB(quota: number): void {
   }
 }
 
+/**
+ * Validate a free-form display name at the API boundary (defense-in-depth).
+ * A display name is DATA — reject control characters (newlines/CR/NUL/…) that
+ * have no legitimate place in a name and are the vehicle for injection, and cap
+ * the length. The SQL sink is already safe (q() + a single shell-quoted `-c`
+ * arg); this is a second layer so bad input never even reaches it.
+ */
+function validateDisplayName(name: string): void {
+  if (name.length > 255) {
+    throw new Error("Display name too long (max 255 characters).");
+  }
+  // Reject control characters (newlines/CR/NUL/DEL) — they never belong in a
+  // display name and are the vehicle for injection. charCodeAt avoids a
+  // control-char regex literal in source.
+  for (let i = 0; i < name.length; i++) {
+    const code = name.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      throw new Error("Display name contains invalid control characters.");
+    }
+  }
+}
+
 export async function listMailboxes(
   serverId: string,
   domain: string,
@@ -147,6 +169,7 @@ export async function createMailbox(
 ): Promise<MailboxRow> {
   validateLocalPart(input.localPart);
   validateDomain(input.domain);
+  if (input.name) validateDisplayName(input.name);
   if (!input.password || input.password.length < 8) {
     throw new Error("Password must be at least 8 characters.");
   }
@@ -226,6 +249,7 @@ export async function updateMailbox(
     const sets: string[] = ["modified = NOW()"];
 
     if (patch.name !== undefined) {
+      validateDisplayName(patch.name);
       sets.push(`name = ${q(patch.name)}`);
     }
     if (patch.quotaMB !== undefined) {

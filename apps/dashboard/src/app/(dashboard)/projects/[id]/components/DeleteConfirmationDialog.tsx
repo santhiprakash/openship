@@ -24,8 +24,8 @@ export const DeleteConfirmationDialog = ({
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
       <div className="bg-card border border-border rounded-xl p-6 max-w-md w-full shadow-2xl">
         <div className="flex items-center mb-4">
-          <div className="p-2 bg-red-500/10 rounded-lg me-3 border border-red-500/20">
-            <AlertTriangle className="h-6 w-6 text-red-600 dark:text-red-400" />
+          <div className="p-2 bg-danger-bg rounded-lg me-3 border border-danger-border">
+            <AlertTriangle className="h-6 w-6 text-danger" />
           </div>
           <h3 className="text-lg font-semibold text-foreground">{t.projectSettings.deleteDialog.title}</h3>
         </div>

@@ -31,9 +31,12 @@
  *   GET /health                        - 200 ok
  */
 
-import { readFileSync } from "node:fs";
+import { safeErrorMessage } from "@repo/core";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EMBEDDED_LUA } from "./lua-embedded";
 import type { CommandExecutor } from "../types";
 
 // ── Paths & constants ────────────────────────────────────────────────────────
@@ -43,6 +46,9 @@ export const OPENRESTY_LUA_DIR = "/usr/local/openresty/site/lualib/openship";
 
 /** Absolute path to the site_logger script (referenced by nginx server blocks). */
 export const LUA_LOGGER_PATH = `${OPENRESTY_LUA_DIR}/site_logger.lua`;
+
+/** Absolute path to the access-phase rules guard (referenced by server blocks). */
+export const RULES_GUARD_PATH = `${OPENRESTY_LUA_DIR}/rules_guard.lua`;
 
 /** Management API port - loopback only, queried via SSH tunnel. */
 export const OPENRESTY_MGMT_PORT = 9145;
@@ -236,11 +242,50 @@ const GEOIP_DB_URL =
 
 // ── Local Lua source directory ───────────────────────────────────────────────
 
-const LUA_SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), "lua");
+// Optional on-disk source of the .lua scripts, for dev / Docker / CLI bundle
+// where the files sit next to this module (edit + reload works). This is only a
+// convenience — the base64 EMBEDDED_LUA copy is the atomic guarantee that ships
+// inside the JS. OPENSHIP_LUA_DIR lets an operator point at hand-edited scripts.
+const LUA_SRC_DIR =
+  process.env.OPENSHIP_LUA_DIR?.trim() || join(dirname(fileURLToPath(import.meta.url)), "lua");
 
-/** Read a .lua file from the local lua/ directory. */
+/** The scripts a generated nginx server block hard-depends on — if these aren't
+ *  installable, the vhost MUST omit its `*_by_lua_file` directives (else every
+ *  request 500s on a missing file). `rules_guard.lua` (access phase) does a
+ *  non-pcall `require "openship.rules_lib"`, so rules_lib is a hard dep too;
+ *  `site_logger.lua` (log phase) only soft-pcalls geo/pipe, so it stands alone.
+ *  See `luaSourceAvailable`. */
+const VHOST_REFERENCED_LUA = ["rules_guard.lua", "rules_lib.lua", "site_logger.lua"] as const;
+
+/**
+ * True when the vhost-referenced Lua can be installed — from disk OR from the
+ * embedded base64 copy. Since the scripts are embedded (see scripts/embed-lua),
+ * this is effectively always true; it stays as a fail-safe signal so that if the
+ * embedded module were ever emptied, the vhost builder omits the `*_by_lua_file`
+ * directives (edge rules/logging off, sites UP) rather than 500ing every request.
+ */
+export function luaSourceAvailable(): boolean {
+  return VHOST_REFERENCED_LUA.every(
+    (f) => EMBEDDED_LUA[f] !== undefined || existsSync(join(LUA_SRC_DIR, f)),
+  );
+}
+
+/**
+ * Return a Lua script's contents. Prefers the on-disk source (dev / Docker /
+ * CLI bundle — lets you edit lua/*.lua and reload) and falls back to the base64
+ * EMBEDDED_LUA copy, which is what makes the scripts atomic in a compiled binary
+ * / bundle where no module-relative path resolves. Throws only if a script is
+ * absent from BOTH — i.e. it was never embedded (run `bun run embed:lua`).
+ */
 function readLua(filename: string): string {
-  return readFileSync(join(LUA_SRC_DIR, filename), "utf-8");
+  const onDisk = join(LUA_SRC_DIR, filename);
+  if (existsSync(onDisk)) return readFileSync(onDisk, "utf-8");
+  const embedded = EMBEDDED_LUA[filename];
+  if (embedded !== undefined) return Buffer.from(embedded, "base64").toString("utf-8");
+  throw new Error(
+    `Lua script "${filename}" not found on disk (${LUA_SRC_DIR}) or in EMBEDDED_LUA — ` +
+      `add it to packages/adapters/src/infra/lua/ and run \`bun run embed:lua\`.`,
+  );
 }
 
 // ── Management server block ──────────────────────────────────────────────────
@@ -293,7 +338,98 @@ const LUA_SCRIPTS = [
   "pipe_stream.lua",
   "mgmt_api.lua",
   "geo_country.lua",
+  "rules_lib.lua",
+  "rules_guard.lua",
 ] as const;
+
+/** Version stamp so the self-heal detects a STALE box (an upgrade shipped new
+ *  Lua) as well as a missing one. Dotfile → excluded from `require` + from the
+ *  plain `ls -1` presence scan below. */
+const LUA_VERSION_MARKER = `${OPENRESTY_LUA_DIR}/.openship-lua-version`;
+
+/** sha256 over the exact bytes we'd install, so any script edit changes it. */
+function luaBundleHash(): string {
+  const h = createHash("sha256");
+  for (const name of LUA_SCRIPTS) {
+    h.update(name);
+    h.update("\0");
+    h.update(readLua(name));
+    h.update("\0");
+  }
+  return h.digest("hex");
+}
+
+/**
+ * Health-chain ensure/repair: guarantee the Lua on the box is both PRESENT and
+ * CURRENT — reinstall (all scripts + version stamp) and reload OpenResty when
+ * any script is missing OR the on-box version differs from this build. CHEAP on
+ * the happy path (one `ls` + one marker read, no writes; no geo/opm/GeoLite —
+ * that's deployLuaScripts), so it runs on every self-hosted deploy's edge-ensure.
+ *
+ * This is the self-heal for the "box lost its Lua → every managed vhost 500s"
+ * outage: a box whose scripts vanished (OpenResty reinstall, manual rm, a build
+ * that once shipped without them) OR whose scripts are stale after an upgrade
+ * gets fixed on the next deploy instead of staying down / running old rules.
+ *
+ * NEVER THROWS — a deploy must proceed even if repair fails: the whole body is
+ * guarded, and the vhost builder independently degrades to no-Lua when it's
+ * genuinely unavailable.
+ */
+export async function ensureLuaScripts(
+  executor: CommandExecutor,
+  paths: OpenRestyPaths,
+): Promise<{ repaired: string[]; available: boolean }> {
+  try {
+    if (!luaSourceAvailable()) {
+      // Only reachable if the embedded module was gutted. Do NOT throw — the
+      // vhost builder omits the *_by_lua_file directives so sites stay up.
+      console.error(
+        "[openresty] Lua unavailable in this build (not on disk or embedded) — edge " +
+          "rules/logging disabled. Run `bun run embed:lua` in packages/adapters.",
+      );
+      return { repaired: [], available: false };
+    }
+
+    const expected = luaBundleHash();
+    await executor.mkdir(OPENRESTY_LUA_DIR);
+
+    // One listing beats a stat per script. OPENRESTY_LUA_DIR is a fixed,
+    // metachar-free constant; single-quote it anyway per the remote-exec rule.
+    const listing = await executor
+      .exec(`ls -1 '${OPENRESTY_LUA_DIR}' 2>/dev/null || true`)
+      .catch(() => "");
+    const present = new Set(listing.split("\n").map((s) => s.trim()).filter(Boolean));
+    const missing = LUA_SCRIPTS.filter((name) => !present.has(name));
+    // Read the marker directly (it's a dotfile, so `ls -1` won't list it).
+    const onBoxVersion = (await executor.readFile(LUA_VERSION_MARKER).catch(() => "")).trim();
+
+    if (missing.length === 0 && onBoxVersion === expected) {
+      return { repaired: [], available: true }; // happy path: present + current
+    }
+
+    // Rewrite ALL scripts (fixes both a missing script and a stale set), then
+    // stamp the version last so a crash mid-write leaves it stale (safe: retried
+    // next deploy) rather than falsely current.
+    for (const name of LUA_SCRIPTS) {
+      await executor.writeFile(`${OPENRESTY_LUA_DIR}/${name}`, readLua(name));
+    }
+    await executor.writeFile(LUA_VERSION_MARKER, expected);
+
+    const reason = missing.length ? `missing: ${missing.join(", ")}` : "version changed";
+    console.warn(`[openresty] (re)installed Lua (${reason}) — reloading edge.`);
+    // Reload so OpenResty picks up the scripts (a vhost that had been 500ing on
+    // a missing file recovers; fresh workers get a fresh Lua VM). Best-effort.
+    await executor.exec(buildReloadCommand(paths)).catch((err) => {
+      console.error(`[openresty] reload after Lua (re)install failed: ${safeErrorMessage(err)}`);
+    });
+
+    return { repaired: missing.length ? missing : [...LUA_SCRIPTS], available: true };
+  } catch (err) {
+    // Contract: never throw. A repair failure must not abort the deploy.
+    console.error(`[openresty] ensureLuaScripts failed (deploy continues): ${safeErrorMessage(err)}`);
+    return { repaired: [], available: false };
+  }
+}
 
 /**
  * Install libmaxminddb (C library needed by lua-resty-maxminddb's FFI),
@@ -370,6 +506,18 @@ export async function deployLuaScripts(
   await installGeoDeps(executor);
 
   // ── Write Lua files ──────────────────────────────────────────────────
+  // Loud-fail if neither the on-disk source NOR the embedded base64 copy has
+  // the edge scripts (only possible if the embedded module was gutted): without
+  // them every generated vhost's `access_by_lua_file` 500s the whole box. The
+  // vhost builder independently gates its directives on luaSourceAvailable(), so
+  // even this degrades (rules off, sites UP) rather than taking the edge down.
+  if (!luaSourceAvailable()) {
+    throw new Error(
+      `OpenResty Lua is unavailable in this build — not on disk (LUA_SRC_DIR=${LUA_SRC_DIR}) ` +
+        `and not in EMBEDDED_LUA. The edge scripts (rules_guard.lua/site_logger.lua) can't be ` +
+        `installed. Run \`bun run embed:lua\` in packages/adapters to regenerate lua-embedded.ts.`,
+    );
+  }
   await executor.mkdir(OPENRESTY_LUA_DIR);
 
   for (const name of LUA_SCRIPTS) {
@@ -395,6 +543,22 @@ export async function deployLuaScripts(
   await executor.exec(
     `grep -q 'lua_shared_dict request_data ' ${paths.confPath} || ` +
       `sed -i '/http *{/a \\    lua_shared_dict request_data 128m;' ${paths.confPath}`,
+  );
+
+  // Shared dict: per-route rules cache (32 MB). Written reload-free by mgmt_api
+  // `POST /rules`, read by rules_guard.lua in the access phase. The DB
+  // (route_rule table) is the source of truth.
+  await executor.exec(
+    `grep -q 'lua_shared_dict rules ' ${paths.confPath} || ` +
+      `sed -i '/http *{/a \\    lua_shared_dict rules 32m;' ${paths.confPath}`,
+  );
+
+  // Separate dict for rate-limit COUNTERS (16 MB). Kept apart from `rules` so a
+  // high-cardinality flood (a fresh key per source IP per second) can't LRU-evict
+  // the rulesets and silently disable enforcement mid-attack.
+  await executor.exec(
+    `grep -q 'lua_shared_dict rl_counters ' ${paths.confPath} || ` +
+      `sed -i '/http *{/a \\    lua_shared_dict rl_counters 16m;' ${paths.confPath}`,
   );
 
   // Lua module search path (OpenResty default + openship modules)

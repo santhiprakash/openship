@@ -63,6 +63,18 @@ export { HashingPassthrough } from "./common/sha256-stream";
 export { artifactKey, manifestKey, runPrefix } from "./common/key-builder";
 export { buildManifest, validateManifest } from "./common/manifest";
 
+// Single strategy-driven volume-transfer core (same/cross-daemon).
+export {
+  transferVolume,
+  resolvePlan,
+  type TransferMode,
+  type TransferCompression,
+  type TransferEndpoint,
+  type TransferOptions,
+  type TransferPlan,
+  type TransferResult,
+} from "./volume-transfer";
+
 // ─── Side-effect imports: every adapter self-registers on load ──────────────
 // DB-specific producers will land in Chunk 3 — import them ABOVE
 // "./producers/volume" so they win autodetect priority.

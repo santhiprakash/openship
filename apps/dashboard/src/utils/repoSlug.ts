@@ -6,11 +6,13 @@
 const LOCAL_PREFIX = "local:";
 const UPLOAD_PREFIX = "upload:";
 const REPO_V2_PREFIX = "repo:v2:";
+const PROJECT_PREFIX = "project:";
 
 type DecodedSlug =
   | { kind: "repo"; owner: string; repo: string; branch?: string; projectId?: string }
   | { kind: "local"; path: string }
-  | { kind: "upload"; sessionId: string };
+  | { kind: "upload"; sessionId: string }
+  | { kind: "project"; projectId: string };
 
 function encodeBase64Url(data: string): string {
   const base64 = Buffer.from(data).toString('base64');
@@ -44,6 +46,15 @@ export function encodeUploadSlug(sessionId: string): string {
 }
 
 /**
+ * Encodes an existing project id into a URL-safe slug (prefixed "project:").
+ * The deploy wizard decodes it and hydrates from the project's DB rows — used
+ * by one-click apps and any repo-less project that deploys from its saved config.
+ */
+export function encodeProjectSlug(projectId: string): string {
+  return encodeBase64Url(PROJECT_PREFIX + projectId);
+}
+
+/**
  * Decodes a slug back to either a repo, local path, or upload session
  */
 export function decodeSlug(slug: string): DecodedSlug | null {
@@ -66,6 +77,11 @@ export function decodeSlug(slug: string): DecodedSlug | null {
     if (decoded.startsWith(UPLOAD_PREFIX)) {
       const sessionId = decoded.slice(UPLOAD_PREFIX.length);
       return sessionId ? { kind: "upload", sessionId } : null;
+    }
+
+    if (decoded.startsWith(PROJECT_PREFIX)) {
+      const projectId = decoded.slice(PROJECT_PREFIX.length);
+      return projectId ? { kind: "project", projectId } : null;
     }
 
     if (decoded.startsWith(REPO_V2_PREFIX)) {

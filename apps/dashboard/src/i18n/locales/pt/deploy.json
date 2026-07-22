@@ -119,6 +119,8 @@
     "addServer": "Adicione o seu próprio servidor",
     "continue": "Continuar",
     "chooseServer": "Escolha um servidor",
+    "searchPlaceholder": "Buscar servidores…",
+    "noServersMatch": "Nenhum servidor corresponde à sua busca.",
     "requireCloudFeature": "Implantando no Openship Cloud",
     "saveDefault": "Salvar como meu padrão para todas as implantações.",
     "saveDefaultHint": "Altere depois em Configurações, ou por implantação no seletor desta página.",

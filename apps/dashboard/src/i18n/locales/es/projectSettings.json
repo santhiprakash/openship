@@ -4,6 +4,26 @@
     "save": "Guardar",
     "cancel": "Cancelar"
   },
+  "appSettings": {
+    "modeApp": "Configuración de la aplicación",
+    "modeDeployment": "Despliegue",
+    "saveChanges": "Guardar cambios",
+    "saving": "Guardando…",
+    "saved": "Ajustes guardados",
+    "saveHint": "Guarda para almacenar estos cambios; se aplicarán la próxima vez que se despliegue la app.",
+    "applyNow": "Aplicar ahora",
+    "applying": "Aplicando…",
+    "applied": "Aplicando cambios",
+    "restartNote": "Aplica ahora para reiniciar la app con los nuevos ajustes, o se aplicarán en el próximo despliegue.",
+    "redeployNote": "Aplicar estos cambios recrea la app; es posible que después tengas que volver a autenticarte en su panel o CLI.",
+    "advancedShow": "Mostrar avanzado",
+    "advancedHide": "Ocultar avanzado",
+    "secretSet": "Configurado — deja en blanco para mantener el valor actual",
+    "loadError": "No se pudieron cargar los ajustes de la app.",
+    "saveFailed": "No se pudieron guardar los ajustes.",
+    "applyFailed": "No se pudieron aplicar los cambios.",
+    "unmanaged": "Esta app aún no tiene ajustes configurables."
+  },
   "advanced": {
     "projectInfo": {
       "title": "Información del proyecto",

@@ -11,6 +11,7 @@
     "auto-deploy",
     "rollback-redeploy",
     "logs-monitoring",
+    "jobs",
     "backups-restore",
     "custom-servers",
     "teams-members",

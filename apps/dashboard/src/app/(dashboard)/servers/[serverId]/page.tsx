@@ -1,36 +1,39 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
-  CheckCircle2,
-  XCircle,
   Loader2,
   Settings2,
   Trash2,
   LayoutGrid,
   Blocks,
+  Boxes,
   Terminal,
   MoreHorizontal,
   Server,
+  ServerCrash,
   Globe,
   User,
   KeyRound,
   Shield,
   Network,
+  GitBranch,
 } from "lucide-react";
 import { ApiError, getApiErrorMessage, isAbortError, systemApi } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
 import { useModal } from "@/context/ModalContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { PageContainer } from "@/components/ui/PageContainer";
+import { ResourceNotFound } from "@/components/resource-not-found";
 import { useSetupStream } from "@/hooks/useSetupStream";
 import { useMonitorStream } from "@/hooks/useMonitorStream";
-import type { ServerInfo, ComponentStatus, SetupComponentProgress, SetupLogEvent } from "@/lib/api/system";
+import type { ServerInfo, ComponentStatus, SetupComponentProgress, SetupLogEvent, EdgeStatus } from "@/lib/api/system";
 import { ServerForm } from "../_components/server-form";
 import { OverviewTab } from "./_components/overview-tab";
 import { ComponentsTab } from "./_components/components-tab";
+import { ServerModuleUpdates } from "./_components/module-updates";
 import { TerminalTab } from "./_components/terminal-tab";
 import {
   ConnectionBanner,
@@ -40,9 +43,15 @@ import {
 
 import { RateLimitSettings } from "./_components/rate-limit-settings";
 import { PortForwardingCard } from "./_components/port-forwarding-card";
+import { ServerGitHubConnect } from "@/components/github/ServerGitHubConnect";
+import { ServerMigrationWizard } from "@/components/migration/ServerMigrationWizard";
 import { usePlatform } from "@/context/PlatformContext";
+import * as CountryFlags from "country-flag-icons/react/3x2";
 
-type Tab = "overview" | "components" | "security" | "ports" | "terminal";
+/** ISO-3166-1 alpha-2 → flag component (same source the servers list uses). */
+const FLAGS = CountryFlags as Record<string, React.ComponentType<{ title?: string; className?: string }>>;
+
+type Tab = "overview" | "components" | "github" | "security" | "ports" | "terminal";
 type ManualActionMode = "remove" | null;
 
 interface TabDef {
@@ -57,12 +66,38 @@ interface TabDef {
 const TABS: TabDef[] = [
   { key: "overview",   icon: LayoutGrid },
   { key: "components", icon: Blocks },
+  { key: "github",     icon: GitBranch },
   { key: "security",   icon: Shield },
   // Port forwarding is meaningful only in desktop mode (the orchestrator IS
   // the user's machine); hidden elsewhere.
   { key: "ports",      icon: Network, desktopOnly: true },
   { key: "terminal",   icon: Terminal },
 ];
+
+/** Render the port-80/443 occupants carried in an edge-conflict prompt's details. */
+function renderEdgeOccupants(details?: Record<string, unknown>) {
+  const edge = details?.edge as EdgeStatus | undefined;
+  if (!edge?.occupants?.length) return null;
+  return (
+    <div className="rounded-xl border border-border bg-muted/40 p-3 space-y-2">
+      {edge.occupants.map((o, i) => (
+        <div key={`${o.port}-${i}`} className="flex items-center gap-2 text-sm">
+          <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-warning/10 text-warning">
+            :{o.port}
+          </span>
+          <span className="text-foreground/90 break-all flex-1">
+            {o.containerName ?? o.systemdUnit ?? o.command ?? `PID ${o.pid ?? "?"}`}
+          </span>
+          {o.proxy && (
+            <span className="text-[11px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground shrink-0">
+              {o.proxy}
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function ServerDetailPage({
   params,
@@ -88,6 +123,16 @@ export default function ServerDetailPage({
   const [checkErrorKind, setCheckErrorKind] = useState<ConnectionErrorKind | null>(null);
   const [installLogs, setInstallLogs] = useState<SetupLogEvent[]>([]);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  // Deep-link support: honour ?tab= once on mount (e.g. ?tab=github to land
+  // straight on the GitHub connect tab).
+  const tabParamApplied = useRef(false);
+  useEffect(() => {
+    if (tabParamApplied.current) return;
+    tabParamApplied.current = true;
+    const tab = searchParams.get("tab");
+    if (tab && TABS.some((td) => td.key === tab)) setActiveTab(tab as Tab);
+  }, [searchParams]);
+  const [showMigrate, setShowMigrate] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
   const [activeActionComponent, setActiveActionComponent] = useState<string | null>(null);
@@ -123,6 +168,61 @@ export default function ServerDetailPage({
   });
 
   const monitor = useMonitorStream(serverId || null, activeTab === "overview");
+
+  // Mid-install prompt (e.g. OpenResty edge takeover) — the SAME generic prompt
+  // modal the deploy pipeline uses. Surfaced only when an install hits a
+  // port-80/443 conflict; answering it resumes the install.
+  const promptModalRef = useRef<string | null>(null);
+  const pendingPrompt = setupStream.pendingPrompt;
+  const respondToPrompt = setupStream.respondToPrompt;
+  useEffect(() => {
+    if (!pendingPrompt) {
+      promptModalRef.current = null;
+      return;
+    }
+    if (promptModalRef.current === pendingPrompt.promptId) return;
+    promptModalRef.current = pendingPrompt.promptId;
+
+    const modalId = showModal({
+      title: pendingPrompt.title,
+      icon: "warning",
+      width: "100%",
+      maxWidth: "34rem",
+      customContent: (
+        <div className="p-6 space-y-5">
+          <div className="space-y-2">
+            <h3 className="text-lg font-semibold text-foreground">{pendingPrompt.title}</h3>
+            <p className="text-sm leading-relaxed text-muted-foreground">{pendingPrompt.message}</p>
+          </div>
+          {renderEdgeOccupants(pendingPrompt.details)}
+          <div className="flex items-center justify-end gap-3 pt-2">
+            {pendingPrompt.actions.map((action) => {
+              const variant = (action.variant || "secondary") as "secondary" | "danger" | "primary";
+              const styles =
+                variant === "danger"
+                  ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  : variant === "primary"
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                    : "border border-border bg-muted text-foreground hover:bg-muted/80";
+              return (
+                <button
+                  key={action.id}
+                  type="button"
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${styles}`}
+                  onClick={() => {
+                    hideModal(modalId);
+                    void respondToPrompt(action.id);
+                  }}
+                >
+                  {action.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ),
+    });
+  }, [pendingPrompt, respondToPrompt, showModal, hideModal]);
 
   useEffect(() => {
     params.then((p) => setServerId(p.serverId));
@@ -404,20 +504,22 @@ export default function ServerDetailPage({
   if (!server) {
     return (
       <PageContainer>
-          <div className="flex items-center gap-3 mb-6">
-            <button
-              onClick={() => router.push("/servers")}
-              className="w-8 h-8 rounded-lg hover:bg-muted flex items-center justify-center transition-colors"
-            >
-              <ArrowLeft className="size-4 text-muted-foreground rtl:rotate-180" />
-            </button>
-            <h1 className="text-2xl font-medium text-foreground/80">
-              {t.servers.detail.serverNotFound}
-            </h1>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            {interpolate(t.servers.detail.noServerConfigured, { id: serverId })}
-          </p>
+        <div className="flex min-h-[60vh] items-center justify-center p-6">
+          <ResourceNotFound
+            icon={<ServerCrash className="size-7" />}
+            title={t.servers.detail.serverNotFound}
+            description={t.servers.detail.serverNotFoundDesc}
+            detail={serverId}
+            detailCopyLabel={t.chrome.notFound.copyId}
+            actions={[
+              {
+                label: t.servers.setup.goToServers,
+                icon: <ArrowLeft className="size-4 rtl:rotate-180" />,
+                onClick: () => router.push("/servers"),
+              },
+            ]}
+          />
+        </div>
       </PageContainer>
     );
   }
@@ -497,22 +599,39 @@ export default function ServerDetailPage({
                 {server.name || server.sshHost}
               </h1>
               {allHealthy ? (
-                <div className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-medium rounded-full">
-                  <CheckCircle2 className="size-3" />
+                <span className="shrink-0 inline-flex items-center gap-1.5 text-success text-xs font-medium">
+                  <span className="size-1.5 rounded-full bg-success" />
                   {t.servers.detail.healthy}
-                </div>
+                </span>
               ) : components.length > 0 ? (
-                <div className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs font-medium rounded-full">
-                  <XCircle className="size-3" />
+                <span className="shrink-0 inline-flex items-center gap-1.5 text-warning text-xs font-medium">
+                  <span className="size-1.5 rounded-full bg-warning" />
                   {t.servers.detail.issues}
-                </div>
+                </span>
               ) : null}
             </div>
-            <p className="text-sm text-muted-foreground/70 mt-1 font-mono">
-              {server.sshUser ?? "root"}@{server.sshHost}:{server.sshPort ?? 22}
-            </p>
+            {/* Connection line: user@host + country flag. The SSH port lives in
+                the right-hand connection card, not glued to the IP. */}
+            <div className="mt-1 flex items-center gap-2">
+              <p className="text-sm text-muted-foreground/70 font-mono">
+                {server.sshUser ?? "root"}@{server.sshHost}
+              </p>
+              {(() => {
+                const Flag = server.country ? FLAGS[server.country] : undefined;
+                return Flag ? (
+                  <Flag title={server.country ?? undefined} className="h-3.5 w-auto rounded-[2px] ring-1 ring-border/50" />
+                ) : null;
+              })()}
+            </div>
           </div>
           <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setShowMigrate(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-muted/50 text-foreground text-sm font-medium rounded-xl hover:bg-muted transition-colors"
+            >
+              <Boxes className="size-4" />
+              {t.migration.entry.action}
+            </button>
             <button
               onClick={() => router.push(`/servers/${serverId}?edit=true`)}
               className="inline-flex items-center gap-2 px-4 py-2 bg-muted/50 text-foreground text-sm font-medium rounded-xl hover:bg-muted transition-colors"
@@ -539,7 +658,7 @@ export default function ServerDetailPage({
                         setShowMenu(false);
                         handleDelete();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-500/5 transition-colors"
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-danger hover:bg-danger-bg transition-colors"
                     >
                       <Trash2 className="size-3.5" />
                       {t.servers.detail.removeServer}
@@ -604,6 +723,8 @@ export default function ServerDetailPage({
             )}
 
             {activeTab === "components" && (
+              <>
+              {serverId && <ServerModuleUpdates serverId={serverId} />}
               <ComponentsTab
                 components={components}
                 checking={checking}
@@ -627,10 +748,17 @@ export default function ServerDetailPage({
                   setManualActionFinalStatus(null);
                 }}
               />
+              </>
+            )}
+
+            {activeTab === "github" && serverId && (
+              <ServerGitHubConnect serverId={serverId} variant="card" />
             )}
 
             {activeTab === "security" && (
-              <RateLimitSettings serverId={serverId} />
+              <div className="space-y-6">
+                <RateLimitSettings serverId={serverId} />
+              </div>
             )}
 
             {activeTab === "ports" && isDesktop && serverId && (
@@ -673,6 +801,17 @@ export default function ServerDetailPage({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 rounded-lg bg-muted/60 flex items-center justify-center">
+                      <Network className="size-4 text-muted-foreground" />
+                    </div>
+                    <span className="text-sm text-muted-foreground">{t.servers.detail.port}</span>
+                  </div>
+                  <span className="text-sm font-medium text-foreground font-mono">
+                    {server.sshPort ?? 22}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-muted/60 flex items-center justify-center">
                       <User className="size-4 text-muted-foreground" />
                     </div>
                     <span className="text-sm text-muted-foreground">{t.servers.detail.user}</span>
@@ -700,6 +839,12 @@ export default function ServerDetailPage({
 
           </div>
         </div>
+
+        <ServerMigrationWizard
+          isOpen={showMigrate}
+          onClose={() => setShowMigrate(false)}
+          serverId={serverId}
+        />
     </PageContainer>
   );
 }

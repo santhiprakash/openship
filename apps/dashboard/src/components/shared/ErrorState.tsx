@@ -59,8 +59,8 @@ export default function ErrorState({ error = {}, type = "repo-not-found" }: Erro
     },
     "access-denied": {
       icon: Lock,
-      iconColor: "text-orange-500",
-      iconBg: "bg-orange-500/10",
+      iconColor: "text-warning",
+      iconBg: "bg-warning-bg",
       title: w.accessDenied.title,
       subtitle: w.accessDenied.subtitle,
       hints: w.accessDenied.hints,

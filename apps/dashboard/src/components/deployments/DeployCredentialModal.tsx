@@ -9,13 +9,20 @@
  * between `CloneStrategyModalContent` (preemptive gate) and
  * `CloneCredentialMissingModal` (post-failure recovery).
  *
- * Three options are surfaced, conditionally:
+ * Up to four options are surfaced, conditionally:
  *
  *   1. Install Openship App on {owner}             — recommended, short-lived
  *                                                    repo-scoped tokens. Works
  *                                                    for buildStrategy=local
  *                                                    AND remote. Shown when
  *                                                    installUrl is available.
+ *
+ *   1b. Connect GitHub on this server              — per-server credential
+ *                                                    (device login / PAT / SSH).
+ *                                                    The server clones itself,
+ *                                                    no cloud round-trip. Shown
+ *                                                    for a self-hosted server
+ *                                                    target (serverId present).
  *
  *   2. Add / Use a project clone token             — fine-grained PAT. Works
  *                                                    for both buildStrategy
@@ -57,7 +64,7 @@
 
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Github, HardDrive, Key, Loader2, ExternalLink } from "lucide-react";
+import { Github, HardDrive, Key, Loader2, ExternalLink, Server } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
 import { openAuthWindow } from "@/utils/authWindow";
 import { settingsApi, type CloneStrategyPreference } from "@/lib/api";
@@ -67,6 +74,7 @@ export type DeployCredentialChoice =
   | { kind: "install-app" }
   | { kind: "add-token" }
   | { kind: "build-local" }
+  | { kind: "connect-server-github" }
   | { kind: "dismiss" };
 
 export interface DeployCredentialModalProps {
@@ -85,6 +93,10 @@ export interface DeployCredentialModalProps {
   installUrl: string | null;
   /** Project id — required for the "add a project clone token" option. */
   projectId: string | null;
+  /** Target server id (self-hosted server deploys only). When present, the
+   *  "Connect GitHub on this server" option is offered — it deep-links to the
+   *  server's Security tab where the per-server credential is configured. */
+  serverId?: string | null;
   /** Where is the deploy headed? Affects copy. */
   deployTarget: "local" | "server" | "cloud" | null | undefined;
   /** Current build strategy. We hide "Build locally" when it's already
@@ -120,6 +132,7 @@ export function DeployCredentialModal({
   owner,
   installUrl,
   projectId,
+  serverId,
   deployTarget,
   buildStrategy,
   selfHosted,
@@ -183,6 +196,15 @@ export function DeployCredentialModal({
     onChoice({ kind: "add-token" });
   }, [projectId, onChoice, persistPreferenceForGate, router, showToast]);
 
+  const handleConnectServerGithub = useCallback(() => {
+    if (!serverId) return;
+    setBusy("connect-server-github");
+    // The parent opens the shared per-server connect model (same component as
+    // the server's GitHub tab) and owns the post-connect retry, so the flow is
+    // identical everywhere it appears.
+    onChoice({ kind: "connect-server-github" });
+  }, [serverId, onChoice]);
+
   const handleBuildLocal = useCallback(async () => {
     setBusy("build-local");
     await persistPreferenceForGate("local");
@@ -197,6 +219,10 @@ export function DeployCredentialModal({
   // ── Visibility gates ───────────────────────────────────────────────
   const targetIsRemote = deployTarget === "server" || deployTarget === "cloud";
   const showInstallApp = !!installUrl;
+  // Per-server GitHub — self-hosted server target only (cloud is App-token
+  // only). Deep-links to the server's own credential setup, the tightest path
+  // when the App/cloud round-trip isn't wanted.
+  const showConnectServer = deployTarget === "server" && !!serverId;
   const showAddToken = !!projectId;
   // "Build locally" makes no sense for a local target (clone is already
   // local) or when buildStrategy is already local. Otherwise show it for
@@ -263,6 +289,36 @@ export function DeployCredentialModal({
                 <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
                   Short-lived, repo-scoped tokens minted on every deploy. No
                   long-lived PATs to manage, safe to ship to remote workers.
+                </p>
+              </div>
+              <ExternalLink className="size-4 text-muted-foreground shrink-0" />
+            </div>
+          </button>
+        )}
+
+        {showConnectServer && (
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={handleConnectServerGithub}
+            className="w-full rounded-xl border border-border/50 bg-card p-4 text-start transition-colors hover:border-primary/40 hover:bg-primary/[0.03] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-500/10 text-sky-500">
+                {busy === "connect-server-github" ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Server className="size-4" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-foreground">
+                  Connect GitHub on this server
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+                  Authenticate this server to GitHub directly — device login, a
+                  token, or an SSH key. The server clones on its own, no cloud
+                  round-trip. Best when you deploy here often.
                 </p>
               </div>
               <ExternalLink className="size-4 text-muted-foreground shrink-0" />

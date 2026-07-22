@@ -32,6 +32,22 @@ export type ComposeServiceSpec = {
   advanced?: ComposeAdvanced;
 };
 
+/**
+ * One public route on a service: a single container port published under its
+ * own domain. A service with N public ports (e.g. Convex's API on 3210 +
+ * HTTP actions on 3211) stores one entry per port. Entry[0] mirrors the scalar
+ * `exposed`/`exposedPort`/`domain`/`customDomain`/`domainType` columns (the
+ * primary route), which stay authoritative for single-route readers.
+ */
+export type ServicePublicEndpoint = {
+  port: number;
+  domainType: "free" | "custom";
+  /** Free managed subdomain label (no base domain). */
+  domain?: string;
+  /** Full custom hostname bound to this port. */
+  customDomain?: string;
+};
+
 // ─── Services ────────────────────────────────────────────────────────────────
 
 /**
@@ -111,6 +127,13 @@ export const service = pgTable("service", {
   customDomain: text("custom_domain"),
   /** Whether the service uses a free or custom domain */
   domainType: text("domain_type").default("free"),
+  /**
+   * Additional public routes beyond the primary one held by the scalar columns
+   * above. Each entry publishes one container port under its own domain, so a
+   * service with several public ports gets one route each. Entry[0] mirrors the
+   * primary scalar routing columns. Widening needs no migration — JSONB blob.
+   */
+  publicEndpoints: jsonb("public_endpoints").$type<ServicePublicEndpoint[]>().default([]),
 
   /* ── Monorepo sub-app config (kind === "monorepo" only) ────────────── */
   /** Sub-app root directory inside the repo (e.g. "apps/web"). Null for compose. */
@@ -219,8 +242,15 @@ export const serviceDeployment = pgTable(
      * "why we DID build" side of the answer.
      */
     reasonSkipped: text("reason_skipped"),
-    /** Resolved image reference (pulled or built) */
+    /** Resolved image reference (pulled or built) — the TAG, e.g. `n8nio/n8n:latest`. */
     imageRef: text("image_ref"),
+    /**
+     * Content-addressable digest of the image actually running, e.g.
+     * `n8nio/n8n@sha256:…`. Captured from the container's RepoDigests at deploy.
+     * This is the anchor that lets the update scanner detect a moved mutable tag
+     * (`:latest`/`:1`) — `imageRef` alone can't, since the tag string is unchanged.
+     */
+    imageDigest: text("image_digest"),
     /** Mapped host port */
     hostPort: integer("host_port"),
     /** Internal network IP */

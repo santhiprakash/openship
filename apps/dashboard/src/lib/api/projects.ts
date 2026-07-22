@@ -1,6 +1,6 @@
 import { api } from "./client";
 import type { PrepareComposeService, PrepareProjectResponse } from "./deploy";
-import type { RoutingConfig } from "@repo/core";
+import type { RoutingConfig, RouteRuleSpec } from "@repo/core";
 import { endpoints } from "./endpoints";
 
 /* ------------------------------------------------------------------ */
@@ -43,6 +43,24 @@ export interface ScanProjectResponse {
   productionPaths: PrepareProjectResponse["productionPaths"];
   port: PrepareProjectResponse["port"];
   services?: PrepareComposeService[];
+}
+
+/** A route_rule row as returned by the API. */
+export interface RouteRuleRow {
+  id: string;
+  projectId: string;
+  domainId: string | null;
+  pathPrefix: string | null;
+  spec: RouteRuleSpec;
+  enabled: boolean;
+}
+
+/** Body for creating / updating a route rule. */
+export interface RouteRuleInput {
+  domainId?: string | null;
+  pathPrefix?: string | null;
+  spec?: RouteRuleSpec;
+  enabled?: boolean;
 }
 
 export const projectsApi = {
@@ -249,19 +267,26 @@ export const projectsApi = {
   setOptions: (id: string | number, options: ProjectOptionsBody) =>
     api.post<any>(endpoints.projects.options(id), options),
 
-  /** Commit-drift status for the "project outdated" banner: branch HEAD vs the
-   *  active deployment's commit. */
+  /** Source-drift status for the "project outdated" banner. `mode` discriminates:
+   *  "commit" (git HEAD vs deployed sha) or "release" (newest advertised version
+   *  vs the deployed release version). */
   getCommitStatus: (id: string | number) =>
     api.get<{
       data: {
         supported: boolean;
+        mode?: "commit" | "release";
         behind?: boolean;
-        /** True when the latest commit is already building/deploying. */
+        /** True when the latest commit/version is already building/deploying. */
         latestInProgress?: boolean;
+        /* commit mode */
         branch?: string;
         latestSha?: string | null;
         latestMessage?: string | null;
         deployedSha?: string | null;
+        /* release mode */
+        latestVersion?: string | null;
+        currentVersion?: string | null;
+        pinned?: boolean;
       };
     }>(`projects/${id}/commit-status`),
 
@@ -280,13 +305,26 @@ export const projectsApi = {
   /** Clear build artifacts */
   clearBuild: (id: string | number) => api.post<any>(endpoints.projects.clearBuild(id)),
 
+  /* ── Route rules (self-hosted edge: rate-limit / ban / allow-deny) ── */
+  listRouteRules: (id: string | number) =>
+    api.get<{ rules: RouteRuleRow[] }>(endpoints.projects.routeRules(id)),
+  createRouteRule: (id: string | number, body: RouteRuleInput) =>
+    api.post<{ rule: RouteRuleRow }>(endpoints.projects.routeRules(id), body),
+  updateRouteRule: (id: string | number, ruleId: string, body: RouteRuleInput) =>
+    api.patch<{ rule: RouteRuleRow }>(endpoints.projects.routeRule(id, ruleId), body),
+  deleteRouteRule: (id: string | number, ruleId: string) =>
+    api.delete<{ success: boolean }>(endpoints.projects.routeRule(id, ruleId)),
+
   /** Create a new deployment session */
   createDeploymentSession: (id: string | number) =>
     api.post<any>(endpoints.projects.deploymentSession(id)),
 
-  /** Connect a custom domain */
-  connectDomain: (id: string | number, body: { domain: string; includeWww: boolean }) =>
-    api.post<any>(endpoints.projects.connect(id), body),
+  /** Connect a custom domain. `externalIngress` = TLS/ingress handled upstream
+   *  (Cloudflare Tunnel / LB): verify via TXT only, no certbot, plain-HTTP route. */
+  connectDomain: (
+    id: string | number,
+    body: { domain: string; includeWww: boolean; externalIngress?: boolean },
+  ) => api.post<any>(endpoints.projects.connect(id), body),
 
   /**
    * MERGE env vars (partial): upsert + delete only the named keys, leaving every

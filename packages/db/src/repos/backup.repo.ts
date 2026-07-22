@@ -199,6 +199,17 @@ export function createBackupPolicyRepo(db: Database) {
       });
     },
 
+    /** Every live policy that targets a destination — powers the destination
+     *  detail page's "used by" view (which projects/services back up here). */
+    async listByDestination(destinationId: string): Promise<BackupPolicy[]> {
+      return db.query.backupPolicy.findMany({
+        where: and(
+          eq(backupPolicy.destinationId, destinationId),
+          isNull(backupPolicy.deletedAt),
+        ),
+      });
+    },
+
     async findById(id: string): Promise<BackupPolicy | undefined> {
       return db.query.backupPolicy.findFirst({
         where: and(eq(backupPolicy.id, id), isNull(backupPolicy.deletedAt)),
@@ -402,6 +413,39 @@ export function createBackupRunRepo(db: Database) {
       return db.query.backupRun.findFirst({
         where: eq(backupRun.id, id),
       });
+    },
+
+    /** Most recent run for a policy (any status), newest first. Used by the
+     *  read-only backup-schedule view in the Jobs tab to show last-run state. */
+    async latestByPolicy(policyId: string): Promise<BackupRun | undefined> {
+      return db.query.backupRun.findFirst({
+        where: and(eq(backupRun.policyId, policyId), isNull(backupRun.deletedAt)),
+        orderBy: (t, { desc }) => [desc(t.startedAt)],
+      });
+    },
+
+    /** Storage rollup per destination for one org: bytes actually stored
+     *  (succeeded, non-deleted runs), total run count, and the most recent run
+     *  time. Powers the Backups page's per-destination size monitoring. */
+    async statsByDestination(
+      organizationId: string,
+    ): Promise<Array<{ destinationId: string | null; storedBytes: number; runCount: number; lastRunAt: Date | null }>> {
+      const rows = await db
+        .select({
+          destinationId: backupRun.destinationId,
+          storedBytes: sql<number>`coalesce(sum(case when ${backupRun.status} = 'succeeded' then ${backupRun.bytesTransferred} else 0 end), 0)`,
+          runCount: sql<number>`count(*)`,
+          lastRunAt: sql<string | null>`max(${backupRun.startedAt})`,
+        })
+        .from(backupRun)
+        .where(and(eq(backupRun.organizationId, organizationId), isNull(backupRun.deletedAt)))
+        .groupBy(backupRun.destinationId);
+      return rows.map((r) => ({
+        destinationId: r.destinationId,
+        storedBytes: Number(r.storedBytes) || 0,
+        runCount: Number(r.runCount) || 0,
+        lastRunAt: r.lastRunAt ? new Date(r.lastRunAt) : null,
+      }));
     },
 
     /** Every run for a project still in a non-terminal state. Used by the

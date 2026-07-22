@@ -5,11 +5,12 @@
  * SSL operations live in ssl.service.ts.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import { repos } from "@repo/db";
 import { NotFoundError, ForbiddenError } from "@repo/core";
 import type { LogEntry } from "@repo/adapters";
 import type { RequestContext } from "../../lib/request-context";
-import { resolveDeploymentRuntime } from "../../lib/deployment-runtime";
+import { resolveDeploymentRuntime, type DeploymentMeta } from "../../lib/deployment-runtime";
 import { assertResourceInOrg } from "../../lib/controller-helpers";
 import { collectDeploymentManifest, executeCleanup } from "../projects/project-cleanup.service";
 import { assertGitHubRepoAccess } from "../github/github-access";
@@ -115,11 +116,28 @@ export async function getDeployment(
   return dep;
 }
 
+/**
+ * Refuse a mutating action on the self-deployed control plane's deployment. Its
+ * row is an ADOPT deployment over the already-running host process (supervised
+ * by the CLI, not this pipeline) — rollback/restart/delete/pin would be
+ * meaningless or would detach the live app (clearing activeDeploymentId).
+ * Build/redeploy is already blocked in build.service (triggerDeployment).
+ */
+async function assertNotControlPlaneDeployment(dep: { projectId: string }): Promise<void> {
+  const project = await repos.project.findById(dep.projectId);
+  if (project?.appTemplateId === "openship") {
+    throw new ForbiddenError(
+      "The Openship control plane manages its own runtime — this action isn't available here. Use the CLI.",
+    );
+  }
+}
+
 export async function deleteDeployment(
   deploymentId: string,
   organizationId: string,
 ) {
   const dep = await getDeployment(deploymentId, organizationId);
+  await assertNotControlPlaneDeployment(dep);
 
   if (["queued", "building", "deploying"].includes(dep.status)) {
     throw new ForbiddenError("Cannot delete a deployment that is in progress. Cancel it first.");
@@ -155,6 +173,7 @@ export async function rollbackDeployment(
 ) {
   // Existence + org-scope check (throws if deployment isn't in this org).
   const dep = await getDeployment(deploymentId, organizationId);
+  await assertNotControlPlaneDeployment(dep);
   await rollback(deploymentId);
   // Return the post-rollback deployment row (now with any updated container id).
   return (await repos.deployment.findById(dep.id)) ?? dep;
@@ -166,6 +185,7 @@ export async function setDeploymentPin(
   pinned: boolean,
 ) {
   const dep = await getDeployment(deploymentId, organizationId);
+  await assertNotControlPlaneDeployment(dep);
   await setPin(deploymentId, pinned);
   return (await repos.deployment.findById(dep.id)) ?? dep;
 }
@@ -271,12 +291,69 @@ export async function keepDeployment(
   };
 }
 
+/**
+ * Dismiss a port-check advisory. Appends `target` (the exposed port for a
+ * single-app, or the service id for a compose service) to `meta.portCheckSkipped`
+ * so the dashboard won't re-raise that advisory after a refresh. Advisory-only —
+ * never changes deployment status.
+ */
+export async function skipPortCheck(
+  deploymentId: string,
+  organizationId: string,
+  target: number | string,
+) {
+  const dep = await getDeployment(deploymentId, organizationId);
+  const meta = (dep.meta as Record<string, unknown> | null) ?? {};
+  const existing = Array.isArray(meta.portCheckSkipped)
+    ? (meta.portCheckSkipped as (number | string)[])
+    : [];
+  if (!existing.includes(target)) {
+    await repos.deployment.updateStatus(deploymentId, dep.status, {
+      meta: { ...meta, portCheckSkipped: [...existing, target] },
+    });
+  }
+  return { success: true };
+}
+
+/**
+ * Tail the control plane's own process log (tee'd by `openship up` to
+ * OPENSHIP_INSTANCE_LOG). The self-app is an adopt deployment with no container,
+ * so its "runtime logs" ARE the running instance's stdout/stderr. Empty when the
+ * env var is unset (e.g. foreground `up` with no tee, or non-CLI deploy).
+ */
+function readInstanceLog(tail?: number): LogEntry[] {
+  const path = process.env.OPENSHIP_INSTANCE_LOG;
+  if (!path || !existsSync(path)) return [];
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return [];
+  }
+  const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
+  const n = tail && tail > 0 ? tail : 500;
+  return lines.slice(-n).map((message) => {
+    const level: LogEntry["level"] = /error|exception|fatal/i.test(message)
+      ? "error"
+      : /warn/i.test(message)
+        ? "warn"
+        : "info";
+    return { timestamp: "", message, level };
+  });
+}
+
 export async function getDeploymentLogs(
   deploymentId: string,
   organizationId: string,
   tail?: number,
 ) {
   const dep = await getDeployment(deploymentId, organizationId);
+
+  // Self-app adopt deployment: no container — its logs are the control plane's
+  // own process output (OPENSHIP_INSTANCE_LOG), not a build session / container.
+  if ((dep.meta as DeploymentMeta | null)?.adopt) {
+    return readInstanceLog(tail);
+  }
 
   // Keyed by deploymentId — findBuildSession filters by the build-session id and
   // would always miss here (returning [] then falling back to container logs).
@@ -298,6 +375,7 @@ export async function restartDeployment(
   organizationId: string,
 ) {
   const dep = await getDeployment(deploymentId, organizationId);
+  await assertNotControlPlaneDeployment(dep);
 
   if (dep.status !== "ready") {
     throw new ForbiddenError("Can only restart a running deployment");

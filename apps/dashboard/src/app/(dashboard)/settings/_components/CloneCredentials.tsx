@@ -199,7 +199,7 @@ export function CloneCredentials() {
                     type="button"
                     onClick={handleClear}
                     disabled={saving}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-1.5 text-[12px] font-medium text-red-600 transition-colors hover:bg-red-500/20 dark:text-red-400 disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-danger-bg px-3 py-1.5 text-[12px] font-medium text-danger transition-colors hover:bg-danger-bg disabled:opacity-50"
                   >
                     <Trash2 className="size-3" />
                     {t.settings.cloneCredentials.clear}

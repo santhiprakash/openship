@@ -28,6 +28,40 @@ export function slugify(text: string): string {
     .slice(0, 100);
 }
 
+/**
+ * Canonical stored form of a custom hostname: trimmed, lowercased, scheme
+ * stripped, trailing slash removed. The SINGLE normalizer shared by service
+ * route storage (@repo/db) and the domain service (@repo/api), so a hostname
+ * written in one place always matches a lookup in another — a mismatch here
+ * mints duplicate domain rows and registers a bogus vhost.
+ */
+export function normalizeCustomHostname(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+}
+
+/**
+ * True when `host` (already run through normalizeCustomHostname) is a plausible
+ * public DNS hostname. Rejects the shapes a bare hostname must never contain —
+ * embedded path / port / scheme leftovers / whitespace, IPv4 literals,
+ * localhost, and single-label names. The same shape gate the single-app custom
+ * domain flow enforces, so service custom domains can't store a bogus host that
+ * later becomes an unservable vhost.
+ */
+export function isValidCustomHostname(host: string): boolean {
+  if (!host || host.length > 253) return false;
+  if (host === "localhost") return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false; // IPv4 literal
+  if (/[\s/:@\\?#]/.test(host)) return false; // path / port / scheme / userinfo
+  if (host.startsWith(".") || host.endsWith(".") || host.includes("..")) return false;
+  const labels = host.split(".");
+  if (labels.length < 2) return false; // must be multi-label (has a dot)
+  return labels.every((label) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i.test(label));
+}
+
 /** Generate a prefixed unique ID (e.g. "proj_abc123...") */
 export function generateId(prefix?: string): string {
   const bytes = new Uint8Array(12);

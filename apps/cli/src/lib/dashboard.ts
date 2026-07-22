@@ -36,7 +36,47 @@ export interface DashboardBundle {
 export async function ensureDashboard(
   opts: { tag?: string; onProgress?: (received: number, total: number) => void } = {},
 ): Promise<DashboardBundle> {
-  const tag = opts.tag ?? (await resolveLatestTag());
+  // Local override for testing an UNPUBLISHED build (dev / pre-release / CI):
+  // point at a locally-built Next standalone dir instead of downloading from
+  // GitHub. Expects the monorepo-rooted layout <dir>/apps/dashboard/server.js
+  // (i.e. apps/dashboard/.next/standalone). No checksum — it's your own build.
+  const override = process.env.OPENSHIP_DASHBOARD_DIR?.trim();
+  if (override) {
+    const cwd = join(override, "apps", "dashboard");
+    const entry = join(cwd, "server.js");
+    if (!existsSync(entry)) {
+      throw new Error(
+        `OPENSHIP_DASHBOARD_DIR=${override} but ${entry} is missing — build the dashboard standalone first (see docs).`,
+      );
+    }
+    return { tag: "local", entry, cwd };
+  }
+
+  const requested = opts.tag ?? (await resolveLatestTag());
+  try {
+    return await fetchBundle(requested, opts.onProgress);
+  } catch (err) {
+    // A pinned tag whose dashboard asset isn't published — a dev/source build
+    // whose version was never released, or a release that shipped no dashboard —
+    // falls back to the latest published release instead of hard-404ing. Only
+    // triggers when a tag was explicitly requested (default already = latest).
+    if (opts.tag && /\b404\b/.test((err as Error)?.message ?? "")) {
+      const latest = await resolveLatestTag();
+      if (latest && latest !== requested) {
+        return await fetchBundle(latest, opts.onProgress);
+      }
+    }
+    throw err;
+  }
+}
+
+/** Download + verify + extract the dashboard bundle for a specific tag (or reuse
+ *  the cached copy). Throws with an actionable message on a missing asset,
+ *  missing sidecar, or checksum mismatch. */
+async function fetchBundle(
+  tag: string,
+  onProgress?: (received: number, total: number) => void,
+): Promise<DashboardBundle> {
   const dir = join(DASHBOARD_CACHE, tag);
   const cwd = join(dir, "apps", "dashboard");
   const entry = join(cwd, "server.js");
@@ -53,7 +93,7 @@ export async function ensureDashboard(
 
   const name = assetName(tag);
   const tarball = join(dir, name);
-  const { sha256 } = await downloadToFile(assetUrl(tag, name), tarball, opts.onProgress);
+  const { sha256 } = await downloadToFile(assetUrl(tag, name), tarball, onProgress);
 
   const expected = await expectedSha256(tag, name);
   if (!expected) {

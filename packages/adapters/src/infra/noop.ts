@@ -5,7 +5,7 @@
  * or SSL certificates. This provider silently accepts all calls.
  */
 
-import type { RouteConfig, SslResult } from "../types";
+import type { ManualCert, RouteConfig, SslResult } from "../types";
 import type { RoutingProvider, SslProvider } from "./types";
 
 export class NoopInfraProvider implements RoutingProvider, SslProvider {
@@ -26,6 +26,11 @@ export class NoopInfraProvider implements RoutingProvider, SslProvider {
   }
 
   async verifyCert(domain: string): Promise<SslResult> {
+    return { domain, expiresAt: "", issuer: "none", verified: false };
+  }
+
+  async installCert(domain: string, _cert: ManualCert): Promise<SslResult> {
+    // Desktop/dev - no reverse proxy to serve the cert from.
     return { domain, expiresAt: "", issuer: "none", verified: false };
   }
 }

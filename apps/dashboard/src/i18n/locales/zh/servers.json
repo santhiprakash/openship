@@ -1,4 +1,35 @@
 {
+  "github": {
+    "title": "GitHub 访问",
+    "desc": "此服务器如何向 GitHub 认证以克隆私有仓库。",
+    "loadFailed": "无法加载 GitHub 状态",
+    "connected": "已连接",
+    "modeToken": "令牌",
+    "modeSshKey": "SSH 密钥",
+    "modeDeployKey": "部署密钥",
+    "connectDevice": "连接 GitHub",
+    "deviceHint": "打开链接并输入此代码：",
+    "open": "打开 GitHub",
+    "connecting": "等待授权…",
+    "connectFailed": "连接失败",
+    "connectedToast": "已为此服务器连接 GitHub",
+    "patPlaceholder": "ghp_…（粘贴令牌）",
+    "patHint": "为此服务器加密存储的个人访问令牌。",
+    "save": "保存",
+    "savedToast": "已保存",
+    "saveFailed": "保存失败",
+    "tokenAs": "认证身份",
+    "sshGenerate": "生成 SSH 密钥",
+    "sshAddHint": "将此密钥添加到你的 GitHub 账户，然后部署：",
+    "openGithubKeys": "打开 GitHub SSH 密钥",
+    "copy": "复制",
+    "deployKeyUse": "使用按仓库部署密钥",
+    "deployKeyHint": "Openship 会在首次部署时为每个仓库注册一个只读部署密钥。",
+    "deployKeyActive": "部署密钥模式已启用 — 密钥将在首次部署时创建。",
+    "deployKeysRegistered": "个部署密钥已注册",
+    "disconnect": "断开连接",
+    "disconnectedToast": "已断开 GitHub"
+  },
   "list": {
     "title": "服务器",
     "subtitle": "管理你的部署服务器和基础设施",
@@ -19,7 +50,14 @@
     "serverOverview": "服务器概览",
     "totalServers": "服务器总数",
     "connectedLabel": "已连接",
-    "errors": "错误"
+    "errors": "错误",
+    "checking": "检查中",
+    "online": "在线",
+    "offline": "离线",
+    "authKey": "密钥",
+    "authPassword": "密码",
+    "projects": "项目",
+    "regions": "区域"
   },
   "form": {
     "sshConnection": "SSH 连接",
@@ -68,6 +106,7 @@
     "tabs": {
       "overview": "概览",
       "components": "组件",
+      "github": "Git",
       "security": "安全",
       "ports": "端口",
       "terminal": "终端"
@@ -77,6 +116,7 @@
     "edit": "编辑",
     "removeServer": "移除服务器",
     "serverNotFound": "未找到服务器",
+    "serverNotFoundDesc": "此服务器不在你的工作区中，或者你没有访问权限。它可能已被删除。",
     "noServerConfigured": "没有配置 id 为“{id}”的服务器。",
     "editServer": "编辑服务器",
     "editSubtitle": "更新 {name} 的连接详情",
@@ -267,6 +307,8 @@
     "autoDesc": "自动检查要求并安装所有内容。一键完成——Openship 会处理 Docker、OpenResty 和 Git。",
     "stepTitle": "逐步设置",
     "stepDesc": "逐个查看每个组件并选择要安装的内容。在继续之前查看详细状态。",
+    "skipTitle": "暂时跳过",
+    "skipDesc": "添加服务器但不安装任何组件 — 仅监控其运行状况。你可以稍后在服务器页面运行安装。",
     "connecting": "正在连接服务器……",
     "runningChecks": "正在通过 SSH 运行系统健康检查",
     "connectionFailed": "连接失败",
@@ -318,5 +360,17 @@
     "serverCheck": "服务器检查",
     "security": "安全",
     "portForwarding": "端口转发"
+  },
+  "tabsNav": {
+    "servers": "服务器",
+    "cluster": "集群",
+    "networking": "网络"
+  },
+  "comingSoon": {
+    "badge": "即将推出",
+    "clusterTitle": "集群",
+    "clusterBody": "将服务器编入集群，让 Openship 在它们之间调度和均衡部署。",
+    "networkingTitle": "网络",
+    "networkingBody": "跨服务器的私有链路、网状路由和防火墙规则 —— 统一管理。"
   }
 }

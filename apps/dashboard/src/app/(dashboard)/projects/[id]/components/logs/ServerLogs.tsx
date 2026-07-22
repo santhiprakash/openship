@@ -261,18 +261,18 @@ export const ServerLogs: React.FC<ServerLogsProps> = ({
   }, [logsStrings]);
 
   const getStatusColor = useCallback((code: number) => {
-    if (code >= 200 && code < 300) return 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10';
-    if (code >= 300 && code < 400) return 'text-blue-600 dark:text-blue-400 bg-blue-500/10';
-    if (code >= 400 && code < 500) return 'text-amber-600 dark:text-amber-400 bg-amber-500/10';
-    return 'text-red-600 dark:text-red-400 bg-red-500/10';
+    if (code >= 200 && code < 300) return 'text-success bg-success-bg';
+    if (code >= 300 && code < 400) return 'text-info bg-info-bg';
+    if (code >= 400 && code < 500) return 'text-warning bg-warning-bg';
+    return 'text-danger bg-danger-bg';
   }, []);
 
   const getMethodColor = useCallback((method: string) => {
     switch (method) {
-      case 'GET': return 'text-blue-600 dark:text-blue-400 bg-blue-500/10';
-      case 'POST': return 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10';
-      case 'PUT': return 'text-amber-600 dark:text-amber-400 bg-amber-500/10';
-      case 'DELETE': return 'text-red-600 dark:text-red-400 bg-red-500/10';
+      case 'GET': return 'text-info bg-info-bg';
+      case 'POST': return 'text-success bg-success-bg';
+      case 'PUT': return 'text-warning bg-warning-bg';
+      case 'DELETE': return 'text-danger bg-danger-bg';
       default: return 'text-muted-foreground bg-muted/60';
     }
   }, []);
@@ -330,7 +330,7 @@ export const ServerLogs: React.FC<ServerLogsProps> = ({
           )}
           {!error && (
             <div className="flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <div className="w-1.5 h-1.5 rounded-full bg-success-solid animate-pulse" />
               <span className="text-xs text-muted-foreground">{t.projectDetail.logs.server.live}</span>
             </div>
           )}

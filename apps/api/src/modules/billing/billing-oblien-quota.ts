@@ -12,11 +12,15 @@
  *     drift between writers and readers.
  *   - The camelCase param shape (`quotaLimit`) vs the snake_case
  *     persisted shape (`quota_limit`) is mapped exactly once.
- *   - Suspend / activate stay in lockstep with the local
- *     `subscription_status` column — webhook callers don't have to
- *     remember to flip both.
  *   - When Oblien renames a field or adds a new param, only this
  *     file touches the SDK.
+ *
+ * We only ever *configure* Oblien (setQuota + resource_limits) and *read* it
+ * back. We do NOT suspend/activate namespaces or otherwise manage resource
+ * actions — Oblien owns that: the credit quota's `onOverdraftAction`
+ * (`stop_workspaces`) stops workspaces when the overdraft is crossed, and the
+ * resource pools block create/start at capacity. Reinventing it here would
+ * just race Oblien.
  *
  * Runs server-side under CLOUD_MODE — `getOblienClient()` refuses to
  * instantiate elsewhere. Every helper short-circuits gracefully when
@@ -29,6 +33,11 @@ import { repos } from "@repo/db";
 import type { NamespaceUsageUnits } from "@repo/adapters";
 
 import { getOblienClient } from "../../lib/openship-cloud";
+import {
+  toOblienCredits,
+  fromOblienCredits,
+  OBLIEN_QUOTA_MAX_MILLI,
+} from "./billing-credit-units";
 
 /**
  * Canonical credits service code per Oblien team. All quota reads
@@ -36,8 +45,39 @@ import { getOblienClient } from "../../lib/openship-cloud";
  */
 const SERVICE_CODE = "compute";
 
-const ACTIVE_STATUS = "active";
-const EXHAUSTED_STATUS = "credit_exhausted";
+/** Default threshold percentages at which Oblien fires `namespace.quota.threshold`. */
+const QUOTA_NOTIFICATION_THRESHOLDS = [80, 95];
+/** Credits of overdraft allowed past the ceiling before enforcement bites. */
+const QUOTA_OVERDRAFT = 0;
+
+// The milli↔Oblien-credit boundary lives in a pure, dependency-free module so
+// it's unit-testable in isolation. Re-exported since the webhook controller
+// reaches `fromOblienCredits` through this wrapper.
+export { toOblienCredits, fromOblienCredits };
+
+/**
+ * Re-apply a tier's per-workspace resource ceilings (max_workspaces / vcpus /
+ * ram / disk) to the namespace. Enterprise (`oblienLimits === null`) is a
+ * no-op — those ceilings are hand-tuned per contract and must not be clobbered.
+ * Shared by `setQuotaForTier`/`resetAndRegrant` so a plan change/renewal picks
+ * up new caps. `namespaces.update` is idempotent server-side.
+ */
+async function applyResourceLimits(
+  client: ReturnType<typeof getOblienClient>,
+  namespace: string,
+  tier: (typeof PLANS)[PlanTierId],
+): Promise<void> {
+  if (!tier.oblienLimits) return;
+  try {
+    await client.namespaces.update(namespace, {
+      resource_limits: tier.oblienLimits,
+    });
+  } catch (err) {
+    throw new Error(
+      `Failed to apply ${tier.id} resource_limits to namespace ${namespace}: ${safeErrorMessage(err)}`,
+    );
+  }
+}
 
 /**
  * Local mirror of the relevant fields off `NamespaceQuota` (Oblien
@@ -75,23 +115,6 @@ interface OblienDetailsResponse {
 }
 
 /**
- * Map an arbitrary string column value to a known PlanTierId. Falls
- * back to `free` for unknown values — same conservative posture as
- * billing-hardcap.resolvePlanTier.
- */
-function resolvePlanTier(planTierId: string | null | undefined): PlanTierId {
-  switch (planTierId) {
-    case "free":
-    case "pro":
-    case "team":
-    case "enterprise":
-      return planTierId;
-    default:
-      return "free";
-  }
-}
-
-/**
  * Read the org's compute quota from Oblien. Returns null when the
  * org hasn't been onboarded to a namespace yet (no `oblien_namespace`
  * column), or when Oblien has no quota row for the compute service
@@ -118,8 +141,11 @@ export async function getQuotaState(orgId: string): Promise<QuotaState | null> {
   const row = quotas.find((q) => q?.service === SERVICE_CODE);
   if (!row) return null;
 
-  const quotaLimit = typeof row.quota_limit === "number" ? row.quota_limit : null;
-  const quotaUsed = typeof row.quota_used === "number" ? row.quota_used : 0;
+  // Oblien reports whole credits; openship state is milli-credits (×1000).
+  const quotaLimit =
+    typeof row.quota_limit === "number" ? fromOblienCredits(row.quota_limit) : null;
+  const quotaUsed =
+    typeof row.quota_used === "number" ? fromOblienCredits(row.quota_used) : 0;
   const quotaRemaining =
     quotaLimit === null ? Number.POSITIVE_INFINITY : Math.max(0, quotaLimit - quotaUsed);
 
@@ -138,13 +164,9 @@ export async function getQuotaState(orgId: string): Promise<QuotaState | null> {
  * No-op when the namespace isn't provisioned yet — callers can run
  * this on plan change without needing to gate on namespace state.
  *
- * Side effect: if the org is currently `credit_exhausted` (Oblien
- * suspended the namespace when usage crossed the prior, lower cap),
- * this implicitly lifts the gate via `restoreFromExhausted`. That
- * keeps tier-upgrade / pack-purchase / renewal call sites from
- * having to remember a separate restore call — the new allowance
- * is immediately usable. `restoreFromExhausted` is idempotent, so
- * orgs already `active` pay only the column read.
+ * A larger ceiling automatically lifts Oblien's overdraft `stop_workspaces`
+ * gate the moment `quota_used < quota_limit` again — no explicit activate
+ * needed on our side (Oblien owns that action).
  */
 export async function setQuotaForTier(orgId: string, tierId: PlanTierId): Promise<void> {
   const org = await repos.organization.findById(orgId);
@@ -161,8 +183,10 @@ export async function setQuotaForTier(orgId: string, tierId: PlanTierId): Promis
     await client.namespaces.setQuota({
       namespace: org.oblienNamespace,
       service: SERVICE_CODE,
-      quotaLimit: tier.monthlyCredits,
+      quotaLimit: toOblienCredits(tier.monthlyCredits),
+      overdraft: QUOTA_OVERDRAFT,
       onOverdraftAction: "stop_workspaces",
+      notificationThresholds: QUOTA_NOTIFICATION_THRESHOLDS,
     });
   } catch (err) {
     throw new Error(
@@ -170,11 +194,9 @@ export async function setQuotaForTier(orgId: string, tierId: PlanTierId): Promis
     );
   }
 
-  // Lift the credit-exhausted gate if it was engaged. Idempotent —
-  // restoreFromExhausted short-circuits when status is already active.
-  if (org.subscriptionStatus === EXHAUSTED_STATUS) {
-    await restoreFromExhausted(orgId);
-  }
+  // Re-assert the tier's per-workspace resource ceilings alongside the credit
+  // quota so a plan change bumps both in lockstep.
+  await applyResourceLimits(client, org.oblienNamespace, tier);
 }
 
 /**
@@ -188,11 +210,8 @@ export async function setQuotaForTier(orgId: string, tierId: PlanTierId): Promis
  * side. If no row exists yet (fresh namespace), delta becomes the
  * starting ceiling.
  *
- * No-op when the namespace isn't provisioned yet.
- *
- * Side effect: lifts the `credit_exhausted` gate when engaged — see
- * setQuotaForTier for the rationale; pack purchases on a suspended
- * namespace should restore access alongside the new ceiling.
+ * No-op when the namespace isn't provisioned yet. A topup that lifts the
+ * ceiling above usage clears Oblien's overdraft gate automatically.
  */
 export async function addQuota(orgId: string, deltaCredits: number): Promise<void> {
   if (deltaCredits <= 0) return;
@@ -210,25 +229,27 @@ export async function addQuota(orgId: string, deltaCredits: number): Promise<voi
   // "keep them unlimited" — short-circuit.
   if (state && state.quotaLimit === null) return;
 
+  // Both current + delta are milli-credits. Clamp the sum to Oblien's ceiling
+  // (in milli) BEFORE converting so a stack of top-ups grants up to the cap
+  // and succeeds rather than tripping toOblienCredits' over-ceiling throw
+  // (which would 5xx the Stripe webhook into an infinite retry).
   const current = state?.quotaLimit ?? 0;
-  const next = current + deltaCredits;
+  const nextMilli = Math.min(current + deltaCredits, OBLIEN_QUOTA_MAX_MILLI);
 
   const client = getOblienClient();
   try {
     await client.namespaces.setQuota({
       namespace: org.oblienNamespace,
       service: SERVICE_CODE,
-      quotaLimit: next,
+      quotaLimit: toOblienCredits(nextMilli),
+      overdraft: QUOTA_OVERDRAFT,
       onOverdraftAction: "stop_workspaces",
+      notificationThresholds: QUOTA_NOTIFICATION_THRESHOLDS,
     });
   } catch (err) {
     throw new Error(
       `Failed to add ${deltaCredits} to Oblien quota on namespace ${org.oblienNamespace} for org ${orgId}: ${safeErrorMessage(err)}`,
     );
-  }
-
-  if (org.subscriptionStatus === EXHAUSTED_STATUS) {
-    await restoreFromExhausted(orgId);
   }
 }
 
@@ -241,12 +262,8 @@ export async function addQuota(orgId: string, deltaCredits: number): Promise<voi
  * Skips enterprise (monthlyCredits === null) — those orgs are reset
  * out-of-band via admin grant.
  *
- * No-op when the namespace isn't provisioned yet.
- *
- * Side effect: lifts the `credit_exhausted` gate when engaged. A
- * fresh period with a fresh ceiling should restore access; without
- * this the cron / Stripe invoice.paid handler would have to remember
- * a separate restore call.
+ * No-op when the namespace isn't provisioned yet. The fresh (zeroed) usage
+ * against the re-applied ceiling clears any Oblien overdraft gate on its own.
  */
 export async function resetAndRegrant(orgId: string, tierId: PlanTierId): Promise<void> {
   const org = await repos.organization.findById(orgId);
@@ -278,8 +295,10 @@ export async function resetAndRegrant(orgId: string, tierId: PlanTierId): Promis
     await client.namespaces.setQuota({
       namespace: org.oblienNamespace,
       service: SERVICE_CODE,
-      quotaLimit: tier.monthlyCredits,
+      quotaLimit: toOblienCredits(tier.monthlyCredits),
+      overdraft: QUOTA_OVERDRAFT,
       onOverdraftAction: "stop_workspaces",
+      notificationThresholds: QUOTA_NOTIFICATION_THRESHOLDS,
     });
   } catch (err) {
     throw new Error(
@@ -287,91 +306,8 @@ export async function resetAndRegrant(orgId: string, tierId: PlanTierId): Promis
     );
   }
 
-  if (org.subscriptionStatus === EXHAUSTED_STATUS) {
-    await restoreFromExhausted(orgId);
-  }
-}
-
-/**
- * Suspend the namespace and mark the org `credit_exhausted` — the
- * end of the `credits.depleted` webhook path. Idempotent: short-
- * circuits when the org is already exhausted (Oblien's suspend is
- * server-side idempotent too, but we still gate locally so a noisy
- * webhook doesn't fan out duplicate state transitions).
- *
- * Unlike `billing-hardcap.handleCreditExhausted`, this helper is the
- * Oblien-quota-only path: no audit row, no notification dispatch.
- * The webhook handler owns those side-effects so it can attach the
- * actual Oblien event id to the audit record. Keep this surface
- * narrow to "flip Oblien + flip column"; the orchestration lives in
- * the handler.
- *
- * No-op when the namespace isn't provisioned yet (still flips the
- * local column so middleware gating engages).
- */
-export async function suspendIfExhausted(orgId: string): Promise<void> {
-  const org = await repos.organization.findById(orgId);
-  if (!org) {
-    throw new Error(`suspendIfExhausted: organization ${orgId} not found`);
-  }
-  if (org.subscriptionStatus === EXHAUSTED_STATUS) return;
-
-  if (org.oblienNamespace) {
-    const client = getOblienClient();
-    try {
-      await client.namespaces.suspend(org.oblienNamespace);
-    } catch (err) {
-      throw new Error(
-        `Failed to suspend Oblien namespace ${org.oblienNamespace} for org ${orgId}: ${safeErrorMessage(err)}`,
-      );
-    }
-  }
-
-  await repos.organization.setSubscriptionStatus(orgId, EXHAUSTED_STATUS);
-}
-
-/**
- * Restore an exhausted org back to active — called after a topup or
- * tier change once we know the balance is positive again. Idempotent:
- * short-circuits when the org is already active. Activates the
- * Oblien namespace (Oblien's activate is itself idempotent) and
- * flips the local column.
- *
- * Pairs with `suspendIfExhausted` — symmetric narrow surface, owns
- * "flip Oblien + flip column" and nothing else.  Resource_limits
- * restoration on plan change lives in `billing-hardcap.restoreOblienLimits`
- * — this helper only manages the suspended ↔ active toggle, not the
- * per-tier ceilings.
- *
- * The `_tier` argument exists so the call site reads naturally
- * alongside addQuota / setQuotaForTier on the topup path; we use
- * resolvePlanTier on the org's column rather than trusting the
- * argument blind (defends against stale tier ids in flight).
- */
-export async function restoreFromExhausted(orgId: string): Promise<void> {
-  const org = await repos.organization.findById(orgId);
-  if (!org) {
-    throw new Error(`restoreFromExhausted: organization ${orgId} not found`);
-  }
-  if (org.subscriptionStatus === ACTIVE_STATUS) return;
-
-  if (org.oblienNamespace) {
-    const client = getOblienClient();
-    try {
-      await client.namespaces.activate(org.oblienNamespace);
-    } catch (err) {
-      throw new Error(
-        `Failed to activate Oblien namespace ${org.oblienNamespace} for org ${orgId}: ${safeErrorMessage(err)}`,
-      );
-    }
-  }
-
-  // Pin to a known tier id in case a future code path wants to log
-  // the post-restore tier on the same row — keeps the resolution
-  // local rather than re-deriving in callers.
-  void resolvePlanTier(org.planTierId);
-
-  await repos.organization.setSubscriptionStatus(orgId, ACTIVE_STATUS);
+  // Renewal also refreshes resource ceilings (picks up an interim plan bump).
+  await applyResourceLimits(client, org.oblienNamespace, tier);
 }
 
 /* ------------------------------------------------------------------ */

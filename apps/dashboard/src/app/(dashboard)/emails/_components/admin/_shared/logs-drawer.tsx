@@ -120,7 +120,7 @@ export function LogsDrawer({
           className="flex-1 overflow-auto bg-muted/20 font-mono text-[11.5px] leading-relaxed text-foreground/90 px-5 py-3"
         >
           {error ? (
-            <p className="text-red-600 dark:text-red-400">{error}</p>
+            <p className="text-danger">{error}</p>
           ) : loading && !logs ? (
             <p className="text-muted-foreground">{t.emailsAdmin.shared.loadingLogs}</p>
           ) : logs && logs.lines.length === 0 ? (

@@ -118,7 +118,7 @@ export default function SwitchBackPage() {
       <div className="flex min-h-dvh items-center justify-center bg-background p-6">
         <div className="max-w-md space-y-4 text-center">
           <div className="mx-auto size-12 rounded-2xl bg-muted/40 flex items-center justify-center">
-            <CheckCircle2 className="size-6 text-emerald-500" />
+            <CheckCircle2 className="size-6 text-success" />
           </div>
           <div>
             <h1 className="text-xl font-semibold text-foreground">
@@ -145,7 +145,7 @@ export default function SwitchBackPage() {
       <div className="flex min-h-dvh items-center justify-center bg-background p-6">
         <div className="w-full max-w-lg space-y-5 rounded-2xl border border-border/50 bg-card p-6">
           <div className="flex items-start gap-3">
-            <CheckCircle2 className="size-6 text-emerald-500 shrink-0 mt-0.5" />
+            <CheckCircle2 className="size-6 text-success shrink-0 mt-0.5" />
             <div>
               <h1 className="text-xl font-semibold text-foreground">
                 {t.settings.switchBack.resultTitle}
@@ -161,8 +161,8 @@ export default function SwitchBackPage() {
           </div>
 
           {result.strippedEncryptedFields.length > 0 && (
-            <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.04] p-4 space-y-2">
-              <div className="flex items-center gap-2 text-amber-500">
+            <div className="rounded-xl border border-warning-border bg-warning-bg p-4 space-y-2">
+              <div className="flex items-center gap-2 text-warning">
                 <AlertTriangle className="size-4" />
                 <p className="text-sm font-medium">{t.settings.switchBack.relinkTitle}</p>
               </div>
@@ -212,7 +212,7 @@ export default function SwitchBackPage() {
 
         <div className="rounded-2xl border border-border/50 bg-card p-6 space-y-5">
           <div className="flex items-start gap-3">
-            <div className="size-10 rounded-xl bg-amber-500/15 text-amber-500 flex items-center justify-center shrink-0">
+            <div className="size-10 rounded-xl bg-warning-bg text-warning flex items-center justify-center shrink-0">
               <RotateCcw className="size-5" />
             </div>
             <div>

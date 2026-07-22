@@ -9,6 +9,21 @@ export interface DomainVerifyResult {
   sslStatus?: string;
 }
 
+/** One DNS record to add. `host` = zone-relative label (`@`/`app`); `name` =
+ *  the always-correct FQDN (what verification resolves) — show it as the
+ *  fallback when the provider rejects the relative host (multi-part TLDs). */
+export interface DomainDnsRecord {
+  type: "CNAME" | "A" | "TXT";
+  host: string;
+  name: string;
+  value: string;
+}
+
+export interface DomainDnsRecords {
+  mode: "cloud" | "selfhosted" | "external";
+  records: DomainDnsRecord[];
+}
+
 export interface DomainSslVerifyResult {
   domain: string;
   sslStatus: string;
@@ -20,12 +35,7 @@ export interface DomainSslVerifyResult {
 export const domainsApi = {
   /** Get DNS records preview for a hostname (no domain creation needed). */
   previewRecords: (hostname: string) =>
-    api.post<{
-      data: {
-        mode: "cloud" | "selfhosted";
-        records: Array<{ type: "CNAME" | "A" | "TXT"; host: string; value: string }>;
-      };
-    }>(endpoints.domains.preview, { hostname }),
+    api.post<{ data: DomainDnsRecords }>(endpoints.domains.preview, { hostname }),
 
   /**
    * Re-run DNS verification for a domain.
@@ -47,6 +57,11 @@ export const domainsApi = {
     }
   },
 
+  /** Fetch the DNS records for an EXISTING (e.g. pending) domain so the user can
+   *  re-see exactly what to add at any time — not only right after connect. */
+  records: (domainId: string) =>
+    api.get<{ data: DomainDnsRecords }>(endpoints.domains.records(domainId)),
+
   /**
    * Recheck SSL: read-only verification that the Let's Encrypt cert is actually
    * issued + valid on the serving host. No certbot / rate-limit cost. Recovers a
@@ -54,6 +69,14 @@ export const domainsApi = {
    */
   verifySsl: (domainId: string) =>
     api.post<{ data: DomainSslVerifyResult }>(endpoints.domains.verifySsl(domainId)),
+
+  /**
+   * Install an operator-supplied certificate (bring-your-own / Cloudflare
+   * Origin CA). Serves TLS from the uploaded cert and disables certbot for this
+   * domain — the way to get origin TLS behind an external edge (Full-strict).
+   */
+  uploadCertificate: (domainId: string, body: { certPem: string; keyPem: string }) =>
+    api.post<{ data: DomainSslVerifyResult }>(endpoints.domains.certificate(domainId), body),
 
   /** Make this domain the project's primary (canonical) hostname. Unsets any
    *  prior primary; exactly one row stays primary per project. */

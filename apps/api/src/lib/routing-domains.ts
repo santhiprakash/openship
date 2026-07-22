@@ -1,13 +1,15 @@
 import { repos, type Domain, type Project, type Service } from "@repo/db";
 import type { RoutedDomainInput, SslProvider, SslResult } from "@repo/adapters";
-import { SYSTEM, resolveServiceHostnameLabel } from "@repo/core";
+import { SYSTEM, ConflictError, resolveServiceHostnameLabel, normalizeCustomHostname } from "@repo/core";
 import { env } from "../config/env";
-import { resolveServicePort, serviceKind } from "./deployable-service";
+import { serviceKind } from "./deployable-service";
+import { resolveServicePublicEndpoints } from "./public-endpoints";
 import { resolveSslPatch } from "./domain-ssl";
+import { generateToken } from "./domain-token";
 
 export interface PlannedRouteDomain {
   hostname: string;
-  tls: true;
+  tls: boolean;
   provisionSsl: boolean;
   isCloud: boolean;
   targetPort?: number;
@@ -99,14 +101,23 @@ export function buildProjectRouteDomains(opts: {
     seen.add(normalized);
 
     const managed = resolveManagedHostname(normalized);
+    const domainRow = domainByHostname.get(normalized);
     const isVerified = managed.isManaged
       ? true
-      : route.verified ?? domainByHostname.get(normalized)?.verified ?? false;
+      : route.verified ?? domainRow?.verified ?? false;
+    // Externally-managed ingress (Cloudflare Tunnel / LB): TLS terminates
+    // upstream and DNS points at the user's edge, so serve a plain-HTTP route
+    // (tls:false) and never run certbot for this host.
+    const external = !!domainRow?.externalIngress;
+    // Operator-supplied cert (BYO / Cloudflare Full-strict): serve TLS from the
+    // uploaded cert and never run certbot, even behind an external edge.
+    const manualSsl = !!domainRow?.manualSsl;
 
     planned.push({
       hostname: normalized,
-      tls: true,
-      provisionSsl: usesCertbotSsl(runtimeName) && !managed.isManaged && !route.skipSsl && isVerified,
+      tls: !external || manualSsl,
+      provisionSsl:
+        usesCertbotSsl(runtimeName) && !managed.isManaged && !route.skipSsl && !external && !manualSsl && isVerified,
       isCloud: managed.isManaged,
       ...(route.destination?.targetPort !== undefined
         ? { targetPort: route.destination.targetPort }
@@ -184,44 +195,117 @@ export function buildProjectRouteDomains(opts: {
   return planned;
 }
 
+export function buildServiceRouteDomains(opts: {
+  project: Project;
+  service: Service;
+  runtimeName: string;
+  usesManagedRouting: boolean;
+  /** The project's domain rows keyed by hostname. Drives per-host SSL gating —
+   *  same as the single-app path in add(): an external-ingress row serves plain
+   *  HTTP (tls:false, no certbot), a manual-SSL row serves the uploaded cert,
+   *  and certbot provisioning only fires for a VERIFIED custom domain. Omit on
+   *  the edit/delete reconcile path, which registers routes but provisions no
+   *  SSL — the SSL step runs on the deploy path, which always supplies it. */
+  domainByHostname?: Map<string, Domain>;
+}): PlannedRouteDomain[] {
+  const { project, service, runtimeName, usesManagedRouting } = opts;
+  if (!service.exposed) return [];
+
+  // One route per public endpoint (a multi-port service — e.g. Convex's API
+  // 3210 + HTTP actions 3211 — gets one hostname each). Falls back to the
+  // single primary route synthesized from the scalar columns for pre-migration
+  // / single-route services. See resolveServicePublicEndpoints.
+  const endpoints = resolveServicePublicEndpoints(service);
+  const planned: PlannedRouteDomain[] = [];
+  const seen = new Set<string>();
+
+  for (const endpoint of endpoints) {
+    if (endpoint.port === undefined) continue;
+
+    // Monorepo sub-apps always get a namespaced hostname (`<project>-<app>`).
+    // Compose services keep the "frontend"/"web"/"app" → bare-project-label
+    // shortcut (see defaultServiceHostnameLabel). Each endpoint's own free slug
+    // overrides that default, so secondary ports get distinct hostnames.
+    const hostname = endpoint.domainType === "custom"
+      ? (endpoint.customDomain ? normalizeCustomHostname(endpoint.customDomain) : null)
+      : usesManagedRouting
+        ? `${resolveServiceHostnameLabel(project.slug ?? project.name, service.name, endpoint.domain, serviceKind(service))}.${getRoutingBaseDomain()}`
+        : null;
+
+    if (!hostname) continue;
+    const normalized = hostname.toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+
+    const managed = resolveManagedHostname(hostname);
+    const domainRow = opts.domainByHostname?.get(normalized);
+    const external = !!domainRow?.externalIngress;
+    const manualSsl = !!domainRow?.manualSsl;
+    // Only certbot a custom domain that has passed DNS verification — mirrors
+    // the single-app add() gate. A managed (free) host needs no challenge; a
+    // still-pending custom host would only burn a Let's Encrypt failed attempt.
+    // When the domain map isn't supplied (edit/delete reconcile, which doesn't
+    // provision SSL), this stays false and no cert work is attempted.
+    const isVerified = managed.isManaged ? true : (domainRow?.verified ?? false);
+    planned.push({
+      hostname,
+      tls: !external || manualSsl,
+      provisionSsl:
+        usesCertbotSsl(runtimeName) && endpoint.domainType === "custom" && !external && !manualSsl && isVerified,
+      isCloud: managed.isManaged,
+      targetPort: endpoint.port,
+      domainType: endpoint.domainType,
+      managedSubdomain: managed.subdomain,
+      serviceId: service.id,
+      isPrimary: false,
+      createIfMissing: true,
+    });
+  }
+
+  return planned;
+}
+
+/**
+ * The custom hostnames a service CONFIGURES, independent of enabled/exposed.
+ * Drives the derived domain-row lifecycle: a row is orphaned only when its
+ * hostname leaves the service's config (cleared / renamed / switched to free),
+ * NOT when routing is merely paused by unexposing — so a verified domain
+ * survives an expose toggle. Lowercased + de-duped.
+ */
+export function serviceCustomHostnames(service: Service): string[] {
+  const hosts = new Set<string>();
+  const add = (raw?: string | null) => {
+    if (!raw) return;
+    const hostname = normalizeCustomHostname(raw);
+    if (hostname) hosts.add(hostname);
+  };
+  // Read the raw config, NOT resolveServicePublicEndpoints — that gates on
+  // `exposed` (returns [] when paused), which would make an unexpose look like
+  // a de-configuration and wrongly orphan the row. Multi-route config wins when
+  // present; otherwise the scalar columns.
+  if (service.publicEndpoints && service.publicEndpoints.length > 0) {
+    for (const endpoint of service.publicEndpoints) {
+      if (endpoint.domainType === "custom") add(endpoint.customDomain);
+    }
+  } else if (service.domainType === "custom") {
+    add(service.customDomain);
+  }
+  return [...hosts];
+}
+
+/**
+ * Back-compat single-route accessor: the service's PRIMARY public route (or
+ * null). Callers that only touch the primary domain keep using this; the deploy
+ * loop and edit reconcile use buildServiceRouteDomains for the full set.
+ */
 export function buildServiceRouteDomain(opts: {
   project: Project;
   service: Service;
   runtimeName: string;
   usesManagedRouting: boolean;
+  domainByHostname?: Map<string, Domain>;
 }): PlannedRouteDomain | null {
-  const { project, service, runtimeName, usesManagedRouting } = opts;
-  if (!service.exposed) return null;
-
-  // Use the canonical port resolver so we honor `ports[]` too - not just
-  // `exposedPort`.
-  const resolvedPort = resolveServicePort(service);
-  const targetPort = resolvedPort ?? undefined;
-
-  // Monorepo sub-apps always get a namespaced hostname (`<project>-<app>`).
-  // Compose services keep the "frontend"/"web"/"app" → bare-project-label
-  // shortcut. See defaultServiceHostnameLabel for why.
-  const hostname = service.domainType === "custom"
-    ? service.customDomain?.trim().toLowerCase()
-    : usesManagedRouting
-      ? `${resolveServiceHostnameLabel(project.slug ?? project.name, service.name, service.domain, serviceKind(service))}.${getRoutingBaseDomain()}`
-      : null;
-
-  if (!hostname) return null;
-
-  const managed = resolveManagedHostname(hostname);
-  return {
-    hostname,
-    tls: true,
-    provisionSsl: usesCertbotSsl(runtimeName) && service.domainType === "custom",
-    isCloud: managed.isManaged,
-    targetPort: Number.isFinite(targetPort) ? targetPort : undefined,
-    domainType: service.domainType === "custom" ? "custom" : "free",
-    managedSubdomain: managed.subdomain,
-    serviceId: service.id,
-    isPrimary: false,
-    createIfMissing: true,
-  };
+  return buildServiceRouteDomains(opts)[0] ?? null;
 }
 
 export function createTrackedSslProvider(
@@ -245,6 +329,7 @@ export function createTrackedSslProvider(
     provisionCert: async (hostname: string) => persist(hostname, await ssl.provisionCert(hostname)),
     renewCert: async (hostname: string) => persist(hostname, await ssl.renewCert(hostname)),
     verifyCert: async (hostname: string) => persist(hostname, await ssl.verifyCert(hostname)),
+    installCert: async (hostname, cert) => persist(hostname, await ssl.installCert(hostname, cert)),
   };
 }
 
@@ -255,6 +340,21 @@ export async function ensureRouteDomainRecord(opts: {
 }): Promise<Domain | null> {
   const { projectId, route, domainByHostname } = opts;
   const key = route.hostname.toLowerCase();
+
+  // Cross-project hijack guard. A hostname is globally unique and owned by ONE
+  // project. The service EDIT path already refuses a foreign hostname
+  // (ensurePendingServiceDomain), but the DEPLOY path minted/overwrote routes via
+  // findOrCreate's global lookup — which returned another project's row unchanged,
+  // letting project B overwrite project A's vhost (and serve A's domain on A's
+  // cert). Refuse loudly here, before any patch or create, so neither the update
+  // nor the create path can claim a hostname this project doesn't own.
+  const owner = await repos.domain.findByHostname(route.hostname);
+  if (owner && owner.projectId !== projectId) {
+    throw new ConflictError(
+      `Hostname ${route.hostname} is routed by another project and cannot be claimed here.`,
+    );
+  }
+
   const existing = domainByHostname.get(key);
   // Primary (DB isPrimary) is owned by explicit setPrimary — the deploy must not
   // re-derive it from endpoint order; only a new domain may claim it, when none exists.
@@ -271,11 +371,18 @@ export async function ensureRouteDomainRecord(opts: {
     if ((existing.targetPath ?? null) !== expectedTargetPath) patch.targetPath = expectedTargetPath;
     if ((existing.serviceId ?? null) !== expectedServiceId) patch.serviceId = expectedServiceId;
     // isPrimary intentionally NOT patched — preserve the user's stored selection.
-    if (!existing.verified) {
-      patch.verified = true;
-      patch.verifiedAt = new Date();
+    // Custom domains must pass the DNS challenge — the deploy must NOT force
+    // them verified/active (that's the bug that left service routes stuck with
+    // no Verify option). Only host-managed (free / *.opsh.io) routes, which
+    // need no challenge, auto-activate here.
+    const isCustom = expectedDomainType === "custom";
+    if (!isCustom) {
+      if (!existing.verified) {
+        patch.verified = true;
+        patch.verifiedAt = new Date();
+      }
+      if (existing.status !== "active") patch.status = "active";
     }
-    if (existing.status !== "active") patch.status = "active";
 
     if (Object.keys(patch).length > 0) {
       await repos.domain.update(existing.id, patch);
@@ -291,6 +398,9 @@ export async function ensureRouteDomainRecord(opts: {
     return null;
   }
 
+  // A custom domain minted at deploy time (no prior add) starts PENDING with a
+  // challenge token so the Verify pipe can run; host-managed routes go active.
+  const isNewCustom = route.domainType === "custom";
   const created = await repos.domain.findOrCreate({
     projectId,
     serviceId: route.serviceId,
@@ -301,9 +411,10 @@ export async function ensureRouteDomainRecord(opts: {
     isPrimary: hasExistingPrimary
       ? false
       : (route.isPrimary ?? (!route.serviceId && domainByHostname.size === 0)),
-    status: "active",
-    verified: true,
-    verifiedAt: new Date(),
+    status: isNewCustom ? "pending" : "active",
+    verified: !isNewCustom,
+    verifiedAt: isNewCustom ? null : new Date(),
+    verificationToken: isNewCustom ? generateToken(route.hostname) : undefined,
   });
   domainByHostname.set(key, created);
   return created;

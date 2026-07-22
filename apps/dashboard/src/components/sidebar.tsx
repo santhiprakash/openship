@@ -15,11 +15,13 @@ import {
   Loader2,
   Moon,
   Sun,
+  SunMoon,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   Server,
   Mail,
+  Clock,
   DatabaseBackup,
   Building2,
   ChevronsUpDown,
@@ -63,8 +65,7 @@ const sidebarOrgClient = (authClient as unknown as {
   organization: {
     list: () => Promise<{ data?: SidebarOrg[] }>;
     setActive: (opts: { organizationId: string }) => Promise<{ error?: { message?: string } }>;
-    getFullOrganization: () => Promise<{ data?: { id: string } | null }>;
-    listMembers: () => Promise<{ data?: { members?: SidebarMember[] } }>;
+    getFullOrganization: (opts?: { organizationId: string }) => Promise<{ data?: { id: string; members?: SidebarMember[] } | null }>;
   };
 }).organization;
 
@@ -72,6 +73,8 @@ interface NavItem {
   key: string;
   href: string;
   icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  /** Nested items shown indented beneath this one (e.g. Apps under Projects). */
+  children?: NavItem[];
 }
 
 interface NavSection {
@@ -80,16 +83,17 @@ interface NavSection {
 }
 
 const MAIN_ITEMS: NavItem[] = [
-  { key: "home",         href: "/",             icon: LayoutDashboard },
-  { key: "projects",     href: "/projects",     icon: FolderKanban },
-  { key: "deployments",  href: "/deployments",  icon: Rocket },
-  { key: "backups",      href: "/backups",      icon: DatabaseBackup },
+  { key: "home", href: "/", icon: LayoutDashboard },
+  { key: "projects", href: "/projects", icon: FolderKanban },
+  { key: "apps", href: "/apps", icon: Building2 },
+  { key: "deployments", href: "/deployments", icon: Rocket },
 ];
 
 /** Build nav sections dynamically */
 function getNavSections(isSaaS: boolean, selfHosted: boolean): NavSection[] {
   const settingsItems: NavItem[] = [
-    { key: "settings",   href: "/settings",   icon: Settings },
+    { key: "backups", href: "/backups", icon: DatabaseBackup },
+    { key: "settings", href: "/settings", icon: Settings },
   ];
   if (isSaaS) {
     settingsItems.push({ key: "billing", href: "/billing", icon: CreditCard });
@@ -99,6 +103,7 @@ function getNavSections(isSaaS: boolean, selfHosted: boolean): NavSection[] {
   if (selfHosted) {
     infraItems.push({ key: "servers", href: "/servers", icon: Server });
     infraItems.push({ key: "emails", href: "/emails", icon: Mail });
+    infraItems.push({ key: "jobs", href: "/jobs", icon: Clock });
   }
   // infraItems.push(
   //   { key: "monitoring", href: "/monitoring", icon: Activity },
@@ -161,6 +166,7 @@ export function Sidebar() {
   const [orgs, setOrgs] = useState<SidebarOrg[]>([]);
   const [activeOrgId, setActiveOrgId] = useState<string | null>(null);
   const [activeOrgRole, setActiveOrgRole] = useState<string | null>(null);
+  const [orgRoles, setOrgRoles] = useState<Record<string, string>>({});
   const [orgsLoaded, setOrgsLoaded] = useState(false);
   const [switchingOrgId, setSwitchingOrgId] = useState<string | null>(null);
 
@@ -182,16 +188,27 @@ export function Sidebar() {
         setActiveOrgId(aid);
         setActiveOrganizationId(aid);
         setOrgsLoaded(true);
-        // Best-effort role lookup for the active org's "current user"
-        // membership. Failures (e.g. desktop / no-org modes) just leave
-        // the role chip off.
+        // Per-workspace role for EVERY row (not just the active one) so you can
+        // tell which workspaces you own. One getFullOrganization per org;
+        // failures just leave that row's chip off.
         try {
-          const mRes = await sidebarOrgClient.listMembers();
+          const entries = await Promise.all(
+            list.map(async (o) => {
+              try {
+                const full = await sidebarOrgClient.getFullOrganization({ organizationId: o.id });
+                const me = full.data?.members?.find((m) => m.userId === user?.id);
+                return [o.id, me?.role ?? null] as const;
+              } catch {
+                return [o.id, null] as const;
+              }
+            }),
+          );
           if (cancelled) return;
-          const me = mRes.data?.members?.find((m) => m.userId === user?.id);
-          setActiveOrgRole(me?.role ?? null);
+          const map = Object.fromEntries(entries.filter(([, r]) => r)) as Record<string, string>;
+          setOrgRoles(map);
+          if (aid) setActiveOrgRole(map[aid] ?? null);
         } catch {
-          /* role chip optional */
+          /* role chips optional */
         }
       } catch {
         /* org switcher hidden when fetch fails */
@@ -254,9 +271,8 @@ export function Sidebar() {
 
   return (
     <aside
-      className={`my-3 ms-3 flex shrink-0 flex-col rounded-2xl border border-border/50 bg-card transition-[width] duration-200 overflow-hidden ${
-        collapsed ? "w-[72px]" : "w-[260px]"
-      }`}
+      className={`my-3 ms-3 flex shrink-0 flex-col rounded-2xl border border-border/50 bg-card transition-[width] duration-200 overflow-hidden ${collapsed ? "w-[72px]" : "w-[260px]"
+        }`}
     >
       {/* ── Header ───────────────────────────────────────────── */}
       <div className={`app-sidebar-header flex items-center px-5 py-6 ${collapsed ? "flex-col gap-3 pb-3" : "justify-between"}`}>
@@ -268,16 +284,20 @@ export function Sidebar() {
             </span>
           )}
         </div>
-        
+
         {/* Controls */}
         <div className={`flex items-center ${collapsed ? "flex-col gap-1" : "gap-1"}`}>
           <button
             onClick={toggle}
             className="flex size-8 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
             aria-label={t.auth.toggleTheme}
+            title={t.auth.toggleTheme}
           >
-            {resolvedTheme === "dark" ? (
+            {/* Icon shows the CURRENT theme; clicking cycles light → dim → dark. */}
+            {resolvedTheme === "light" ? (
               <Sun className="size-4" />
+            ) : resolvedTheme === "dim" ? (
+              <SunMoon className="size-4" />
             ) : (
               <Moon className="size-4" />
             )}
@@ -300,48 +320,56 @@ export function Sidebar() {
       <div className="mx-3 h-px bg-border/60" />
 
       {/* ── Nav sections ────────────────────────────────────────── */}
-      <nav className="flex-1 overflow-y-auto px-3 pt-3 pb-1">
-        {navSections.map(({ section, items }, si) => (
-          <div key={section ?? si} className={si > 0 ? "mt-5" : undefined}>
-            {!collapsed && section && (
-              <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/60">
-                {sectionLabel(section)}
-              </p>
-            )}
-            {collapsed && si > 0 && <div className="my-3 mx-2 h-px bg-border/60" />}
-            <div className="space-y-1">
-              {items.map(({ key, href, icon: Icon }) => {
-                const active = isActive(href);
-                return (
-                  <Link
-                    key={key}
-                    href={href}
-                    title={collapsed ? label(key) : undefined}
-                    className={`flex items-center rounded-xl px-3 py-2.5 text-[15px] font-medium transition-colors ${
-                      collapsed ? "justify-center" : "gap-3"
-                    } ${
-                      active
-                        ? "bg-foreground/[0.07] text-foreground"
-                        : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground"
-                    }`}
-                  >
-                    <Icon className="size-[18px] shrink-0" strokeWidth={1.7} />
-                    {!collapsed && label(key)}
-                  </Link>
-                );
-              })}
+      <div className="relative flex-1 min-h-0">
+        <nav className="h-full overflow-y-auto px-3 pt-3 pb-12">
+          {navSections.map(({ section, items }, si) => (
+            <div key={section ?? si} className={si > 0 ? "mt-5" : undefined}>
+              {!collapsed && section && (
+                <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                  {sectionLabel(section)}
+                </p>
+              )}
+              {collapsed && si > 0 && <div className="my-3 mx-2 h-px bg-border/60" />}
+              <div className="space-y-1">
+                {items.map(({ key, href, icon: Icon }) => {
+                  const active = isActive(href);
+                  return (
+                    <Link
+                      key={key}
+                      href={href}
+                      title={collapsed ? label(key) : undefined}
+                      className={`flex items-center rounded-xl px-3 py-2.5 text-[15px] font-medium transition-colors ${collapsed ? "justify-center" : "gap-3"
+                        } ${active
+                          ? "bg-foreground/[0.07] text-foreground"
+                          : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground"
+                        }`}
+                    >
+                      <Icon className="size-[18px] shrink-0" strokeWidth={1.7} />
+                      {!collapsed && label(key)}
+                    </Link>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
-      </nav>
+          ))}
+        </nav>
+        {/* Fade the bottom of the scroll into the sidebar bg so the list ends
+            smoothly behind the CTA instead of cutting off hard. */}
+        {/* Fade masks nav overflow scrolling under the button. --card is a
+            white-based translucent token, so the default fades toward
+            transparent-WHITE — fine on light, but a light sheen on the mid-gray
+            dim card and invisible on the near-black dark card. Use the solid
+            card hue in dim AND dark so the ramp stays the card's own color. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-card to-card/0 dim:from-[var(--th-card-bg-solid)] dim:to-transparent dark:from-[var(--th-card-bg-solid)] dark:to-transparent" />
+      </div>
 
       {/* ── New Project ─────────────────────────────────────── */}
       <div className="px-3 pb-2">
         <Link
           href="/library"
           title={collapsed ? label("new-project") : undefined}
-          className={`relative flex items-center justify-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all overflow-hidden ${"bg-gradient-to-r from-violet-500/90 via-primary/90 to-blue-500/90 text-white shadow-sm shadow-primary/20 hover:shadow-md hover:shadow-primary/30 hover:brightness-110 dark:from-amber-400/90 dark:via-orange-500/90 dark:to-rose-500/90 dark:shadow-orange-500/20 dark:hover:shadow-orange-500/30"
-          }`}
+          className={`relative flex items-center justify-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all overflow-hidden ${"bg-gradient-to-r from-violet-500/90 via-primary/90 to-blue-500/90 text-white shadow-sm shadow-primary/20 hover:shadow-md hover:shadow-primary/30 hover:brightness-110 dark:from-amber-400/90! dark:via-orange-500/90! dark:to-rose-500/90! dark:shadow-orange-500/20 dark:hover:shadow-orange-500/30 dim:from-[hsl(86_84%_74%)]! dim:via-[hsl(82_80%_64%)]! dim:to-[hsl(74_74%_54%)]! dim:text-[#0c1206]! dim:shadow-lime-400/25 dim:hover:shadow-lime-400/40"
+            }`}
         >
           <span className="absolute inset-0 bg-[radial-gradient(circle_at_30%_50%,rgba(255,255,255,0.15),transparent_70%)]" />
           <Plus className="relative size-4" strokeWidth={2.5} />
@@ -368,9 +396,8 @@ export function Sidebar() {
             <button
               type="button"
               onClick={() => setOrgsOpen((v) => !v)}
-              className={`group flex w-full items-center rounded-xl px-2 py-2 text-start transition-colors hover:bg-foreground/[0.06] ${
-                collapsed ? "justify-center" : "gap-3"
-              }`}
+              className={`group flex w-full items-center rounded-xl px-2 py-2 text-start transition-colors hover:bg-foreground/[0.06] ${collapsed ? "justify-center" : "gap-3"
+                }`}
               aria-haspopup="dialog"
               aria-expanded={orgsOpen}
               title={collapsed ? activeOrg?.name : undefined}
@@ -400,11 +427,10 @@ export function Sidebar() {
             {/* Popover — shown to the side when collapsed, above when expanded */}
             {orgsOpen && (
               <div
-                className={`absolute z-50 overflow-hidden rounded-2xl border border-border/50 bg-popover shadow-xl shadow-black/[0.08] ${
-                  collapsed
+                className={`absolute z-50 overflow-hidden rounded-2xl border border-border/50 bg-popover shadow-xl shadow-black/[0.08] ${collapsed
                     ? "start-full bottom-0 ms-2 w-72"
                     : "start-0 end-0 bottom-full mb-2"
-                }`}
+                  }`}
               >
                 {/* Heading */}
                 <div className="px-3 pt-3 pb-2">
@@ -424,9 +450,8 @@ export function Sidebar() {
                         type="button"
                         onClick={() => handleOrgSwitch(o.id)}
                         disabled={!!switchingOrgId}
-                        className={`flex w-full items-center gap-2.5 px-3 py-2 text-start transition-colors hover:bg-foreground/[0.05] disabled:opacity-60 ${
-                          isCurrent ? "bg-foreground/[0.03]" : ""
-                        }`}
+                        className={`flex w-full items-center gap-2.5 px-3 py-2 text-start transition-colors hover:bg-foreground/[0.05] disabled:opacity-60 ${isCurrent ? "bg-foreground/[0.03]" : ""
+                          }`}
                       >
                         <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.08] text-[12px] font-semibold uppercase text-foreground">
                           {o.name?.[0] ?? <Building2 className="size-3.5" />}
@@ -435,18 +460,19 @@ export function Sidebar() {
                           <p className="truncate text-[13px] font-medium leading-tight text-foreground">
                             {o.name}
                           </p>
-                          {isCurrent && (
-                            <p className="mt-0.5 truncate text-[11px] leading-tight text-muted-foreground">
+                          <p className="mt-0.5 flex items-center gap-1.5 truncate text-[11px] leading-tight text-muted-foreground">
+                            {isCurrent && (
                               <span className="rounded-md bg-foreground/[0.06] px-1.5 py-0.5 font-medium uppercase tracking-wide text-[10px] text-muted-foreground">
                                 {t.chrome.sidebar.current}
                               </span>
-                              {activeOrgRole && (
-                                <span className="ms-1.5 capitalize text-muted-foreground/80">
-                                  {activeOrgRole}
-                                </span>
-                              )}
-                            </p>
-                          )}
+                            )}
+                            {user?.id && o.id === `org_${user.id}` && (
+                              <span className="text-muted-foreground/80">{t.chrome.sidebar.personal}</span>
+                            )}
+                            {orgRoles[o.id] && (
+                              <span className="capitalize text-muted-foreground/80">{orgRoles[o.id]}</span>
+                            )}
+                          </p>
                         </div>
                         {isCurrent && !isSwitching && (
                           <Check className="size-4 shrink-0 text-primary" />
@@ -505,9 +531,8 @@ export function Sidebar() {
              the operator can still log out. */
           <>
             <div
-              className={`flex items-center rounded-xl px-2 py-2 ${
-                collapsed ? "justify-center" : "gap-3"
-              }`}
+              className={`flex items-center rounded-xl px-2 py-2 ${collapsed ? "justify-center" : "gap-3"
+                }`}
             >
               <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-foreground/[0.08] text-sm font-semibold uppercase text-foreground">
                 {displayInitial}

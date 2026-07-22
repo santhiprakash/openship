@@ -9,6 +9,10 @@ import { useI18n } from "@/components/i18n-provider";
 
 const Header: React.FC<HeaderProps> = ({ repoData }) => {
   const { t } = useI18n();
+  // Local-sourced deploys use "local" as a sentinel owner and have no remote
+  // repo to open — only link real GitHub repos.
+  const isRemoteRepo = !!repoData.owner && repoData.owner !== "local" && !!repoData.repo;
+  const repoUrl = `https://github.com/${repoData.owner}/${repoData.repo}`;
   return (
     <div className="mb-6 relative mt-10">
       <div className="flex items-center justify-between">
@@ -21,20 +25,31 @@ const Header: React.FC<HeaderProps> = ({ repoData }) => {
           </Link>
            */}
           <div>
-            <h1 
+            <h1
               className="font-bold text-black mb-2"
               style={{ fontSize: '2.4rem', letterSpacing: '-0.5px' }}
             >
-              {repoData.owner}/{repoData.repo}
+              {isRemoteRepo ? (
+                <a
+                  href={repoUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline-offset-4 transition-colors hover:text-primary hover:underline"
+                >
+                  {repoData.owner}/{repoData.repo}
+                </a>
+              ) : (
+                <>{repoData.owner}/{repoData.repo}</>
+              )}
             </h1>
             <div className="flex items-center gap-2 text-sm">
               {repoData.private ? (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-700 ring-1 ring-amber-500/20 font-semibold text-xs">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-warning-bg text-warning ring-1 ring-warning-border font-semibold text-xs">
                   <Lock className="w-3 h-3" />
                   {t.deploy.header.private}
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 ring-1 ring-emerald-500/20 font-semibold text-xs">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-success-bg text-success ring-1 ring-success-border font-semibold text-xs">
                   <Globe className="w-3 h-3" />
                   {t.deploy.header.public}
                 </span>

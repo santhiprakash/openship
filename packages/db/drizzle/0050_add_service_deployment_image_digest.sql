@@ -1,0 +1,1 @@
+ALTER TABLE "service_deployment" ADD COLUMN "image_digest" text;

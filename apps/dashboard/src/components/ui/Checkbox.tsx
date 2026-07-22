@@ -42,7 +42,7 @@ const ICON_SIZE = {
 
 const TONE_ON = {
   primary: "bg-primary border-primary text-primary-foreground",
-  destructive: "bg-red-600 border-red-600 text-white",
+  destructive: "bg-danger-solid border-danger-solid text-white",
 } as const;
 
 /**

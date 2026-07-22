@@ -8,6 +8,10 @@ server on one of your own servers and then run it day to day — domains, mailbo
 Openship installs the whole stack (Postfix, Dovecot, anti-spam, SSL, DKIM/SPF/DMARC) over SSH and then
 gives you an admin panel so you never have to touch the box by hand.
 
+You can run more than one. Each mail server lives on its own host (one mail setup per server), and the screen
+lists them all so you pick which to manage — a single server opens straight into its admin panel, while
+several land you on a **Mail servers** list with an **Add mail server** action to provision or adopt another.
+
 <Callout title="Self-hosted only">
 This screen manages a mail server on **your own connected server** over SSH. It isn't part of Openship
 Cloud — you provision it against a server you've added under **Servers**. For a friendly walkthrough of the

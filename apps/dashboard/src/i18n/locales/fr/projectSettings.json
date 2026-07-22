@@ -4,6 +4,26 @@
     "save": "Enregistrer",
     "cancel": "Annuler"
   },
+  "appSettings": {
+    "modeApp": "Paramètres de l'application",
+    "modeDeployment": "Déploiement",
+    "saveChanges": "Enregistrer les modifications",
+    "saving": "Enregistrement…",
+    "saved": "Paramètres enregistrés",
+    "saveHint": "Enregistrez pour conserver ces modifications — elles s'appliqueront au prochain déploiement de l'application.",
+    "applyNow": "Appliquer maintenant",
+    "applying": "Application…",
+    "applied": "Application des modifications",
+    "restartNote": "Appliquez maintenant pour redémarrer l'application avec les nouveaux paramètres, sinon ils prendront effet au prochain déploiement.",
+    "redeployNote": "L'application de ces modifications recrée l'application — vous devrez peut-être ensuite vous réauthentifier sur son tableau de bord ou sa CLI.",
+    "advancedShow": "Afficher les options avancées",
+    "advancedHide": "Masquer les options avancées",
+    "secretSet": "Défini — laissez vide pour conserver la valeur actuelle",
+    "loadError": "Impossible de charger les paramètres de l'application.",
+    "saveFailed": "Impossible d'enregistrer les paramètres.",
+    "applyFailed": "Impossible d'appliquer les modifications.",
+    "unmanaged": "Cette application n'a pas encore de paramètres configurables."
+  },
   "advanced": {
     "projectInfo": {
       "title": "Informations du projet",

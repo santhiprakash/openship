@@ -19,6 +19,11 @@ export interface Project {
 
   /* ── Build configuration ────────────────────────────────── */
   framework: string;
+  /** True when this project was installed from the Apps catalog (Convex, webmail, …).
+   *  Drives the Apps-vs-Projects split; the detail UI is otherwise identical. */
+  isApp?: boolean | null;
+  /** Catalog entry this app was installed from (e.g. "convex", "mail-webmail"). */
+  appTemplateId?: string | null;
   packageManager?: string | null;
   installCommand?: string | null;
   buildCommand?: string | null;
@@ -53,6 +58,7 @@ export interface Project {
   /* ── Hosting info (enriched by API) ─────────────────────── */
   favicon?: string | null;
   deployTarget?: string | null;
+  serverId?: string | null;
   serverName?: string | null;
   /** Runtime isolation mode (bare | docker) — editable in the Runtime tab. */
   runtimeMode?: "bare" | "docker" | null;

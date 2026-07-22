@@ -52,12 +52,12 @@ export function UrlImport() {
                 placeholder="https://github.com/username/repository"
                 className={`w-full px-4 py-3 bg-background border rounded-xl text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 transition-all ${
                   error
-                    ? "border-red-500/50 focus:ring-red-500/20"
+                    ? "border-danger-border focus:ring-danger-border"
                     : "border-border/50 focus:ring-primary/20"
                 }`}
               />
               {error && (
-                <p className="text-xs text-red-500 mt-1.5">{error}</p>
+                <p className="text-xs text-danger mt-1.5">{error}</p>
               )}
             </div>
             <button

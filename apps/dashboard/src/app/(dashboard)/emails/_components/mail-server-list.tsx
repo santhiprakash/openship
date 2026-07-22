@@ -81,7 +81,7 @@ export function MailServerList({
               onClick={() => onRemove(s)}
               title={t.emails.serverList.removeFromList}
               aria-label={interpolate(t.emails.serverList.removeAria, { name: s.domain || s.name })}
-              className="me-3 flex size-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground/40 transition-colors hover:bg-red-500/10 hover:text-red-600"
+              className="me-3 flex size-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground/40 transition-colors hover:bg-danger-bg hover:text-danger"
             >
               <Trash2 className="size-4" />
             </button>
@@ -95,9 +95,9 @@ export function MailServerList({
 function StatusPill({ completed, active }: { completed: boolean; active: boolean }) {
   const { t } = useI18n();
   const s = active
-    ? { dot: "bg-amber-500", badge: "bg-amber-500/10 text-amber-600 dark:text-amber-400", label: t.emails.serverList.installing }
+    ? { dot: "bg-warning-solid", badge: "bg-warning-bg text-warning", label: t.emails.serverList.installing }
     : completed
-      ? { dot: "bg-emerald-500", badge: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400", label: t.emails.serverList.running }
+      ? { dot: "bg-success-solid", badge: "bg-success-bg text-success", label: t.emails.serverList.running }
       : { dot: "bg-muted-foreground/30", badge: "bg-muted/60 text-muted-foreground/70", label: t.emails.serverList.incomplete };
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold ${s.badge}`}>

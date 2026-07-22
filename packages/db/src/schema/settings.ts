@@ -126,6 +126,21 @@ export const instanceSettings = pgTable("instance_settings", {
    */
   migrationStartedAt: timestamp("migration_started_at"),
 
+  // ── Email / SMTP transport ──────────────────────────────────────────────────
+  //
+  // Operator-configured SMTP used for ALL instance-sent mail — password reset,
+  // email verification, team invites, and notifications. When set, this is the
+  // highest-priority source in `lib/mail.ts` (above the provisioned mail-server
+  // platform mailbox and the static env SMTP). Instance-wide, matching the auth
+  // layer's scope. The password is encrypted at rest (`lib/encryption`) and is
+  // NEVER returned to the client (masked on read). All-null = not configured.
+  smtpHost: text("smtp_host"),
+  smtpPort: integer("smtp_port"),
+  smtpUser: text("smtp_user"),
+  smtpPasswordEncrypted: text("smtp_password_encrypted"),
+  /** From header, e.g. "Openship <no-reply@example.com>". Falls back to smtpUser. */
+  smtpFrom: text("smtp_from"),
+
   // ── Timestamps ─────────────────────────────────────────────────────────────
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -199,6 +214,21 @@ export const userSettings = pgTable("user_settings", {
    *   "remote-with-token" → user accepted the trade-off, ship token to remote
    */
   cloneStrategyPreference: text("clone_strategy_preference").notNull().default("prompt"),
+
+  /**
+   * Volume-transfer strategy for migrations / server-to-server moves.
+   *   "auto"   → topology-aware (direct on same daemon, stream cross-host)
+   *   "stream" → always tar-stream (streamPath → receiveStream)
+   *   "direct" → single-helper same-daemon copy (falls back to stream cross-host)
+   *   "rsync"  → reserved; falls back to stream until delta-rsync ships
+   */
+  transferMode: text("transfer_mode").notNull().default("auto"),
+  /**
+   * Compression for the stream path.
+   *   "auto" → none on same host, gzip cross-host
+   *   "zstd" | "gzip" | "none" → forced (zstd needs helper egress to fetch the codec)
+   */
+  transferCompression: text("transfer_compression").notNull().default("auto"),
 
   /**
    * Local-mode gh-CLI suppression. In `cli` auth mode the API falls back to

@@ -34,6 +34,8 @@ export interface ServerSelectorProps {
   disabled?: boolean;
   /** Show compact variant (no label) */
   compact?: boolean;
+  /** Open the dropdown upward (for selectors pinned near the bottom of a modal). */
+  dropUp?: boolean;
 }
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
@@ -57,6 +59,7 @@ export default function ServerSelector({
   label,
   disabled = false,
   compact = false,
+  dropUp = false,
 }: ServerSelectorProps) {
   const router = useRouter();
   const { t } = useI18n();
@@ -151,8 +154,8 @@ export default function ServerSelector({
           </label>
         )}
         <div className="flex items-center gap-3 px-3.5 py-3 rounded-xl border border-border/50 bg-muted/30">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0">
-            <Server className="size-4 text-emerald-500" />
+          <div className="w-8 h-8 rounded-lg bg-success-bg flex items-center justify-center shrink-0">
+            <Server className="size-4 text-success" />
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-foreground truncate">{s.name}</p>
@@ -160,7 +163,7 @@ export default function ServerSelector({
               {s.user}@{s.host}:{s.port}
             </p>
           </div>
-          <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+          <CheckCircle2 className="size-4 text-success shrink-0" />
         </div>
       </div>
     );
@@ -184,8 +187,8 @@ export default function ServerSelector({
         >
           {selected ? (
             <>
-              <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0">
-                <Server className="size-4 text-emerald-500" />
+              <div className="w-8 h-8 rounded-lg bg-success-bg flex items-center justify-center shrink-0">
+                <Server className="size-4 text-success" />
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-foreground truncate">
@@ -210,7 +213,11 @@ export default function ServerSelector({
         </button>
 
         {open && (
-          <div className="absolute z-50 start-0 end-0 mt-1.5 bg-popover rounded-xl border border-border shadow-lg overflow-hidden">
+          <div
+            className={`absolute z-50 start-0 end-0 max-h-64 overflow-auto rounded-xl border border-border bg-popover shadow-lg ${
+              dropUp ? "bottom-full mb-1.5" : "mt-1.5"
+            }`}
+          >
             {servers.map((s) => (
               <button
                 key={s.id}
@@ -223,8 +230,8 @@ export default function ServerSelector({
                   value === s.id ? "bg-muted/30" : ""
                 }`}
               >
-                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0">
-                  <Server className="size-4 text-emerald-500" />
+                <div className="w-8 h-8 rounded-lg bg-success-bg flex items-center justify-center shrink-0">
+                  <Server className="size-4 text-success" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-foreground truncate">{s.name}</p>
@@ -233,7 +240,7 @@ export default function ServerSelector({
                   </p>
                 </div>
                 {value === s.id && (
-                  <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+                  <CheckCircle2 className="size-4 text-success shrink-0" />
                 )}
               </button>
             ))}

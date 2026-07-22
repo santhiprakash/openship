@@ -544,7 +544,7 @@ function ChartErrorState({ message }: { message: string }) {
   return (
     <div className="flex h-[360px] w-full items-center justify-center">
       <div className="flex flex-col items-center gap-2 text-center">
-        <AlertCircle className="size-5 text-red-500" />
+        <AlertCircle className="size-5 text-danger" />
         <p className="text-sm text-muted-foreground">{message}</p>
       </div>
     </div>

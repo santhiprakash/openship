@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
-  Clock,
   Zap,
   ArrowRight,
 } from "lucide-react";
@@ -23,7 +22,6 @@ import {
   filterDeployments,
   sortDeploymentsByDate,
   mapRowToDeployment,
-  formatDistanceToNow,
 } from "../utils";
 
 interface DeploymentsContentProps {
@@ -113,7 +111,7 @@ export const DeploymentsContent: React.FC<DeploymentsContentProps> = ({
   );
 
   const activeCount = (stats.building || 0) + (stats.pending || 0);
-  const recentDeployments = deployments.slice(0, 4);
+  const failedCount = (stats.failed || 0) + (stats.canceled || 0);
 
   return (
     <div>
@@ -203,8 +201,8 @@ export const DeploymentsContent: React.FC<DeploymentsContentProps> = ({
 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-                    <CheckCircle2 className="size-4 text-emerald-500" />
+                  <div className="w-8 h-8 rounded-lg bg-success-bg flex items-center justify-center">
+                    <CheckCircle2 className="size-4 text-success" />
                   </div>
                   <span className="text-sm text-muted-foreground">{t.deployments.sidebar.overview.successful}</span>
                 </div>
@@ -215,21 +213,21 @@ export const DeploymentsContent: React.FC<DeploymentsContentProps> = ({
 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center">
-                    <XCircle className="size-4 text-red-500" />
+                  <div className="w-8 h-8 rounded-lg bg-danger-bg flex items-center justify-center">
+                    <XCircle className="size-4 text-danger" />
                   </div>
                   <span className="text-sm text-muted-foreground">{t.deployments.sidebar.overview.failed}</span>
                 </div>
                 <span className="text-lg font-semibold text-foreground">
-                  {isLoading ? "–" : (stats.failed || 0) + (stats.canceled || 0)}
+                  {isLoading ? "–" : failedCount}
                 </span>
               </div>
 
               {activeCount > 0 && (
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                      <Loader2 className="size-4 text-amber-500 animate-spin" />
+                    <div className="w-8 h-8 rounded-lg bg-warning-bg flex items-center justify-center">
+                      <Loader2 className="size-4 text-warning animate-spin" />
                     </div>
                     <span className="text-sm text-muted-foreground">{t.deployments.sidebar.overview.inProgress}</span>
                   </div>
@@ -237,6 +235,22 @@ export const DeploymentsContent: React.FC<DeploymentsContentProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Success/failure proportion — at-a-glance fleet health, same
+                semantic colors as the stat rows above. */}
+            {!isLoading && stats.total > 0 && (
+              <div className="mt-4 flex h-1.5 overflow-hidden rounded-full bg-muted/40">
+                {stats.success > 0 && (
+                  <div className="bg-success-solid" style={{ width: `${(stats.success / stats.total) * 100}%` }} />
+                )}
+                {failedCount > 0 && (
+                  <div className="bg-danger-solid" style={{ width: `${(failedCount / stats.total) * 100}%` }} />
+                )}
+                {activeCount > 0 && (
+                  <div className="bg-warning-solid" style={{ width: `${(activeCount / stats.total) * 100}%` }} />
+                )}
+              </div>
+            )}
           </div>
 
           {/* Quick Tip */}
@@ -277,61 +291,6 @@ export const DeploymentsContent: React.FC<DeploymentsContentProps> = ({
               </Link>
             </div>
           )}
-
-          {/* Recent Deployments */}
-          <div className="bg-card rounded-2xl border border-border/50 p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <Clock className="size-4 text-muted-foreground" />
-              <h3 className="font-semibold text-foreground text-sm">{t.deployments.sidebar.recent.title}</h3>
-            </div>
-
-            {isLoading ? (
-              <div className="space-y-3">
-                {[...Array(3)].map((_, i) => (
-                  <div key={i} className="flex items-center gap-3 animate-pulse">
-                    <div className="w-2 h-2 rounded-full bg-muted" />
-                    <div className="flex-1 h-4 bg-muted rounded" />
-                  </div>
-                ))}
-              </div>
-            ) : recentDeployments.length === 0 ? (
-              <div className="text-center py-4">
-                <div className="w-10 h-10 rounded-xl bg-muted/50 flex items-center justify-center mx-auto mb-3">
-                  <Clock className="size-4 text-muted-foreground/50" />
-                </div>
-                <p className="text-xs text-muted-foreground/70">
-                  {t.deployments.sidebar.recent.empty}
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                {recentDeployments.map((d) => (
-                  <Link
-                    key={d.id}
-                    href={`/build/${d.id}`}
-                    className="flex items-center gap-3 group"
-                  >
-                    <span
-                      className={`w-2 h-2 rounded-full shrink-0 ${
-                        d.status === "success" ? "bg-emerald-500" :
-                        d.status === "failed" ? "bg-red-500" :
-                        d.status === "building" ? "bg-amber-500" :
-                        "bg-muted-foreground/40"
-                      }`}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-foreground truncate group-hover:text-primary transition-colors">
-                        {d.projectName || t.deployments.sidebar.recent.unknown}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {formatDistanceToNow(new Date(d.createdAt), t.deployments.time)}
-                      </p>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
         )}
       </div>

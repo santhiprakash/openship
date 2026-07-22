@@ -81,6 +81,16 @@ export const deployment = pgTable("deployment", {
    * before this column existed.
    */
   version: integer("version"),
+  /**
+   * Deployed release version for a release/dist-source project (semver, no
+   * leading "v"). The queryable drift anchor: the "new version available"
+   * banner compares this on the ACTIVE deployment against the latest advertised
+   * release. Null for commit/upload/local deploys. Assigned at CREATE from the
+   * resolved snapshot — like `commit_sha` (deploy identity), NOT like the human
+   * `version` counter — so it's queryable while the build is still in flight
+   * (in-flight new-version suppression + release-webhook dedupe).
+   */
+  releaseVersion: text("release_version"),
 
   /* ── Container details ──────────────────────────────────────────────── */
   /** Adapter container ID (for stop/start/destroy) */

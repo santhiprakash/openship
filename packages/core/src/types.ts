@@ -122,3 +122,52 @@ export type ComposeHealthcheck = {
 export type ComposeAdvanced = {
   healthcheck?: ComposeHealthcheck;
 };
+
+/**
+ * Per-route edge rules (rate-limit, ban, allow/deny) enforced by the self-hosted
+ * OpenResty guard. The DB `route_rule` table is the source of truth; the API
+ * serializes this shape and pushes it into OpenResty's `rules` shared dict via
+ * the mgmt API, where `rules_guard.lua` enforces it in the access phase — no
+ * reload. Lives in @repo/core so @repo/db (storage) and @repo/adapters (runtime)
+ * share one definition, like ComposeAdvanced above. Grows per phase (rewrites,
+ * upstream/LB weights, …) as a pure shape-widening — no migration (JSONB).
+ */
+export type RouteRuleSpec = {
+  /**
+   * Per-client rate limit (fixed 1s window, keyed by client IP). Omit = unlimited.
+   * `status` overrides the 429 response code. Runs alongside (does not replace)
+   * the per-server nginx `limit_req` ceiling.
+   */
+  rateLimit?: { rps: number; burst: number; key?: "ip"; status?: number };
+  /**
+   * Blocklists → block (see `block.status`, default 403). `countries` = ISO
+   * 3166-1 alpha-2 (bundled GeoIP). `userAgents` = case-insensitive substrings
+   * (plain match, never a regex); `emptyUserAgent` blocks missing/blank UA.
+   */
+  ban?: {
+    ips?: string[];
+    cidrs?: string[];
+    countries?: string[];
+    userAgents?: string[];
+    emptyUserAgent?: boolean;
+  };
+  /**
+   * Allow/deny → block on a miss/deny. `allow*` are allow-lists (when non-empty,
+   * ONLY matching clients pass); `denyCidrs` blocks. `methods` is an allow-list
+   * of HTTP methods (others blocked). Country codes are ISO 3166-1 alpha-2.
+   */
+  access?: {
+    allowCidrs?: string[];
+    denyCidrs?: string[];
+    allowCountries?: string[];
+    methods?: string[];
+  };
+  /**
+   * Hotlink protection: when `allowReferers` is non-empty, only requests whose
+   * Referer host is listed pass. `allowEmpty` (default true) lets direct hits
+   * (no/blank Referer) through — turn off to require a matching Referer.
+   */
+  hotlink?: { allowReferers?: string[]; allowEmpty?: boolean };
+  /** Response code for access/ban/method/hotlink blocks. Default 403. */
+  block?: { status?: number };
+};

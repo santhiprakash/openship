@@ -1,16 +1,18 @@
 import { betterAuth, type User } from "better-auth";
 import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { bearer, mcp } from "better-auth/plugins";
+import { bearer, mcp, emailOTP } from "better-auth/plugins";
 import { organization } from "better-auth/plugins/organization";
-import { defaultStatements } from "better-auth/plugins/organization/access";
+import { defaultStatements, adminAc, memberAc, ownerAc } from "better-auth/plugins/organization/access";
 import { createAccessControl } from "better-auth/plugins/access";
-import { db, getDriver, repos, schema } from "@repo/db";
-import { env, runtimeTarget, trustedOrigins } from "../config/env";
+import { db, getDriver, repos, schema, and, eq, gt } from "@repo/db";
+import { env, runtimeTarget, runtimeTargetId, trustedOrigins } from "../config/env";
+import { resolveAuthBaseUrl, resolveDashboardPublicUrl, refreshSelfAppPublicUrl } from "./public-url";
 import { sendMail, smtpEnabled, requireEmailVerificationStrict } from "./mail";
 import {
   resetPasswordEmail,
   verifyEmailTemplate,
+  verifyOtpEmailTemplate,
   organizationInviteEmail,
 } from "./email-templates";
 import { memberAudit } from "../modules/audit/member-emitter";
@@ -24,14 +26,16 @@ import { safeErrorMessage } from "@repo/core";
 /**
  * Better Auth organization-plugin access control config.
  *
- * The plugin only accepts roles declared via the access controller in
- * its `roles` option. We register a fourth role, `restricted`, with no
- * default permissions — its access is granted exclusively via
- * resource_grant rows and enforced by apps/api/src/lib/permission.ts.
+ * We register a fourth role, `restricted`, with no default permissions —
+ * its access is granted exclusively via resource_grant rows and enforced
+ * by apps/api/src/lib/permission.ts.
  *
- * `owner | admin | member` keep their plugin defaults (the AC is only
- * registered here so Better Auth's update-member-role / invite-member
- * validators accept "restricted" as a valid role string).
+ * IMPORTANT: passing a custom `ac` (needed to declare `restricted`) opts
+ * OUT of Better Auth's built-in owner/admin/member roles. They are NOT
+ * kept automatically — if we don't re-declare them every org role ends up
+ * with ZERO permissions (an owner can't even invite a member). So we pass
+ * the plugin's own default role ACs (`ownerAc`/`adminAc`/`memberAc`, built
+ * from the same `defaultStatements`) back in alongside `restricted`.
  */
 const ORG_ACCESS_CONTROLLER = createAccessControl(defaultStatements);
 // Restricted role: explicitly no plugin-side permissions on org-management
@@ -63,7 +67,27 @@ const INVITE_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 // SaaS API (port 4100) don't collide on localhost (cookies ignore port).
 export const COOKIE_PREFIX = env.CLOUD_MODE ? "openship-cloud" : "openship";
 
+// "Is this process the multi-tenant SaaS?" — OPENSHIP_TARGET and CLOUD_MODE are
+// independent env vars (runtime-config.ts does no cross-inference), and the SaaS
+// runs with both; keying off either avoids missing it if only one is set. Used
+// to force email verification before login on SaaS only (self-hosted/desktop
+// keep the env-SMTP-gated behavior).
+export const isSaasDeployment = runtimeTargetId === "cloud-saas" || env.CLOUD_MODE;
+
 function getSharedCookieDomain() {
+  // A localhost / single-label host (dev — including the local SaaS on :4100)
+  // can ONLY use host-only cookies: a browser rejects a `Domain=.foo` cookie
+  // (e.g. a leftover BETTER_AUTH_COOKIE_DOMAIN=.openship.io) on a `localhost`
+  // page, which silently drops the session and makes login loop. Force
+  // host-only there, IGNORING any configured domain, so a local SaaS always
+  // "treats itself as localhost". Real multi-label hosts fall through.
+  try {
+    const apiHost = new URL(runtimeTarget.api).hostname;
+    if (apiHost.split(".").filter(Boolean).length < 2) return undefined;
+  } catch {
+    // Unparseable target → fall through to the existing logic.
+  }
+
   if (env.BETTER_AUTH_COOKIE_DOMAIN) {
     return env.BETTER_AUTH_COOKIE_DOMAIN;
   }
@@ -93,7 +117,10 @@ const useSessionCookieCache = getDriver() !== "pglite";
 
 export const auth = betterAuth({
   basePath: "/api/auth",
-  baseURL: runtimeTarget.api,
+  // Dynamic when served on a public URL — every absolute OAuth/auth URL is built
+  // from the forwarded public host so remote MCP clients get reachable endpoints
+  // (see resolveAuthBaseUrl). Static runtimeTarget.api otherwise (cloud/dev).
+  baseURL: resolveAuthBaseUrl(),
 
   database: drizzleAdapter(db, {
     provider: "pg",
@@ -125,10 +152,16 @@ export const auth = betterAuth({
         }
       : undefined,
 
-    /* Email verification - only required when env SMTP is configured.
-       Platform-mailbox-only instances can sign up without verification
-       so a transient mail-server fault doesn't lock users out. */
-    requireEmailVerification: requireEmailVerificationStrict,
+    /* Email verification.
+       - SaaS (CLOUD_MODE): ALWAYS required. No account can sign in until it
+         has verified its email — new SaaS signups are created but get no
+         session; sign-in on an unverified address is blocked (403) and the
+         verification email is (re)sent. Assumes SaaS mail transport works;
+         if it can't deliver, signups intentionally cannot complete.
+       - Self-hosted / desktop: unchanged — only required when env SMTP is
+         configured, so a platform-mailbox instance isn't locked out by a
+         transient mail-server fault mid-signup. */
+    requireEmailVerification: isSaasDeployment ? true : requireEmailVerificationStrict,
     sendVerificationEmail: smtpEnabled
       ? async ({ user, url }: { user: User; url: string; token: string }) => {
           const email = verifyEmailTemplate(user, url);
@@ -207,6 +240,50 @@ export const auth = betterAuth({
   databaseHooks: {
     user: {
       create: {
+        before: async (user) => {
+          // Invite-only sign-up on SELF-HOSTED instances (defense-in-depth for the
+          // OAuth/social path — password signup is gated earlier by the /sign-up
+          // route guard + the token-bound /api/system/invite-signup endpoint).
+          // SaaS keeps public signup (skipped). Desktop zero-auth, cloud-mirror,
+          // and CLI bootstrap-admin provision via provisionUser (raw) and never
+          // reach this hook. On self-host, any account after the FIRST must match
+          // a pending, UNEXPIRED invitation issued by a real instance admin.
+          if (!isSaasDeployment) {
+            // Probe ANY user (not just autoProvisioned=false): a zero-auth box's
+            // synthetic user must COUNT, so it doesn't fail open as "no admin".
+            const [anyUser] = await db.select({ id: schema.user.id }).from(schema.user).limit(1);
+            if (anyUser) {
+              const email = (user.email ?? "").trim().toLowerCase();
+              const [invite] = await db
+                .select({ inviterId: schema.invitation.inviterId })
+                .from(schema.invitation)
+                .where(
+                  and(
+                    eq(schema.invitation.email, email),
+                    eq(schema.invitation.status, "pending"),
+                    gt(schema.invitation.expiresAt, new Date()),
+                  ),
+                )
+                .limit(1);
+              const [inviter] = invite
+                ? await db
+                    .select({ role: schema.user.role })
+                    .from(schema.user)
+                    .where(eq(schema.user.id, invite.inviterId))
+                    .limit(1)
+                : [];
+              // Instance-admin only: a regular member is role "user" (they own
+              // their personal org but can't mint instance accounts).
+              const inviterIsAdmin = !!inviter && inviter.role === "admin";
+              if (!invite || !inviterIsAdmin) {
+                throw new APIError("FORBIDDEN", {
+                  message: "Sign-up is invite-only on this instance. Ask an admin to invite you.",
+                });
+              }
+            }
+          }
+          return { data: user };
+        },
         after: async (user) => {
           // Funnel every Better Auth-mediated signup (email/password,
           // OAuth, etc.) through the same provisioning helper used by
@@ -259,6 +336,13 @@ export const auth = betterAuth({
   /* ---------- Advanced ---------- */
   advanced: {
     cookiePrefix: COOKIE_PREFIX,
+    // Pin secure-cookie behavior when served on a public URL. The dynamic
+    // `baseURL` (an object) would otherwise make Better Auth derive `secure`
+    // from NODE_ENV (→ true in prod) instead of the previous static-localhost
+    // `false` — which renames the session cookie (`__Secure-` prefix, logging
+    // everyone out once) and breaks the pre-TLS HTTP window. Preserve today's
+    // exact behavior; secure-cookie hardening is a separate, deliberate change.
+    ...(env.OPENSHIP_PUBLIC_URL ? { useSecureCookies: false } : {}),
     ...(sharedCookieDomain
       ? {
           crossSubDomainCookies: {
@@ -287,6 +371,36 @@ export const auth = betterAuth({
     bearer(),
 
     /**
+     * Email verification via a short numeric CODE (OTP), not a magic link.
+     * `overrideDefaultEmailVerification` reroutes the standard verification
+     * flow (triggered by emailAndPassword.requireEmailVerification) to send an
+     * OTP instead of a link — codes are far more deliverable (no clickable URL
+     * for spam filters to flag). Single send: it REPLACES the link callback, so
+     * there's no double email. The gate itself is unchanged — an account still
+     * can't sign in until verified; it just verifies by typing a code.
+     */
+    emailOTP({
+      otpLength: 6,
+      expiresIn: 60 * 10, // 10 minutes
+      // Lock the code after too many wrong tries: Better Auth returns
+      // TOO_MANY_ATTEMPTS and invalidates the OTP, so the user must request a
+      // fresh one ("locked — check your email for a new code").
+      allowedAttempts: 5,
+      // Throttle how often a new code can be requested (anti-spam + mail cost).
+      // Exceeding it returns a rate-limit error; the UI asks them to wait.
+      rateLimit: { window: 60, max: 5 },
+      overrideDefaultEmailVerification: true,
+      async sendVerificationOTP({ email, otp, type }) {
+        // Only the email-verification flow is used today (sign-in / reset /
+        // change-email OTP types are not enabled). Send a link-free code email.
+        if (type === "email-verification") {
+          const tmpl = verifyOtpEmailTemplate(otp, { expiresMinutes: 10 });
+          await sendMail({ to: email, ...tmpl });
+        }
+      },
+    }),
+
+    /**
      * MCP OAuth 2.1 authorization server. Turns Openship into a standards-
      * compliant remote MCP server: discovery-based clients (Claude, Cursor)
      * self-register (DCR), run the PKCE authorize flow, hit our consent page,
@@ -302,10 +416,13 @@ export const auth = betterAuth({
      * PATs remain the API-key path for REST/CLI and still authenticate /api/mcp.
      */
     mcp({
-      loginPage: `${runtimeTarget.dashboard}/login`,
+      // Redirect targets on the DASHBOARD — the public dashboard origin when
+      // served publicly (a remote OAuth client must land on a reachable login/
+      // consent page, not localhost:3001), else the static runtime dashboard.
+      loginPage: `${resolveDashboardPublicUrl()}/login`,
       oidcConfig: {
-        loginPage: `${runtimeTarget.dashboard}/login`,
-        consentPage: `${runtimeTarget.dashboard}/mcp/authorize`,
+        loginPage: `${resolveDashboardPublicUrl()}/login`,
+        consentPage: `${resolveDashboardPublicUrl()}/mcp/authorize`,
         requirePKCE: true, // OAuth 2.1
         storeClientSecret: "hashed",
         allowDynamicClientRegistration: true, // MCP clients self-register
@@ -339,15 +456,27 @@ export const auth = betterAuth({
        */
       ac: ORG_ACCESS_CONTROLLER,
       roles: {
-        // The plugin's default roles still apply (owner/admin/member);
-        // we only need to declare `restricted` so Better Auth's input
-        // validators accept it. The actual permission policy lives in
-        // permission.ts, not here.
+        // Re-declare the built-in roles with their default permissions —
+        // custom `ac` above wipes them otherwise (see the block comment).
+        // `restricted` carries no plugin permissions; permission.ts gates it
+        // via resource_grant rows.
+        owner: ownerAc,
+        admin: adminAc,
+        member: memberAc,
         restricted: RESTRICTED_ROLE,
       },
       sendInvitationEmail: smtpEnabled
         ? async (data) => {
-            const inviteUrl = `${runtimeTarget.dashboard}/accept-invite/${data.id}`;
+            // Use the instance's PUBLIC url so the accept link works from the
+            // invitee's browser (a VPS/self-host box's real domain), not the
+            // static loopback default. Falls back to the runtime-target dashboard
+            // when no public url is configured (pure localhost dev).
+            // Freshen the DB-derived self-app URL so the link uses the domain the
+            // operator added in the Domains tab (no restart needed). Env
+            // --public-url seed still wins inside resolveDashboardPublicUrl.
+            await refreshSelfAppPublicUrl().catch(() => {});
+            const inviteBase = resolveDashboardPublicUrl();
+            const inviteUrl = `${inviteBase}/accept-invite/${data.id}`;
             const email = organizationInviteEmail({
               invitee: { email: data.email },
               inviter: { name: data.inviter.user.name, email: data.inviter.user.email },

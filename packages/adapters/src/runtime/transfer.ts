@@ -11,6 +11,9 @@ export interface DirectoryTransferOptions {
   excludes?: string[];
   /** When set, only these paths are transferred (overrides excludes). */
   includes?: string[];
+  /** Paths added on top of the git-truth list to ship gitignored build output
+   *  (e.g. `.next`). See `TarTransferOptions.alsoInclude`. */
+  alsoInclude?: string[];
 }
 
 export type LocalDirectoryTarget =
@@ -39,6 +42,7 @@ export async function transferLocalDirectory(
     await target.executor.transferIn(localPath, target.path, logger.callback, {
       excludes: options?.excludes,
       includes: options?.includes,
+      alsoInclude: options?.alsoInclude,
     });
 
     // Validate transfer: verify the target directory is non-empty
@@ -97,6 +101,7 @@ async function createTarball(
   const { args, cleanup } = await prepareSourceTarArgs(localPath, {
     excludes: options?.excludes ?? [...TRANSFER_EXCLUDES],
     includes: options?.includes,
+    alsoInclude: options?.alsoInclude,
   });
 
   try {

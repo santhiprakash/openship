@@ -121,7 +121,7 @@ export function MailProgress({
             {running ? (
               <button
                 onClick={onCancel}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-red-500/30 text-red-500 hover:bg-red-500/10 transition-colors"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-danger-border text-danger hover:bg-danger-bg transition-colors"
               >
                 <XCircle className="size-3.5" />
                 {t.emails.progress.cancel}
@@ -132,8 +132,8 @@ export function MailProgress({
                   onClick={handleResetClick}
                   className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
                     confirmReset
-                      ? "bg-red-500 text-white hover:bg-red-500/90"
-                      : "border border-red-500/30 text-red-500 hover:bg-red-500/10"
+                      ? "bg-danger-solid text-white hover:bg-danger-solid/90"
+                      : "border border-danger-border text-danger hover:bg-danger-bg"
                   }`}
                   title={t.emails.progress.resetTitle}
                 >
@@ -164,9 +164,9 @@ export function MailProgress({
                   key={i}
                   className={`flex gap-2 ${
                     log.level === "error"
-                      ? "text-red-500"
+                      ? "text-danger"
                       : log.level === "warn"
-                        ? "text-amber-500"
+                        ? "text-warning"
                         : "text-muted-foreground"
                   }`}
                 >
@@ -197,11 +197,11 @@ export function MailProgress({
       {/* Error banner - retry CTA is mirrored here so it's hard to miss
           even when the user's eye is on the logs. */}
       {error && (
-        <div className="bg-red-500/5 border border-red-500/20 rounded-2xl p-5">
+        <div className="bg-danger-bg border border-danger-border rounded-2xl p-5">
           <div className="flex items-start gap-3">
-            <XCircle className="size-5 text-red-500 mt-0.5 shrink-0" />
+            <XCircle className="size-5 text-danger mt-0.5 shrink-0" />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-red-600 dark:text-red-400">
+              <p className="text-sm font-medium text-danger">
                 {t.emails.progress.setupFailed}
               </p>
               <p className="text-xs text-muted-foreground mt-1 break-words">{error}</p>

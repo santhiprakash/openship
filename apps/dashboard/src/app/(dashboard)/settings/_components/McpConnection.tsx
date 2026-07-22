@@ -236,7 +236,7 @@ function McpClientSetup({ endpoint }: { endpoint: string }) {
               aria-pressed={selected}
               className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
                 selected
-                  ? "border-emerald-500/50 bg-emerald-500/10 text-foreground"
+                  ? "border-success/50 bg-success/10 text-foreground"
                   : "border-border/60 text-muted-foreground hover:bg-muted/40"
               }`}
             >
@@ -348,8 +348,8 @@ export function McpConnection() {
       icon={Boxes}
       title={t.settings.mcp.title}
       description={t.settings.mcp.description}
-      iconBg="bg-emerald-500/10"
-      iconColor="text-emerald-500"
+      iconBg="bg-success-bg"
+      iconColor="text-success"
     >
       <div className="space-y-4">
         {clients === null ? (
@@ -374,7 +374,7 @@ export function McpConnection() {
                 className="flex w-full items-center justify-between gap-2 rounded-xl px-4 py-3 text-start transition-colors hover:bg-muted/20"
               >
                 <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <ShieldCheck className="size-4 text-emerald-500" />
+                  <ShieldCheck className="size-4 text-success" />
                   {t.settings.mcp.connectAnother}
                 </span>
                 <ChevronDown
@@ -391,8 +391,8 @@ export function McpConnection() {
         ) : (
           <>
             {/* Nothing connected yet — lead with the how-to + explainer banner. */}
-            <div className="flex gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] p-3">
-              <ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+            <div className="flex gap-2.5 rounded-xl border border-success-border bg-success-bg p-3">
+              <ShieldCheck className="mt-0.5 size-4 shrink-0 text-success" />
               <div className="text-xs leading-relaxed text-muted-foreground">
                 <span className="font-medium text-foreground">{t.settings.mcp.bannerStrong}</span>{" "}
                 {t.settings.mcp.bannerRest}
@@ -540,7 +540,7 @@ function ClientsList({
                     className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
                       c.readOnly
                         ? "bg-muted text-muted-foreground"
-                        : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                        : "bg-success-bg text-success"
                     }`}
                   >
                     {c.readOnly ? t.settings.mcp.clientReadOnly : t.settings.mcp.clientFullControl}
@@ -572,7 +572,7 @@ function ClientsList({
                   <button
                     onClick={() => onDisconnect(id)}
                     disabled={busy || !id}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-danger-solid px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-danger-solid/90 disabled:opacity-50"
                   >
                     {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Unplug className="size-3.5" />}
                     {t.settings.common.disconnect}
@@ -582,7 +582,7 @@ function ClientsList({
                 <button
                   onClick={() => setConfirmId(id)}
                   disabled={!id}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-red-500/40 hover:text-red-600 disabled:opacity-50 dark:hover:text-red-400"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-50"
                 >
                   <Unplug className="size-3.5" />
                   {t.settings.common.disconnect}

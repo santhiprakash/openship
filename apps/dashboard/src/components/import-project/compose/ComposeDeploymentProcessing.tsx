@@ -5,6 +5,7 @@ import { Loader2, CheckCircle2, XCircle, SlidersHorizontal } from "lucide-react"
 
 import ComposeSidebar from "./ComposeSidebar";
 import BuildTerminal from "../BuildTerminal";
+import { PortAdvisoryModal } from "../PortAdvisoryModal";
 import { generateIcon } from "@/utils/icons";
 import { useRouter } from "next/navigation";
 import { useDeployment } from "@/context/DeploymentContext";
@@ -115,7 +116,7 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
   const building = services.filter((s) => s.status === "building").length;
   const failed = services.filter((s) => s.status === "failed").length;
   const settled = running + built + failed;
-  const terminalTheme = resolvedTheme === "dark" ? "dark" : "light";
+  const terminalTheme = resolvedTheme === "light" ? "light" : "dark"; // dim → dark
 
   useEffect(() => {
     onTerminalReady();
@@ -175,7 +176,7 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
               const variant = (action.variant || "secondary") as "secondary" | "danger" | "primary";
               const styles =
                 variant === "danger"
-                  ? "bg-red-600 text-white hover:bg-red-700"
+                  ? "bg-danger-solid text-white hover:bg-danger-solid/90"
                   : variant === "primary"
                     ? "bg-primary text-primary-foreground hover:bg-primary/90"
                     : "border border-border bg-muted text-foreground hover:bg-muted/80";
@@ -351,35 +352,45 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
           {/* Decision banner — persists while a partial deploy awaits keep/reject
               (survives refresh via the server flag). Re-opens the dialog. */}
           {showDecision ? (
-            <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-5 py-4">
+            <div className="rounded-2xl border border-warning-border bg-warning-bg px-5 py-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-amber-700 dark:text-amber-300">
+                  <p className="text-sm font-semibold text-warning">
                     {cd.decisionBannerTitle}
                   </p>
-                  <p className="mt-1 text-sm text-amber-700/80 dark:text-amber-300/80">
+                  <p className="mt-1 text-sm text-warning/80">
                     {state.warningMessage || cd.decisionBannerDefaultMsg}
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setDecisionModalOpen(true)}
-                  className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-amber-700"
+                  className="shrink-0 rounded-lg bg-warning-solid px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-warning-solid/90"
                 >
                   {cd.review}
                 </button>
               </div>
             </div>
           ) : hasWarning ? (
-            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/8 px-5 py-4">
-              <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+            <div className="rounded-2xl border border-warning-border bg-warning-bg px-5 py-4">
+              <p className="text-sm font-medium text-warning">
                 {cd.warningTitle}
               </p>
-              <p className="mt-1 text-sm text-amber-700/80 dark:text-amber-300/80">
+              <p className="mt-1 text-sm text-warning/80">
                 {state.warningMessage}
               </p>
             </div>
           ) : null}
+
+          {deploymentStatus === "ready" && (
+            <PortAdvisoryModal
+              deploymentId={state.deploymentId}
+              projectId={state.projectId || config.projectId}
+              checks={state.portCheck}
+              skipped={state.portCheckSkipped}
+              isCompose
+            />
+          )}
 
           <ComposeServiceLogsPanel
             logs={state.buildLogs}
@@ -768,7 +779,7 @@ function ComposeServiceLogsPanel({
           })}
         </div>
 
-        <div className="relative h-[420px] overflow-hidden rounded-xl border border-border/50 bg-white dark:bg-black">
+        <div className="relative h-[420px] overflow-hidden rounded-xl border border-border/50 bg-white dark:bg-black dim:bg-black">
           {terminalTabs.length > 0 ? (
             terminalTabs.map((tab) => (
               <ComposeLogTerminal
@@ -924,11 +935,11 @@ function PartialSuccessModalContent({
         </p>
       </div>
 
-      <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4 space-y-2">
-        <p className="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">
+      <div className="rounded-xl border border-warning-border bg-warning-bg p-4 space-y-2">
+        <p className="text-xs uppercase tracking-wide text-warning">
           {p.warning}
         </p>
-        <p className="text-sm text-amber-700/90 dark:text-amber-300/90">{warningMessage}</p>
+        <p className="text-sm text-warning/90">{warningMessage}</p>
       </div>
 
       <div className="rounded-xl border border-border bg-muted/40 p-4">
@@ -948,7 +959,7 @@ function PartialSuccessModalContent({
         </button>
         <button
           type="button"
-          className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+          className="rounded-lg bg-danger-solid px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger-solid/90 disabled:opacity-50"
           onClick={async () => {
             setIsRejecting(true);
             try {

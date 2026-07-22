@@ -50,14 +50,14 @@ export async function syncProjectToServerManifest(input: {
   }
   try {
     const domainRows = await repos.domain.listByProject(project.id).catch(() => []);
-    const app = await repos.projectApp.findById(project.appId).catch(() => null);
+    const app = await repos.projectGroup.findById(project.groupId).catch(() => null);
     const meta = (deployment.meta ?? {}) as { runtimeMode?: string };
     const entry: ManifestProjectEntry = {
       id: project.id,
       slug: project.slug,
       name: project.name,
       organizationId: project.organizationId,
-      appId: project.appId,
+      groupId: project.groupId,
       appName: app?.name ?? project.name,
       appSlug: app?.slug ?? null,
       gitProvider: project.gitProvider,

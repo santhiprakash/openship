@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { PricingCards, type ApiPlan } from "@/components/billing/PricingCards";
 import { api } from "@/lib/api/client";
+import { endpoints } from "@/lib/api/endpoints";
 import type { PlanTierId } from "@repo/core";
 import { Loader2 } from "lucide-react";
 import { useI18n } from "@/components/i18n-provider";
@@ -26,7 +27,7 @@ export function BillingPlansRoute({ currentPlan }: { currentPlan: PlanTierId }) 
     let cancelled = false;
     async function fetchPlans() {
       try {
-        const res = await api.get<PlansResponse>("billing/plans");
+        const res = await api.get<PlansResponse>(endpoints.billing.plans);
         if (!cancelled) setPlans(res.data.plans);
       } catch {
         if (!cancelled) setError(t.billing.plansRoute.loadError);
@@ -40,12 +41,14 @@ export function BillingPlansRoute({ currentPlan }: { currentPlan: PlanTierId }) 
     };
   }, []);
 
-  const handleSelectPlan = async (planId: PlanTierId) => {
-    if (planId === "free" || planId === currentPlan) return;
-    setSubscribing(planId);
+  const handleSelectPlan = async (planTierId: PlanTierId) => {
+    if (planTierId === "free" || planTierId === currentPlan) return;
+    setSubscribing(planTierId);
     try {
+      // Body key MUST be `planTierId` — the backend `createSubscriptionSchema`
+      // validates that exact field (the old `planId` silently 400'd).
       const res = await api.post<CheckoutResponse>("billing/subscription", {
-        planId,
+        planTierId,
         interval: "monthly",
       });
       window.location.href = res.data.checkoutUrl;

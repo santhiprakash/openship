@@ -54,8 +54,11 @@ const ServerRuntimePicker: React.FC = () => {
   const hasUserSelectedRef = useRef(false);
 
   const lowRam = useMemo(() => (stats ? stats.memTotal < TWO_GB : false), [stats]);
-  // Sandbox everywhere except RAM-starved boxes. A nudge + the default, not a lock.
-  const recommendedMode: RuntimeMode = lowRam ? "bare" : "docker";
+  // Sandbox is the default everywhere — the safe, isolated norm. On a very small
+  // box Direct uses less RAM, but that's surfaced as a caveat when the user
+  // actually picks Direct (below), not a silent default flip. Keeps the common
+  // case one obvious choice instead of a machine-dependent guess.
+  const recommendedMode: RuntimeMode = "docker";
   const ramGB = stats ? (stats.memTotal / (1024 * 1024 * 1024)).toFixed(1) : null;
   const selected = config.runtimeMode;
 
@@ -115,7 +118,7 @@ const ServerRuntimePicker: React.FC = () => {
                       {option.label}
                     </p>
                     {isRecommended && (
-                      <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                      <span className="inline-flex items-center rounded-full bg-success-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-success">
                         {t.deploy.runtime.recommended}
                       </span>
                     )}
@@ -133,9 +136,9 @@ const ServerRuntimePicker: React.FC = () => {
       {/* Security caveat — only when Direct is selected (don't preach when the
           safer option is already chosen). */}
       {selected === "bare" && (
-        <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/[0.07] px-3 py-2.5">
-          <ShieldAlert className="size-4 text-amber-600 shrink-0 mt-0.5" />
-          <p className="text-[12px] leading-relaxed text-amber-700 dark:text-amber-300">
+        <div className="flex items-start gap-2.5 rounded-xl border border-warning-border bg-warning-bg px-3 py-2.5">
+          <ShieldAlert className="size-4 text-warning shrink-0 mt-0.5" />
+          <p className="text-[12px] leading-relaxed text-warning">
             {lowRam ? t.deploy.runtime.caveatLowRam : t.deploy.runtime.caveat}
           </p>
         </div>

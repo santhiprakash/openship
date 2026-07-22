@@ -1,4 +1,35 @@
 {
+  "github": {
+    "title": "GitHub アクセス",
+    "desc": "このサーバーがプライベートリポジトリをクローンするために GitHub へ認証する方法。",
+    "loadFailed": "GitHub の状態を読み込めませんでした",
+    "connected": "接続済み",
+    "modeToken": "トークン",
+    "modeSshKey": "SSH キー",
+    "modeDeployKey": "デプロイキー",
+    "connectDevice": "GitHub に接続",
+    "deviceHint": "リンクを開いてこのコードを入力してください:",
+    "open": "GitHub を開く",
+    "connecting": "認証を待機中…",
+    "connectFailed": "接続に失敗しました",
+    "connectedToast": "このサーバーで GitHub を接続しました",
+    "patPlaceholder": "ghp_…（トークンを貼り付け）",
+    "patHint": "このサーバー用に暗号化して保存されるパーソナルアクセストークン。",
+    "save": "保存",
+    "savedToast": "保存しました",
+    "saveFailed": "保存に失敗しました",
+    "tokenAs": "認証ユーザー",
+    "sshGenerate": "SSH キーを生成",
+    "sshAddHint": "このキーを GitHub アカウントに追加してからデプロイしてください:",
+    "openGithubKeys": "GitHub の SSH キーを開く",
+    "copy": "コピー",
+    "deployKeyUse": "リポジトリごとのデプロイキーを使う",
+    "deployKeyHint": "Openship は初回デプロイ時に各リポジトリへ読み取り専用のデプロイキーを登録します。",
+    "deployKeyActive": "デプロイキーモードが有効 — キーは初回デプロイ時に作成されます。",
+    "deployKeysRegistered": "個のデプロイキーを登録済み",
+    "disconnect": "切断",
+    "disconnectedToast": "GitHub を切断しました"
+  },
   "list": {
     "title": "サーバー",
     "subtitle": "デプロイ用サーバーとインフラを管理します",
@@ -19,7 +50,14 @@
     "serverOverview": "サーバーの概要",
     "totalServers": "サーバー合計",
     "connectedLabel": "接続済み",
-    "errors": "エラー"
+    "errors": "エラー",
+    "checking": "確認中",
+    "online": "オンライン",
+    "offline": "オフライン",
+    "authKey": "鍵",
+    "authPassword": "パスワード",
+    "projects": "プロジェクト",
+    "regions": "リージョン"
   },
   "form": {
     "sshConnection": "SSH 接続",
@@ -68,6 +106,7 @@
     "tabs": {
       "overview": "概要",
       "components": "コンポーネント",
+      "github": "Git",
       "security": "セキュリティ",
       "ports": "ポート",
       "terminal": "ターミナル"
@@ -77,6 +116,7 @@
     "edit": "編集",
     "removeServer": "サーバーを削除",
     "serverNotFound": "サーバーが見つかりません",
+    "serverNotFoundDesc": "このサーバーはワークスペースに存在しないか、アクセス権がありません。削除された可能性があります。",
     "noServerConfigured": "ID「{id}」で設定されたサーバーはありません。",
     "editServer": "サーバーを編集",
     "editSubtitle": "{name} の接続情報を更新します",
@@ -267,6 +307,8 @@
     "autoDesc": "要件を確認し、すべてを自動でインストールします。ワンクリックで、Openship が Docker、OpenResty、Git を処理します。",
     "stepTitle": "ステップバイステップのセットアップ",
     "stepDesc": "各コンポーネントを確認し、インストールするものを選択します。進める前に詳細なステータスを確認できます。",
+    "skipTitle": "今はスキップ",
+    "skipDesc": "何もインストールせずにサーバーを追加し、稼働状態を監視するだけにします。セットアップは後でサーバーページから実行できます。",
     "connecting": "サーバーに接続中…",
     "runningChecks": "SSH 経由でシステムヘルスチェックを実行中",
     "connectionFailed": "接続に失敗しました",
@@ -318,5 +360,17 @@
     "serverCheck": "サーバーのチェック",
     "security": "セキュリティ",
     "portForwarding": "ポート転送"
+  },
+  "tabsNav": {
+    "servers": "サーバー",
+    "cluster": "クラスター",
+    "networking": "ネットワーク"
+  },
+  "comingSoon": {
+    "badge": "近日公開",
+    "clusterTitle": "クラスター",
+    "clusterBody": "サーバーをクラスターにまとめ、Openship がデプロイをスケジュールして負荷を分散します。",
+    "networkingTitle": "ネットワーク",
+    "networkingBody": "プライベートリンク、メッシュルーティング、ファイアウォールルールをサーバー全体で一元管理します。"
   }
 }

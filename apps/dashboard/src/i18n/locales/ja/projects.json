@@ -33,7 +33,8 @@
     "sourceLocal": "ローカル",
     "services": "サービス",
     "static": "静的",
-    "standalone": "スタンドアロン"
+    "standalone": "スタンドアロン",
+    "updateAvailable": "Update"
   },
   "hosting": {
     "cloud": "クラウド",
@@ -108,6 +109,7 @@
     "production": "本番環境",
     "lastDeploy": "最終デプロイ",
     "tabs": {
+      "appSettings": "設定",
       "overview": "概要",
       "services": "サービス",
       "domains": "ドメイン",
@@ -185,7 +187,8 @@
     "topPaths": "上位パス",
     "requestCount": "{count} リクエスト",
     "statusActive": "有効",
-    "statusOff": "無効"
+    "statusOff": "無効",
+    "server": "サーバー"
   },
   "stats": {
     "serverRequests": "サーバーリクエスト",
@@ -266,6 +269,10 @@
     "newCommitTitle": "新しいコミットがあります",
     "newCommitOn": "対象:",
     "newCommitDeployedOn": "— 現在のデプロイ:",
+    "newVersionTitle": "新しいバージョンがあります",
+    "newVersionAvailable": "新しいリリースがあります:",
+    "newVersionDeployed": "— 現在のデプロイ:",
+    "deployVersion": "新しいバージョンをデプロイ",
     "deploying": "デプロイ中…",
     "redeployLatest": "最新を再デプロイ",
     "deployLatestTitle": "最新の変更をデプロイ",

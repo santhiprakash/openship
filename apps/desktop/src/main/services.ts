@@ -272,6 +272,10 @@ export async function startLocalServices(internalToken: string): Promise<void> {
       OPENSHIP_JOB_RUNNER: "in-process", // no Redis in desktop; skip the probe
       NODE_ENV: "production",
       PORT: String(apiPort),
+      // Bind the API to loopback ONLY. Desktop runs authMode=none (zero-auth),
+      // so a 0.0.0.0 listener would let any host on the LAN reach the local
+      // session-mint endpoints. Mirrors the CLI `up` path (OPENSHIP_API_HOST).
+      OPENSHIP_API_HOST: "127.0.0.1",
       PGLITE_DATA_DIR: dataDir,
       OPENSHIP_MIGRATIONS_DIR: migrationsDir,
       OPENSHIP_PGLITE_ASSETS_DIR: pgliteDir,

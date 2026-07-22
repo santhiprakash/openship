@@ -119,6 +119,8 @@
     "addServer": "添加你自己的服务器",
     "continue": "继续",
     "chooseServer": "选择一台服务器",
+    "searchPlaceholder": "搜索服务器…",
+    "noServersMatch": "没有与搜索匹配的服务器。",
     "requireCloudFeature": "部署到 Openship Cloud",
     "saveDefault": "保存为我每次部署的默认设置。",
     "saveDefaultHint": "稍后可在设置中更改，或在本页的选择器中按单次部署进行调整。",

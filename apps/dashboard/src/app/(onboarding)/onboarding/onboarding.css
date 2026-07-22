@@ -112,6 +112,85 @@
   background: var(--th-sf-05);
 }
 
+/* Desktop (Electron): the macOS traffic-light window controls sit in the
+   top-left strip. Drop the whole bar BELOW that strip (matching
+   .app-sidebar-header in globals.css) instead of squeezing the logo to their
+   right — so the logo + links read as a clean header after the native chrome,
+   not sharing its row. */
+.is-desktop .ob-top-bar {
+  padding-top: calc(var(--titlebar-h, 2rem) + 0.75rem);
+}
+
+/* ─── Language switcher ─── */
+.ob-lang {
+  position: relative;
+}
+.ob-lang-trigger {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.ob-lang-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+.ob-lang-menu {
+  position: absolute;
+  top: 42px;
+  inset-inline-end: 0;
+  z-index: 101;
+  min-width: 168px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--th-sf-02);
+  border: 1px solid var(--th-bd-subtle);
+  box-shadow: 0 12px 34px -14px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ob-lang-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--th-text-body);
+  font-size: 13px;
+  text-align: start;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.ob-lang-item:hover {
+  background: var(--th-sf-05);
+  color: var(--th-text-heading);
+}
+.ob-lang-item.is-active {
+  color: var(--th-text-heading);
+  background: var(--th-sf-04);
+}
+
+/* ─── Skip link (choose step) ─── */
+.ob-skip {
+  display: block;
+  margin: 18px auto 0;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--th-text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.ob-skip:hover {
+  color: var(--th-text-heading);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 /* ─── App container ─── */
 .ob-root {
   position: relative;
@@ -556,6 +635,54 @@
 
 .ob-btn-primary:hover {
   background: var(--th-text-heading);
+}
+
+/* Secondary / test-connection button (outline) */
+.ob-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
+  width: 100%;
+  padding: 12px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--th-text-heading);
+  background: transparent;
+  border: 1px solid var(--th-border, rgba(127, 127, 127, 0.28));
+  border-radius: 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+}
+.ob-btn-secondary:hover:not(:disabled) {
+  background: var(--th-hover-bg, rgba(127, 127, 127, 0.08));
+}
+.ob-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ob-btn-secondary.is-ok {
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.45);
+}
+
+/* Disabled self-host choice (e.g. "This Machine" not ready yet) */
+.ob-selfhost-choice-card.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.ob-badge-soon {
+  display: inline-block;
+  margin-inline-start: 8px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  color: var(--th-text-muted, #888);
+  background: var(--th-hover-bg, rgba(127, 127, 127, 0.12));
 }
 
 .ob-btn-primary:active {

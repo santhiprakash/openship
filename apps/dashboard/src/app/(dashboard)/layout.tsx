@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { getSession, getDeploymentInfo } from "@/lib/server/session";
+import { getSession, getDeploymentInfoOrNull } from "@/lib/server/session";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import { Sidebar } from "@/components/sidebar";
 import { UpdateCenter } from "@/components/updates/UpdateCenter";
 import { MigratedLauncher } from "@/components/migrated-launcher";
@@ -52,9 +53,13 @@ async function fetchUserOrgs(): Promise<OrgListItem[]> {
 async function resolveOrgChooserGate(
   activeOrganizationId: string | null | undefined,
 ): Promise<{ redirectTo?: string }> {
-  if (activeOrganizationId) return {};
-
   const orgs = await fetchUserOrgs();
+  // Trust the session's active org ONLY if it's an actual membership. A
+  // stale/foreign active org — e.g. the zero-auth Local User's workspace
+  // carried into a cloud user's session after cloud-connect — would otherwise
+  // scope the whole UI (Team members, cloud status, everything) to an org the
+  // user isn't in. Reconcile to a real membership instead.
+  if (activeOrganizationId && orgs.some((o) => o.id === activeOrganizationId)) return {};
   if (orgs.length >= 2) {
     return { redirectTo: "/select-organization" };
   }
@@ -102,7 +107,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // render the normal UI (writes would 503), and a cached `true` after the
   // lock releases would trap the operator on the in-progress launcher.
   // Other callers can keep using the cache.
-  const deploymentInfo = await getDeploymentInfo({ skipCache: true });
+  const deploymentInfo = await getDeploymentInfoOrNull({ skipCache: true });
+  if (!deploymentInfo) return <ApiUnavailable />;
 
   // Mid-flight migration gate. The DB is being cut over — rendering
   // the normal UI would risk a 503'd write, and rendering the
@@ -147,15 +153,17 @@ export default async function DashboardLayout({ children }: { children: React.Re
       machineName={deploymentInfo.machineName}
       hostDomain={deploymentInfo.hostDomain}
     >
-      <div className="flex h-dvh">
-        <Sidebar />
-        {/* Main content */}
-        <main className="flex-1 overflow-y-auto">
-          {/* Update + advisory surface (desktop & self-hosted). Renders nothing
-              unless there's an advisory, an available update, or a what's-new. */}
-          <UpdateCenter />
-          {children}
-        </main>
+      <div className="flex flex-col h-dvh">
+        {/* Update + platform-status surface — full app width, ABOVE the sidebar.
+            Renders nothing unless there's an advisory / platform notice (SaaS:
+            partial outage, maintenance) / available update / what's-new, so it
+            adds no chrome when idle. */}
+        <UpdateCenter />
+        <div className="flex flex-1 min-h-0">
+          <Sidebar />
+          {/* Main content */}
+          <main className="flex-1 overflow-y-auto">{children}</main>
+        </div>
       </div>
     </DashboardProviders>
   );

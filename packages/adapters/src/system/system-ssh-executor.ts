@@ -26,6 +26,7 @@ import {
   sshChildEnv,
   sshTarget,
 } from "./system-ssh";
+import { openSystemSshReverseTunnel } from "./reverse-tunnel";
 import { SshDisconnectedError } from "./errors";
 
 const execFileAsync = promisify(execFile);
@@ -146,6 +147,26 @@ export class SystemSshExecutor implements CommandExecutor {
       }
     })();
     return this.masterPromise;
+  }
+
+  /**
+   * Open a reverse tunnel over the ControlMaster: the remote binds an ephemeral
+   * 127.0.0.1 port whose connections arrive here as duplex streams. The
+   * system-ssh counterpart to `SshExecutor.reverseForward` (ssh2) — same shape,
+   * so `CommandExecutor.reverseForward` consumers (the git-credential relay,
+   * future callers) work over agent auth too. Delegates to the generic
+   * `openSystemSshReverseTunnel`.
+   */
+  async reverseForward(
+    onConnection: (stream: Duplex) => void,
+  ): Promise<{ port: number; close: () => Promise<void> }> {
+    await this.ensureMaster(); // `-O forward` needs a live master
+    return openSystemSshReverseTunnel({
+      baseArgs: this.baseArgs(),
+      target: sshTarget(this.config),
+      env: sshChildEnv(this.config),
+      onConnection,
+    });
   }
 
   /** Run a remote command, resolving with stdout/stderr/exit code (never rejects on non-zero). */
@@ -321,7 +342,7 @@ export class SystemSshExecutor implements CommandExecutor {
     localPath: string,
     remotePath: string,
     onLog?: (log: LogEntry) => void,
-    options?: { excludes?: string[]; includes?: string[] },
+    options?: { excludes?: string[]; includes?: string[]; alsoInclude?: string[] },
   ): Promise<void> {
     // Pack the tree into ONE archive, upload that single file, verify + extract.
     // rsync (fast + resumable) over the agent-authenticated OpenSSH client when
@@ -331,6 +352,7 @@ export class SystemSshExecutor implements CommandExecutor {
     const { args: tarArgs, cleanup: cleanupTarList } = await prepareSourceTarArgs(localPath, {
       excludes,
       includes: options?.includes,
+      alsoInclude: options?.alsoInclude,
     });
     const tmpLocalDir = await mkdtemp(join(tmpdir(), "openship-xfer-"));
     const localArchive = join(tmpLocalDir, "context.tar.gz");

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useRef } from "react";
-import { GitBranch, Rocket, Github, Loader2, Globe, Container, Server, Layers, Check, AlertCircle, Key, Plus, Copy } from "lucide-react";
+import { GitBranch, Rocket, Github, Loader2, Globe, Container, Server, Layers, Check, AlertCircle, Key, Plus, Copy, ExternalLink } from "lucide-react";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { CustomSelect } from "@/components/ui/CustomSelect";
 import DropdownMenu from "@/components/ui/DropdownMenu";
@@ -9,11 +9,13 @@ import DomainSettings from "./DomainSettings";
 import BuildSummary from "./BuildSummary";
 import { useCloneStrategyGate } from "./CloneStrategyNudge";
 import { DeployCredentialModal } from "@/components/deployments/DeployCredentialModal";
+import { useServerGitHubConnectModal } from "@/components/github/ServerGitHubConnect";
 import { useDeployment } from "@/context/DeploymentContext";
 import {
   publicEndpointsNeedCloud,
   servicesNeedCloud,
   usesServiceDeployment,
+  type BuildStrategy,
 } from "@/context/deployment/types";
 import { useCloud } from "@/context/CloudContext";
 import { canUseCloudConnection, usePlatform } from "@/context/PlatformContext";
@@ -21,7 +23,7 @@ import { useGitHub } from "@/context/GitHubContext";
 import { useModal } from "@/context/ModalContext";
 import { useRouter, useSearchParams } from "next/navigation";
 import { invalidateProjectCaches } from "@/hooks/useProjectEndpoints";
-import { projectsApi, githubApi, getApiErrorMessage } from "@/lib/api";
+import { projectsApi, githubApi, serverGithubApi, getApiErrorMessage } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
 
 // ─── Deploy checklist for compose ────────────────────────────────────────────
@@ -90,9 +92,9 @@ const ComposeChecklist: React.FC = () => {
             <div key={check.label} className="flex items-start gap-2.5">
               <div className={`mt-0.5 p-1 rounded-md ${
                 check.ok
-                  ? "bg-emerald-500/10 text-emerald-500"
+                  ? "bg-success-bg text-success"
                   : (check as any).warn
-                    ? "bg-amber-500/10 text-amber-500"
+                    ? "bg-warning-bg text-warning"
                     : "bg-muted/50 text-muted-foreground/50"
               }`}>
                 {check.ok ? (
@@ -179,7 +181,8 @@ const Sidebar: React.FC = () => {
   // where we need to pick how the repo gets cloned on the remote (local
   // build vs PAT vs existing GitHub credential). Opshcloud has its own
   // connect-account flow, local builds don't need a remote credential.
-  const cloneGate = useCloneStrategyGate(config.deployTarget);
+  const cloneGate = useCloneStrategyGate();
+  const openGithubConnect = useServerGitHubConnectModal();
 
   // Lazy branch list. In config-edit mode the wizard hydrates from saved data
   // with only the current branch seeded (no repo round-trip on load). The full
@@ -221,8 +224,8 @@ const Sidebar: React.FC = () => {
   // Runtime isolation (Direct/Sandbox) for self-hosted server apps is now an
   // inline setting in the target step (ServerRuntimePicker) — config.runtimeMode
   // already carries the choice, so deploy proceeds with no interruption.
-  const continueDeploy = useCallback(async () => {
-    const deploymentId = await startDeployment();
+  const continueDeploy = useCallback(async (overrides?: { buildStrategy?: BuildStrategy }) => {
+    const deploymentId = await startDeployment(overrides);
     if (deploymentId) {
       router.push(`/build/${deploymentId}`);
     }
@@ -233,47 +236,103 @@ const Sidebar: React.FC = () => {
       if (!requireCloud(t.deploy.targetStep.requireCloudFeature)) return;
     }
 
-    // Self-hosted server only: ask how the repo should be cloned on the
-    // remote target (build locally / use a PAT / use existing GitHub).
-    // Skipped entirely when:
-    //   - target is "cloud" (Opshcloud uses its own connect-account flow)
-    //   - target is "local" (no remote clone needed)
-    //   - user already picked a preference (`preference !== "prompt"`)
-    // The modal is awaited - deploy doesn't proceed until the user
-    // either picks or hits "Skip for now".
-    if (cloneGate.needsPrompt && config.owner) {
-      await new Promise<void>((resolve) => {
-        let modalId = "";
-        modalId = showModal({
-          customContent: (
-            <DeployCredentialModal
-              trigger="preflight-gate"
-              owner={config.owner!}
-              installUrl={installUrl ?? null}
-              projectId={config.projectId ?? null}
-              deployTarget={config.deployTarget}
-              buildStrategy={config.buildStrategy}
-              selfHosted={selfHosted}
-              ghCliAvailable={!!githubState?.sources.ghCli.available}
-              hasGlobalToken={cloneGate.hasGlobalToken}
-              onChoice={(choice) => {
-                if (choice.kind === "build-local") {
-                  updateConfig({ buildStrategy: "local" });
-                }
-                // install-app / add-token already navigated or popped up;
-                // dismiss falls through to resolve below.
-                hideModal(modalId);
-                resolve();
-              }}
-              onDismiss={() => {
-                hideModal(modalId);
-                resolve();
-              }}
-            />
-          ),
-          maxWidth: "640px",
+    // ── Clone-strategy resolution (self-hosted server deploys) ──────────
+    // Deterministic — never ask when the answer is knowable. Server-side clone
+    // is the DEFAULT: any resolvable credential (local gh forwarded over the
+    // relay, Openship App / custom PAT, or a per-server credential) lets the
+    // clone run on the remote worker. We no longer flip to a local build just
+    // because gh is logged in — the gh token is now forwarded for the clone,
+    // which the user opted into as the default. Only an EXPLICIT "build local"
+    // preference builds on this host; a genuine no-credential case surfaces the
+    // modal (and even that degrades to an api-host clone server-side).
+    // buildStrategy="local" already clones on the API host; cloud targets go
+    // through requireCloud; local targets don't clone.
+    let buildStrategyOverride: BuildStrategy | undefined;
+    if (config.deployTarget === "server" && config.buildStrategy === "server") {
+      const ghAvailable = !!githubState?.sources.ghCli.available;
+      const appAvailable =
+        !!githubState?.sources.openshipApp.connected &&
+        !!githubState?.sources.openshipApp.hasInstallations;
+      // gh counts as a remote credential now — forwarded over the relay on
+      // desktop, or (self-hosted) it just lets the backend gracefully degrade
+      // to an api-host clone rather than dead-end.
+      let remoteCredential = appAvailable || cloneGate.hasGlobalToken || ghAvailable;
+      const willBuildLocal = cloneGate.preference === "local";
+
+      // The target server may hold its OWN GitHub credential (device-login
+      // token / PAT / SSH key or per-repo deploy key). That's a valid remote
+      // clone path the App/PAT signals above don't see, so it must suppress the
+      // dead-end modal. Only worth a round-trip in the would-be dead-end — check
+      // it solely when we're otherwise about to surface the modal.
+      if (!willBuildLocal && !remoteCredential && config.serverId) {
+        try {
+          const st = await serverGithubApi.get(config.serverId);
+          if (st.connected) remoteCredential = true;
+        } catch {
+          // Unreadable status → treat as absent and fall through to the modal.
+        }
+      }
+
+      if (willBuildLocal) {
+        buildStrategyOverride = "local";
+      } else if (!remoteCredential && config.owner) {
+        // No gh, no App, no PAT, no per-server credential — genuinely nothing to
+        // clone with. This is the only case worth a modal. The deploy waits
+        // until the user picks or skips.
+        let goConnectServer = false;
+        await new Promise<void>((resolve) => {
+          let modalId = "";
+          modalId = showModal({
+            customContent: (
+              <DeployCredentialModal
+                trigger="preflight-gate"
+                owner={config.owner!}
+                installUrl={installUrl ?? null}
+                projectId={config.projectId ?? null}
+                serverId={config.serverId ?? null}
+                deployTarget={config.deployTarget}
+                buildStrategy={config.buildStrategy}
+                selfHosted={selfHosted}
+                ghCliAvailable={ghAvailable}
+                hasGlobalToken={cloneGate.hasGlobalToken}
+                onChoice={(choice) => {
+                  if (choice.kind === "build-local") {
+                    buildStrategyOverride = "local";
+                    updateConfig({ buildStrategy: "local" });
+                  } else if (choice.kind === "connect-server-github") {
+                    goConnectServer = true;
+                  }
+                  hideModal(modalId);
+                  resolve();
+                }}
+                onDismiss={() => {
+                  hideModal(modalId);
+                  resolve();
+                }}
+              />
+            ),
+            maxWidth: "640px",
+          });
         });
-      });
+        // Chose to connect the server itself → abandon this attempt and open the
+        // shared connect model; deploying again once connected clones via the
+        // per-server credential.
+        if (goConnectServer) {
+          if (config.serverId) {
+            openGithubConnect(config.serverId, {
+              onConnected: () =>
+                showToast(
+                  "GitHub connected — deploy again to continue.",
+                  "success",
+                  "GitHub",
+                ),
+            });
+          }
+          return;
+        }
+      }
+      // else: a remote credential (App/PAT) is available → proceed with the
+      // server-side clone; the backend resolves the token via tokenFor("remote").
     }
 
     if (
@@ -345,8 +404,8 @@ const Sidebar: React.FC = () => {
       return;
     }
 
-    await continueDeploy();
-  }, [baseDomain, canConnectCloud, cloneGate.hasGlobalToken, cloneGate.needsPrompt, config.buildStrategy, config.deployTarget, config.owner, config.projectId, config.publicEndpoints, config.services, continueDeploy, githubState, hideModal, installUrl, isServices, requireCloud, selfHosted, showModal, updateConfig, t]);
+    await continueDeploy(buildStrategyOverride ? { buildStrategy: buildStrategyOverride } : undefined);
+  }, [baseDomain, canConnectCloud, cloneGate.hasGlobalToken, cloneGate.preference, config.buildStrategy, config.deployTarget, config.owner, config.projectId, config.serverId, config.publicEndpoints, config.services, continueDeploy, githubState, hideModal, installUrl, isServices, openGithubConnect, requireCloud, selfHosted, showModal, showToast, updateConfig, t]);
 
   // Edit mode (opened from the project Runtime page with ?mode=config): the
   // finish button SAVES the config to the project and returns — no deploy, no
@@ -376,17 +435,30 @@ const Sidebar: React.FC = () => {
       {/* Repository Info */}
       <div className="border border-border/50 rounded-xl bg-card overflow-hidden">
         <div className="flex items-center gap-1.5 px-4 pt-3 pb-0">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#ef4444]/60" />
-          <span className="w-2.5 h-2.5 rounded-full bg-[#eab308]/60" />
-          <span className="w-2.5 h-2.5 rounded-full bg-[#22c55e]/60" />
+          <span className="w-2.5 h-2.5 rounded-full bg-foreground/15" />
+          <span className="w-2.5 h-2.5 rounded-full bg-foreground/10" />
+          <span className="w-2.5 h-2.5 rounded-full bg-foreground/[0.07]" />
         </div>
         <div className="p-4 pt-3">
           <div className="flex items-center gap-3">
             <Github className="size-4 text-muted-foreground shrink-0" />
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-foreground truncate">
-                {config.owner}/{config.repo}
-              </p>
+              {config.owner && config.owner !== "local" && config.repo ? (
+                <a
+                  href={`https://github.com/${config.owner}/${config.repo}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`${config.owner}/${config.repo}`}
+                  className="group inline-flex max-w-full items-center gap-1.5 text-sm font-medium text-foreground transition-colors hover:text-primary"
+                >
+                  <span className="truncate">{config.owner}/{config.repo}</span>
+                  <ExternalLink className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-hover:text-primary" />
+                </a>
+              ) : (
+                <p className="text-sm font-medium text-foreground truncate">
+                  {config.owner}/{config.repo}
+                </p>
+              )}
             </div>
             {config.owner && config.owner !== "local" && config.repo && (
               <DropdownMenu

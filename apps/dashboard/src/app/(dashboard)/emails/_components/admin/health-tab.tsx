@@ -166,7 +166,7 @@ export function HealthTab({ serverId }: { serverId: string }) {
         }
       >
         {componentsErr && (
-          <div className="px-5 py-3 text-sm text-red-600 dark:text-red-400 border-b border-border/40 bg-red-500/5">
+          <div className="px-5 py-3 text-sm text-danger border-b border-border/40 bg-danger-bg">
             {componentsErr}
           </div>
         )}
@@ -210,7 +210,7 @@ export function HealthTab({ serverId }: { serverId: string }) {
         }
       >
         {dnsErr && (
-          <div className="px-5 py-3 text-sm text-red-600 dark:text-red-400 border-b border-border/40 bg-red-500/5">
+          <div className="px-5 py-3 text-sm text-danger border-b border-border/40 bg-danger-bg">
             {dnsErr}
           </div>
         )}
@@ -521,8 +521,8 @@ function daemonStatusPresentation(status: MailComponentStatus): StatusPresentati
       return {
         Icon: Check,
         PillIcon: Check,
-        iconBg: "bg-emerald-500/10",
-        iconColor: "text-emerald-600 dark:text-emerald-400",
+        iconBg: "bg-success-bg",
+        iconColor: "text-success",
         tone: "success",
         label: "Running",
       };
@@ -530,8 +530,8 @@ function daemonStatusPresentation(status: MailComponentStatus): StatusPresentati
       return {
         Icon: Loader2,
         PillIcon: Loader2,
-        iconBg: "bg-blue-500/10",
-        iconColor: "text-blue-600 dark:text-blue-400 animate-spin",
+        iconBg: "bg-info-bg",
+        iconColor: "text-info animate-spin",
         tone: "info",
         label: "Starting",
       };
@@ -539,8 +539,8 @@ function daemonStatusPresentation(status: MailComponentStatus): StatusPresentati
       return {
         Icon: Loader2,
         PillIcon: Loader2,
-        iconBg: "bg-amber-500/10",
-        iconColor: "text-amber-600 dark:text-amber-400 animate-spin",
+        iconBg: "bg-warning-bg",
+        iconColor: "text-warning animate-spin",
         tone: "warning",
         label: "Stopping",
       };
@@ -557,8 +557,8 @@ function daemonStatusPresentation(status: MailComponentStatus): StatusPresentati
       return {
         Icon: CircleX,
         PillIcon: CircleX,
-        iconBg: "bg-red-500/10",
-        iconColor: "text-red-600 dark:text-red-400",
+        iconBg: "bg-danger-bg",
+        iconColor: "text-danger",
         tone: "danger",
         label: "Failed",
       };
@@ -566,8 +566,8 @@ function daemonStatusPresentation(status: MailComponentStatus): StatusPresentati
       return {
         Icon: CircleAlert,
         PillIcon: CircleAlert,
-        iconBg: "bg-amber-500/10",
-        iconColor: "text-amber-600 dark:text-amber-400",
+        iconBg: "bg-warning-bg",
+        iconColor: "text-warning",
         tone: "warning",
         label: "Missing",
       };
@@ -596,24 +596,24 @@ function dnsStatusPresentation(status: DnsCheckStatus): DnsStatusPresentation {
     case "pass":
       return {
         Icon: Check,
-        iconBg: "bg-emerald-500/10",
-        iconColor: "text-emerald-600 dark:text-emerald-400",
+        iconBg: "bg-success-bg",
+        iconColor: "text-success",
         tone: "success",
         label: "Pass",
       };
     case "warn":
       return {
         Icon: AlertTriangle,
-        iconBg: "bg-amber-500/10",
-        iconColor: "text-amber-600 dark:text-amber-400",
+        iconBg: "bg-warning-bg",
+        iconColor: "text-warning",
         tone: "warning",
         label: "Warning",
       };
     case "fail":
       return {
         Icon: CircleX,
-        iconBg: "bg-red-500/10",
-        iconColor: "text-red-600 dark:text-red-400",
+        iconBg: "bg-danger-bg",
+        iconColor: "text-danger",
         tone: "danger",
         label: "Fail",
       };
@@ -669,10 +669,10 @@ function summarizeHealth(
   if (allClean && (components || checks)) {
     return {
       Icon: CheckCircle2,
-      banner: "bg-emerald-500/5 border-emerald-500/30",
-      iconBg: "bg-emerald-500/10",
-      iconColor: "text-emerald-600 dark:text-emerald-400",
-      textColor: "text-emerald-700 dark:text-emerald-300",
+      banner: "bg-success-bg border-success-border",
+      iconBg: "bg-success-bg",
+      iconColor: "text-success",
+      textColor: "text-success",
       label: h.summary.allGoodLabel,
       sub: h.summary.allGoodSub,
     };
@@ -685,10 +685,10 @@ function summarizeHealth(
   ) {
     return {
       Icon: AlertTriangle,
-      banner: "bg-amber-500/5 border-amber-500/30",
-      iconBg: "bg-amber-500/10",
-      iconColor: "text-amber-600 dark:text-amber-400",
-      textColor: "text-amber-700 dark:text-amber-300",
+      banner: "bg-warning-bg border-warning-border",
+      iconBg: "bg-warning-bg",
+      iconColor: "text-warning",
+      textColor: "text-warning",
       label: h.summary.almostLabel,
       sub: interpolate(dnsWarns === 1 ? h.summary.almostSubOne : h.summary.almostSubOther, { count: String(dnsWarns) }),
     };
@@ -705,10 +705,10 @@ function summarizeHealth(
     const names = missingComponents.map((c) => c.label).join(", ");
     return {
       Icon: AlertTriangle,
-      banner: "bg-amber-500/5 border-amber-500/30",
-      iconBg: "bg-amber-500/10",
-      iconColor: "text-amber-600 dark:text-amber-400",
-      textColor: "text-amber-700 dark:text-amber-300",
+      banner: "bg-warning-bg border-warning-border",
+      iconBg: "bg-warning-bg",
+      iconColor: "text-warning",
+      textColor: "text-warning",
       label: interpolate(h.summary.notInstalledLabel, { names }),
       sub:
         missingComponents.length === 1
@@ -732,10 +732,10 @@ function summarizeHealth(
 
   return {
     Icon: CircleX,
-    banner: "bg-red-500/5 border-red-500/30",
-    iconBg: "bg-red-500/10",
-    iconColor: "text-red-600 dark:text-red-400",
-    textColor: "text-red-700 dark:text-red-300",
+    banner: "bg-danger-bg border-danger-border",
+    iconBg: "bg-danger-bg",
+    iconColor: "text-danger",
+    textColor: "text-danger",
     label: h.summary.issuesLabel,
     sub: parts.join(" · "),
   };

@@ -98,9 +98,11 @@ const ROOT_RESOURCES = new Set<string>([
   "permissions",
   "domain",
   "settings",
+  "job",
   "terminal",
   "cloud",
   "notifications",
+  "updates",
 ]);
 
 /**
@@ -120,9 +122,11 @@ export const ORG_SINGLETON_RESOURCES = new Set<string>([
   "github",
   "permissions",
   "settings",
+  "job",
   "cloud",
   "terminal",
   "notifications",
+  "updates",
 ]);
 
 /**
@@ -340,6 +344,19 @@ export interface PermissionSpec {
    * flag is a 400, not a silent fall-through to org-singleton scope.
    */
   collection?: boolean;
+  /** Marks the dedicated project-create route. Lets the "own projects" token
+   *  scope allow creation here without allowing other collection-write project
+   *  routes (ensure/scan/import) that can reference existing projects. */
+  projectCreate?: boolean;
+  /**
+   * Restrict this route to self-hosted instances. The secure router mounts the
+   * `localOnly` middleware ahead of auth, so a request in CLOUD_MODE gets a 404
+   * before any handler runs. Declarative replacement for an inline
+   * `assertNotCloud(c)` guard — it also surfaces the self-hosted-only fact right
+   * in the route table. An inline guard may still be kept as deliberate
+   * defense-in-depth.
+   */
+  localOnly?: boolean;
   /** Opt this route into the MCP tool surface. See {@link McpRouteMeta}. */
   mcp?: McpRouteMeta;
 }
@@ -355,6 +372,9 @@ export interface PublicSpec {
    * `"webhook-ingress"`; auth endpoints should use `"auth-tight"`.
    */
   rateLimit?: RateLimitPolicyId;
+  /** Restrict this route to self-hosted instances (404 in CLOUD_MODE). See
+   *  the same field on {@link PermissionSpec}. */
+  localOnly?: boolean;
 }
 
 export type RouteSpec = PermissionSpec | PublicSpec;
@@ -420,6 +440,7 @@ export function requirePermission(spec: PermissionSpec): MiddlewareHandler {
         resourceId: "*",
         action: parsed.action as Action,
         scope: "list",
+        projectCreate: spec.projectCreate,
       });
       leafId = "*";
     } else {

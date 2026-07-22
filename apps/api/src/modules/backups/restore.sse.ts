@@ -2,8 +2,8 @@
  * Restore-run SSE channel. Mirrors backup.sse.ts shape.
  */
 
-import { EventEmitter } from "node:events";
 import type { BackupRestore, BackupRestoreStatus } from "@repo/db";
+import { createRunBus } from "../../lib/run-sse";
 
 export type RestoreRunEvent =
   | {
@@ -28,22 +28,8 @@ const TERMINAL: ReadonlySet<BackupRestoreStatus> = new Set([
   "server_error",
 ]);
 
-class RestoreRunBus extends EventEmitter {
-  publish(restoreId: string, event: RestoreRunEvent): void {
-    this.emit(restoreId, event);
-    if (
-      event.type === "complete" ||
-      (event.type === "transition" && TERMINAL.has(event.status))
-    ) {
-      setImmediate(() => this.removeAllListeners(restoreId));
-    }
-  }
-
-  subscribe(restoreId: string, listener: (e: RestoreRunEvent) => void): () => void {
-    this.on(restoreId, listener);
-    return () => this.off(restoreId, listener);
-  }
-}
-
-export const restoreRunBus = new RestoreRunBus();
-restoreRunBus.setMaxListeners(32);
+export const restoreRunBus = createRunBus<RestoreRunEvent>(
+  (e) =>
+    e.type === "complete" ||
+    (e.type === "transition" && TERMINAL.has(e.status)),
+);

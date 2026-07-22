@@ -119,6 +119,8 @@
     "addServer": "独自のサーバーを追加",
     "continue": "続行",
     "chooseServer": "サーバーを選択",
+    "searchPlaceholder": "サーバーを検索…",
+    "noServersMatch": "検索に一致するサーバーはありません。",
     "requireCloudFeature": "Openship Cloudへのデプロイ",
     "saveDefault": "すべてのデプロイのデフォルトとして保存する。",
     "saveDefaultHint": "後で設定から、またはこのページのピッカーからデプロイごとに変更できます。",

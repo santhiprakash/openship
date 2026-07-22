@@ -84,6 +84,35 @@ desktop-only + per-deploy opt-in + short build-bounded window + nonce + host-pin
   (returns `{ relay: true }` when no App/PAT + the deploy opted in) + the credential-helper clone branch
   in `packages/adapters/src/runtime/build-pipeline.ts`.
 
+## Per-server GitHub auth (self-hosted)
+
+The relay is ONE of several ways a clone authenticates. On self-hosted, a server can also carry its own
+GitHub identity so clone-on-server works without the desktop being online. Stored per-server in
+`server_github_auth` (encrypted), consulted FIRST by `resolveServerGitCredential`
+(`apps/api/src/modules/github/server-github.service.ts`) inside `resolveBuildGitToken`
+(`clone-auth.ts`), and clones via the shared `assembleGitClone` (`packages/adapters/src/runtime/git-clone.ts`).
+
+Modes (a per-server switch, in the server detail → Security → GitHub card):
+
+- **token** — a GitHub OAuth **device-flow** login (URL + code, same UX as `gh auth login`) OR a pasted
+  PAT. The device flow runs once; the resulting token is stored **encrypted in our DB** and injected per
+  clone exactly like a PAT — there is NO lingering live-`gh` dependency after login. The token is never
+  returned to the client (the poll endpoint reports status only).
+- **ssh-server-key** — one Ed25519 key generated on the host; the operator adds the public key to their
+  GitHub account once. Clones over `git@github.com` with `GIT_SSH_COMMAND` + a 0600 key + pinned
+  `known_hosts` (`github-known-hosts.ts`, `StrictHostKeyChecking=yes`).
+- **ssh-deploy-key** — a read-only per-repo deploy key auto-registered via `POST /repos/{o}/{r}/keys`
+  (needs repo Administration on the resolved token; 403 → actionable error). Revoked on disconnect.
+
+Precedence: a configured server credential wins for THAT server's clones; App / project-PAT / user-PAT /
+relay remain the fallback when it has none. Cloud (`CLOUD_MODE`) never reads any of this — App-token only.
+
+Security: all secrets encrypted at rest (`lib/encryption.ts`), decrypted only at clone time, written to
+0600 files removed in `finally`, and never logged (SSH keys go through `writeSecretFile` / `executor.writeFile`,
+never the streamed `exec`). Preflight consults `canResolveServerGitCredential` so it reports the exact
+credential the build will use.
+
 ## Status
-Typechecked + adversarially reviewed. **Not yet runtime-tested** against a live server. No DB migration
-is required.
+Typechecked (db + adapters + api + dashboard, 0 errors) + adversarially reviewed. **Not yet runtime-tested**
+against a live server + private repo. DB migration `packages/db/drizzle/0046_white_harrier.sql` adds
+`server_github_auth` + `github_deploy_key`.

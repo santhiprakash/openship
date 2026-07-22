@@ -92,6 +92,12 @@ export type RawComposeService = {
   domain?: string | null;
   customDomain?: string | null;
   domainType?: "free" | "custom" | null;
+  publicEndpoints?: Array<{
+    port?: number | string | null;
+    domain?: string | null;
+    customDomain?: string | null;
+    domainType?: "free" | "custom" | null;
+  }> | null;
 };
 
 /**
@@ -118,6 +124,17 @@ export function normalizeComposeService(raw: RawComposeService): ComposeServiceI
     domain: raw.domain ?? undefined,
     customDomain: raw.customDomain ?? undefined,
     domainType: raw.domainType ?? undefined,
+    publicEndpoints:
+      raw.publicEndpoints && raw.publicEndpoints.length > 0
+        ? raw.publicEndpoints.map((endpoint) =>
+            createPublicEndpoint({
+              port: endpoint.port != null ? String(endpoint.port) : "",
+              domain: endpoint.domain ?? "",
+              customDomain: endpoint.customDomain ?? "",
+              domainType: endpoint.domainType === "custom" ? "custom" : "free",
+            }),
+          )
+        : undefined,
   };
 }
 
@@ -215,6 +232,12 @@ export interface CloudResourceCustom {
 export interface DeploymentConfig {
   /** Existing deployable environment to update/deploy, when launched from a project page. */
   projectId?: string;
+  /** One-click catalog app (repo-less services project). Deploys from its saved
+   *  rows with no git source — treated like local/upload in the deploy guards. */
+  isApp?: boolean;
+  /** Catalog template id (e.g. "n8n", "convex") — drives the schema-based app
+   *  settings step in the wizard for apps with `management:"schema"`. */
+  appTemplateId?: string;
   projectName: string;
   repo: string;
   owner: string;
@@ -547,6 +570,26 @@ export function getPublicEndpointHosts(
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
+/** One exposed port's advisory probe result (mirrors the API `PortCheckResult`). */
+export interface PortCheckUI {
+  port: number;
+  listening: boolean;
+  checked: boolean;
+  serviceId?: string;
+  serviceName?: string;
+  skippedReason?: string;
+}
+
+/** One routed path's advisory static-output result (mirrors `OutputCheckResult`). */
+export interface OutputCheckUI {
+  path: string;
+  servedPath?: string;
+  found: boolean;
+  hasIndex: boolean;
+  checked: boolean;
+  skippedReason?: string;
+}
+
 export interface DeploymentState {
   deploymentId: string | null;
   isDeploying: boolean;
@@ -569,6 +612,14 @@ export interface DeploymentState {
    * transient `serviceStatuses`) is gone.
    */
   decisionFailedServiceIds: string[];
+  /**
+   * Advisory post-deploy port-probe results. Server-backed (getBuildStatus
+   * .portCheck + the SSE `complete` event); the dashboard raises a skippable
+   * "wrong port?" modal for any entry that is `checked && !listening`.
+   */
+  portCheck: PortCheckUI[];
+  /** Ports (single-app) / service ids (compose) the user dismissed. */
+  portCheckSkipped: (number | string)[];
   errorCode: string;
   errorDetails: Record<string, unknown> | null;
   buildLogs: BuildLog[];
@@ -620,6 +671,8 @@ export const INITIAL_STATE: DeploymentState = {
   warningMessage: "",
   decisionPending: false,
   decisionFailedServiceIds: [],
+  portCheck: [],
+  portCheckSkipped: [],
   errorCode: "",
   errorDetails: null,
   buildLogs: [],
@@ -696,7 +749,7 @@ export interface DeploymentContextType {
   ) => Promise<{ success: boolean; error?: string; errorType?: string }>;
 
   // Build lifecycle
-  startDeployment: (overrides?: { runtimeMode?: RuntimeMode; saveConfigOnly?: boolean }) => Promise<string | null>;
+  startDeployment: (overrides?: { runtimeMode?: RuntimeMode; buildStrategy?: BuildStrategy; saveConfigOnly?: boolean }) => Promise<string | null>;
   connectToBuild: (deploymentId?: string, startBuild?: boolean) => Promise<void>;
   loadBuildSession: (deploymentId: string) => Promise<{ success: boolean; error?: string }>;
   stopDeployment: () => Promise<void>;

@@ -25,8 +25,23 @@ export { endpoints } from "./endpoints";
 
 /* --- Domain services ---------------------------------------------- */
 export { projectsApi } from "./projects";
+export type { RouteRuleRow, RouteRuleInput } from "./projects";
+export { appsApi } from "./apps";
+export type { AppCatalogEntry, AppCatalogField, InstallAppResult } from "./apps";
 export { deployApi } from "./deploy";
 export { domainsApi } from "./domains";
+export {
+  jobsApi,
+  type JobView,
+  type JobRunSummary,
+  type JobInput,
+  type JobTriggerEvent,
+  type JobActionConfig,
+  type JobNotifyConfig,
+  type JobRetryConfig,
+  type JobRunState,
+  type BackupScheduleView,
+} from "./jobs";
 export { tokensApi } from "./tokens";
 export type { AccessToken, CreatedAccessToken, McpClient } from "./tokens";
 export { githubApi } from "./github";
@@ -37,6 +52,18 @@ export { aiApi } from "./ai";
 export { sandboxApi } from "./sandbox";
 export { systemApi } from "./system";
 export { migrationApi } from "./migration";
+export { dockerMigrationApi } from "./server-migration";
+export type {
+  DiscoveredStack,
+  DiscoveredGroup,
+  DiscoveredService,
+  DiscoveredVolumeMount,
+  AdoptResult,
+  MigrationPreview,
+  MigrationPreviewService,
+  MigrationRun,
+  MigrationStatus,
+} from "./server-migration";
 export type {
   DomainChoice,
   PreflightResult,
@@ -162,6 +189,12 @@ export type {
 
 /* --- Backups ------------------------------------------------------- */
 export { backupDestinationsApi, backupsApi } from "./backups";
+export {
+  serverGithubApi,
+  type ServerGithubStatus,
+  type ServerGithubMode,
+  type ServerGithubDeviceFlow,
+} from "./serverGithub";
 export type {
   BackupDestinationSummary,
   CreateDestinationInput,
@@ -169,6 +202,8 @@ export type {
   BackupPolicy,
   BackupRun,
   BackupRestore,
+  DestinationUsage,
+  DestinationUsagePolicy,
 } from "./backups";
 
 /* --- Auth helpers -------------------------------------------------- */

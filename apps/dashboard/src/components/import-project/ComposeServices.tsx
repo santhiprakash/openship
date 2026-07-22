@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import {
   Layers,
   Boxes,
@@ -24,10 +24,13 @@ import { useDeployment } from "@/context/DeploymentContext";
 import { usePlatform } from "@/context/PlatformContext";
 import {
   usesServiceDeployment,
+  ensurePublicEndpoints,
   type ComposeServiceInfo,
+  type PublicEndpoint,
 } from "@/context/deployment/types";
 import { getModeSwitchUpdates } from "@/context/deployment/mode-config";
-import { normalizeSubdomain, normalizeSubdomainInput } from "@/utils/subdomain";
+import { normalizeSubdomain } from "@/utils/subdomain";
+import PublicEndpointsCard from "@/components/routing/PublicEndpointsCard";
 import { Modal } from "@/components/ui/Modal";
 import DropdownMenu from "@/components/ui/DropdownMenu";
 import EnvironmentVariables from "./EnvironmentVariables";
@@ -172,7 +175,6 @@ const ServiceDomainSection: React.FC<{
   projectName: string;
   onChange: (updates: Partial<ComposeServiceInfo>) => void;
 }> = ({ service, projectName, onChange }) => {
-  const { baseDomain } = usePlatform();
   const { t } = useI18n();
   const d = t.importProject.composeServices.domain;
   const hasPorts = service.ports.length > 0;
@@ -191,23 +193,45 @@ const ServiceDomainSection: React.FC<{
     );
   }
 
-  const exposedPort = service.exposedPort || getExposedPort(service) || "";
-  const domainType = service.domainType || "free";
+  const primaryPort = service.exposedPort || getExposedPort(service) || "";
   const defaultSubdomain =
     service.name === "web" || service.name === "app" || service.name === "frontend"
       ? normalizeSubdomain(projectName)
       : normalizeSubdomain(`${projectName}-${service.name}`);
 
+  // Routes shown in the card: the service's explicit publicEndpoints, else a
+  // single route synthesized from the scalar exposedPort/domain. One row per
+  // public port — each with its own domain (Convex: 3210 API + 3211 HTTP actions).
+  const endpoints = ensurePublicEndpoints(service.publicEndpoints, {
+    port: primaryPort,
+    domain: service.domain || defaultSubdomain,
+    customDomain: service.customDomain || "",
+    domainType: service.domainType || "free",
+  });
+
+  // Persist edited routes; mirror the primary (entry[0]) back to the scalar
+  // columns so single-route readers (BuildSummary, deploy payload) stay in sync.
+  const applyEndpoints = (next: PublicEndpoint[]) => {
+    const primary = next[0];
+    onChange({
+      publicEndpoints: next,
+      exposedPort: primary?.port || primaryPort,
+      domain: primary?.domainType === "custom" ? undefined : primary?.domain,
+      customDomain: primary?.domainType === "custom" ? primary?.customDomain : undefined,
+      domainType: primary?.domainType ?? "free",
+    });
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Toggle row */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className={`flex size-9 items-center justify-center rounded-lg ${
-            service.exposed ? "bg-emerald-500/10" : "bg-muted/50"
+            service.exposed ? "bg-success-bg" : "bg-muted/50"
           }`}>
             <Globe className={`size-4 ${
-              service.exposed ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"
+              service.exposed ? "text-success" : "text-muted-foreground"
             }`} />
           </div>
           <div>
@@ -221,7 +245,7 @@ const ServiceDomainSection: React.FC<{
           type="button"
           onClick={() => onChange({ exposed: !service.exposed })}
           className={`relative h-[22px] w-10 rounded-full transition-colors ${
-            service.exposed ? "bg-emerald-500" : "border border-border/60 bg-muted"
+            service.exposed ? "bg-success-solid" : "border border-border/60 bg-muted"
           }`}
         >
           <span
@@ -234,95 +258,20 @@ const ServiceDomainSection: React.FC<{
         </button>
       </div>
 
-      {/* Domain config - prominent when on */}
+      {/* Per-port routes — one domain each, add/remove. */}
       {service.exposed && (
-        <div className="ms-12 space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
-          {/* Port picker (if multiple) */}
-          {service.ports.length > 1 && (
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
-                {d.exposedPort}
-              </label>
-              <select
-                value={exposedPort}
-                onChange={(e) => onChange({ exposedPort: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-background border border-border/50 rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
-              >
-                {service.ports.map((p) => {
-                  const port = portDisplay(p);
-                  return (
-                    <option key={p} value={port}>
-                      {interpolate(d.portOption, { port })}
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-          )}
-
-          {/* Domain type toggle + input */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-medium text-muted-foreground">{d.domainLabel}</label>
-              <div className="flex items-center bg-muted/60 rounded-lg p-0.5">
-                <button
-                  type="button"
-                  onClick={() => onChange({ domainType: "free" })}
-                  className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
-                    domainType === "free"
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {d.free}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onChange({ domainType: "custom" })}
-                  className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
-                    domainType === "custom"
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {d.custom}
-                </button>
-              </div>
-            </div>
-            {domainType === "free" ? (
-              <div className="relative">
-                <input
-                  type="text"
-                  value={service.domain ?? defaultSubdomain}
-                  onChange={(e) =>
-                    onChange({
-                      domain: normalizeSubdomainInput(e.target.value),
-                    })
-                  }
-                  placeholder={defaultSubdomain}
-                  className="w-full px-3.5 py-2.5 pe-16 bg-background border border-border/50 rounded-xl text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-                <span className="absolute end-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-                  .{baseDomain}
-                </span>
-              </div>
-            ) : (
-              <input
-                type="text"
-                value={service.customDomain || ""}
-                onChange={(e) => onChange({ customDomain: e.target.value.toLowerCase() })}
-                placeholder="api.example.com"
-                className="w-full px-3.5 py-2.5 bg-background border border-border/50 rounded-xl text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
-              />
-            )}
-          </div>
-
-          {service.ports.length === 1 && (
-            <p className="text-xs text-muted-foreground">
-              {d.routingTrafficPrefix}{" "}
-              <span className="font-mono font-medium text-foreground">{exposedPort}</span>
-            </p>
-          )}
+        <div className="animate-in fade-in slide-in-from-top-1 duration-200">
+          <PublicEndpointsCard
+            projectName={projectName}
+            endpoints={endpoints}
+            hasServer
+            runtimePort={primaryPort}
+            allowPortEdit
+            saveMode="change"
+            hideHeader
+            portInline
+            onChange={(next) => applyEndpoints(next)}
+          />
         </div>
       )}
     </div>
@@ -400,7 +349,7 @@ const SharedEnvironmentCard: React.FC<{
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-sm font-medium text-foreground">{sh.title}</p>
               {rootEnvVars.length > 0 && (
-                <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                <span className="rounded-md bg-success-bg px-2 py-0.5 text-[11px] font-medium text-success">
                   {sh.rootEnvFound}
                 </span>
               )}
@@ -469,7 +418,7 @@ const SharedEnvironmentCard: React.FC<{
             <button
               type="button"
               onClick={importRootEnv}
-              className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-600 transition-colors hover:bg-emerald-500/15 dark:text-emerald-400"
+              className="mt-3 rounded-lg bg-success-bg px-3 py-1.5 text-xs font-medium text-success transition-colors hover:bg-success-solid/15"
             >
               {interpolate(importableRootVars.length === 1 ? sh.importFromRootOne : sh.importFromRootOther, { count: String(importableRootVars.length) })}
             </button>
@@ -608,7 +557,7 @@ const ServiceConfigSection: React.FC<{
                       className={cn(inputCls, "flex-1")}
                     />
                     {isRouted && (
-                      <span className="shrink-0 rounded-md bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                      <span className="shrink-0 rounded-md bg-success-bg px-2 py-0.5 text-[11px] font-medium text-success">
                         {cfg.publicBadge}
                       </span>
                     )}
@@ -640,7 +589,7 @@ const ServiceConfigSection: React.FC<{
               <span className={labelCls}>{cfg.volumes}</span>
             </div>
             {statefulOnCloud && (
-              <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+              <div className="flex items-start gap-2 rounded-lg border border-warning-border bg-warning-bg px-3 py-2 text-xs text-warning">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 <span>
                   {cfg.statefulWarnPart1}<span className="font-medium">{cfg.statefulWarnBold}</span>{cfg.statefulWarnPart2}
@@ -786,11 +735,40 @@ const ServiceCard: React.FC<{
     [onEnvChange],
   );
 
+  // Environment-variables card — sits in the right column beside the domain card.
+  const envButton = (extra = "") => (
+    <button
+      type="button"
+      onClick={() => setEnvModalOpen(true)}
+      className={cn(
+        "w-full self-start rounded-xl border border-border/40 bg-muted/20 px-4 py-3 text-start transition-colors hover:bg-muted/30",
+        extra,
+      )}
+    >
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-foreground">{cs.card.envVars}</p>
+          <p className="truncate text-xs text-muted-foreground">
+            {envCount === 0
+              ? cs.card.noneConfigured
+              : interpolate(envCount === 1 ? cs.card.variablesConfiguredOne : cs.card.variablesConfiguredOther, { count: String(envCount) })}
+            {missingCount > 0 && (
+              <span className="font-medium text-warning">
+                {" "}{interpolate(cs.card.missingSuffix, { count: String(missingCount) })}
+              </span>
+            )}
+          </p>
+        </div>
+        <span className="shrink-0 text-xs font-medium text-primary">{cs.card.manage}</span>
+      </div>
+    </button>
+  );
+
   return (
     <div
       className={`border rounded-2xl bg-card overflow-hidden transition-colors ${
         service.exposed
-          ? "border-emerald-500/25 ring-1 ring-emerald-500/10 dark:border-emerald-400/20 dark:ring-emerald-400/10"
+          ? "border-success-border ring-1 ring-success-border"
           : "border-border/50"
       }`}
     >
@@ -810,7 +788,7 @@ const ServiceCard: React.FC<{
             <span
               className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${
                 service.exposed
-                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                  ? "bg-success-bg text-success"
                   : "bg-muted/60 text-muted-foreground"
               }`}
             >
@@ -856,7 +834,7 @@ const ServiceCard: React.FC<{
           <div
             className={`rounded-xl border px-4 py-3 transition-colors ${
               service.exposed
-                ? "border-emerald-500/20 bg-emerald-500/5 dark:border-emerald-400/15 dark:bg-emerald-400/10"
+                ? "border-success-border bg-success-bg"
                 : "border-border/40 bg-muted/20"
             }`}
           >
@@ -866,28 +844,7 @@ const ServiceCard: React.FC<{
               onChange={onUpdate}
             />
           </div>
-          <button
-            type="button"
-            onClick={() => setEnvModalOpen(true)}
-            className="w-full self-start rounded-xl border border-border/40 bg-muted/20 px-4 py-3 text-start transition-colors hover:bg-muted/30"
-          >
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">{cs.card.envVars}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {envCount === 0
-                    ? cs.card.noneConfigured
-                    : interpolate(envCount === 1 ? cs.card.variablesConfiguredOne : cs.card.variablesConfiguredOther, { count: String(envCount) })}
-                  {missingCount > 0 && (
-                    <span className="font-medium text-amber-600 dark:text-amber-400">
-                      {" "}{interpolate(cs.card.missingSuffix, { count: String(missingCount) })}
-                    </span>
-                  )}
-                </p>
-              </div>
-              <span className="shrink-0 text-xs font-medium text-primary">{cs.card.manage}</span>
-            </div>
-          </button>
+          {envButton()}
         </div>
 
         <ServiceConfigSection service={service} onChange={onUpdate} />
@@ -927,7 +884,7 @@ const ServiceCard: React.FC<{
             </button>
           </div>
           {missingCount > 0 && (
-            <div className="mt-3 inline-flex rounded-md bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+            <div className="mt-3 inline-flex rounded-md bg-warning-bg px-2.5 py-1 text-xs font-medium text-warning">
               {interpolate(missingCount === 1 ? cs.card.needsValueOne : cs.card.needsValueOther, { count: String(missingCount) })}
             </div>
           )}
@@ -954,6 +911,7 @@ const ServiceCard: React.FC<{
 
 const ComposeServices: React.FC = () => {
   const { config, updateConfig } = useDeployment();
+  const { baseDomain } = usePlatform();
   const { t } = useI18n();
   const cs = t.importProject.composeServices;
   const cnt = t.importProject.counts;
@@ -996,6 +954,37 @@ const ComposeServices: React.FC = () => {
 
   const buildCount = services.filter((s) => s.build).length;
   const exposedCount = services.filter((s) => s.exposed).length;
+
+  // Detect two routes resolving to the SAME hostname (across every service ×
+  // port). The deploy also skips duplicates, but flag it here so the operator
+  // can change the domain before shipping a route that silently won't bind.
+  const projectNameForHost = config.projectName || config.repo || "";
+  const duplicateHosts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const svc of services) {
+      if (!svc.exposed) continue;
+      const defaultSub =
+        svc.name === "web" || svc.name === "app" || svc.name === "frontend"
+          ? normalizeSubdomain(projectNameForHost)
+          : normalizeSubdomain(`${projectNameForHost}-${svc.name}`);
+      const eps = ensurePublicEndpoints(svc.publicEndpoints, {
+        port: svc.exposedPort || getExposedPort(svc) || "",
+        domain: svc.domain || defaultSub,
+        customDomain: svc.customDomain || "",
+        domainType: svc.domainType || "free",
+      });
+      for (const ep of eps) {
+        const host =
+          ep.domainType === "custom"
+            ? ep.customDomain?.trim().toLowerCase()
+            : ep.domain
+              ? `${ep.domain}.${baseDomain}`.toLowerCase()
+              : undefined;
+        if (host) counts.set(host, (counts.get(host) ?? 0) + 1);
+      }
+    }
+    return new Set([...counts.entries()].filter(([, n]) => n > 1).map(([host]) => host));
+  }, [services, baseDomain, projectNameForHost]);
 
   const setDeploymentMode = useCallback(
     (mode: "services" | "single") => {
@@ -1053,6 +1042,22 @@ const ComposeServices: React.FC = () => {
                 rootEnvVars={rootEnvVars}
                 onChange={updateSharedEnv}
               />
+
+              {/* Duplicate-domain warning — two routes can't share a hostname. */}
+              {duplicateHosts.size > 0 && (
+                <div className="flex items-start gap-3 rounded-xl border border-warning-border bg-warning-bg px-4 py-3">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+                  <div className="min-w-0 text-sm">
+                    <p className="font-medium text-warning">
+                      {cs.domain.duplicateTitle}
+                    </p>
+                    <p className="mt-0.5 text-warning/80">
+                      {cs.domain.duplicateDescription}{" "}
+                      <span className="font-mono">{[...duplicateHosts].join(", ")}</span>
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Services list */}
               {services.length > 0 ? (

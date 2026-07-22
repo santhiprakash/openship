@@ -18,6 +18,8 @@ import { permission } from "../../lib/permission";
 import { audit, auditContextFrom } from "../../lib/audit";
 import * as projectService from "./project.service";
 import * as projectTeardown from "./project-teardown";
+import { checkProjectPorts } from "./port-check.service";
+import { checkProjectOutput } from "./output-check.service";
 import { AppError, safeErrorMessage } from "@repo/core";
 import type {
   TCreateProjectBody,
@@ -34,7 +36,8 @@ import { getOpenRestyPaths } from "@/lib/openresty-paths";
 import * as domainService from "../domains/domain.service";
 import * as prepareService from "../deployments/prepare.service";
 import { sshManager } from "../../lib/ssh-manager";
-import { env, runtimeTarget } from "../../config";
+import { env } from "../../config";
+import { sharedWebhookUrl, domainWebhookUrl } from "../../lib/public-url";
 import { resolveProjectTrafficSource, fetchMgmt, mgmtStream } from "../../lib/project-analytics";
 import { refreshProjectFaviconIfStale } from "../../lib/favicon-detector";
 import { getAdminOblienClient } from "../../lib/oblien-user-client";
@@ -125,9 +128,27 @@ export async function ensure(c: Context) {
 // ─── Projects CRUD ───────────────────────────────────────────────────────────
 
 
+/**
+ * Project ids a scoped token is allowed to SEE, or null when the caller is not
+ * a scoped token (no filtering — normal role visibility applies). For an "own
+ * projects" token this is exactly the set it created (auto-granted on create).
+ * Security-critical: every project-list surface must filter through this so a
+ * scoped token never sees a project it wasn't granted.
+ */
+async function scopedProjectIds(ctx: RequestContext): Promise<Set<string> | null> {
+  if (!ctx.tokenScope) return null;
+  const grants = await repos.patGrant.listByToken(ctx.tokenScope.tokenId);
+  return new Set(
+    grants
+      .filter((g) => g.resourceType === "project" && g.resourceId !== "*")
+      .map((g) => g.resourceId),
+  );
+}
+
 export async function getHome(c: Context) {
   const ctx = getRequestContext(c);
   const { userId, organizationId } = ctx;
+  const scopedIds = await scopedProjectIds(ctx);
 
   // Surface a structured payload that includes the user's full org list +
   // a per-org project count. The dashboard uses this to render a
@@ -139,7 +160,9 @@ export async function getHome(c: Context) {
   try {
     result = await projectService.listProjects(organizationId, {
       page: 1,
-      perPage: 100,
+      // Scoped tokens own few projects but they may sit anywhere in the org's
+      // set, so widen the fetch before filtering to the owned ids below.
+      perPage: scopedIds ? 1000 : 100,
       });
   } catch (err) {
     // Migrations not yet applied — PGlite first-boot case. Return an
@@ -164,9 +187,16 @@ export async function getHome(c: Context) {
     return c.json({
       success: true,
       projects: [],
-      numbers: { total_projects: 0, total_deployments: 0, total_success_deployments: 0 },
+      numbers: { total_projects: 0, total_active_projects: 0, total_deployments: 0, total_success_deployments: 0 },
       otherOrgs: [],
     });
+  }
+
+  // Scoped-token isolation: keep only the projects this token may see. Applied
+  // BEFORE enrichment + cloud merge so no non-owned project leaks anywhere below.
+  if (scopedIds) {
+    result.rows = result.rows.filter((p) => scopedIds.has(p.id));
+    result.total = result.rows.length;
   }
 
   // Enrich every project in ONE round trip — batched queries
@@ -176,12 +206,15 @@ export async function getHome(c: Context) {
   // reconnect" client-side from `deployTarget === 'cloud'` +
   // CloudContext.connected — no duplicate server-side flag.
   const projectIds = result.rows.map((p) => p.id);
-  const [enrichedProjectsResolved, latestByProject, primariesByProject, servicesByProject] =
+  const [enrichedProjectsResolved, latestByProject, primariesByProject, servicesByProject, deployStats] =
     await Promise.all([
       projectService.enrichProjectsBatch(result.rows),
       repos.deployment.findLatestByProjects(projectIds),
       repos.domain.getPrimariesByProjects(projectIds),
       repos.service.listByProjects(projectIds),
+      // Real Activity-card counts (was hardcoded 0). Scoped to the visible
+      // project ids, so scoped tokens only see their own deployments.
+      repos.deployment.statsByProjects(projectIds),
     ]);
 
   const projects = enrichedProjectsResolved.map((enriched, idx) => {
@@ -209,7 +242,9 @@ export async function getHome(c: Context) {
   // query: one count per other org. Only runs when current org list is
   // empty so the normal case has no extra cost.
   let otherOrgs: Array<{ organizationId: string; name: string; projectCount: number }> = [];
-  if (result.total === 0) {
+  // Never surface cross-org hints to a scoped token — it must see nothing
+  // outside the projects it owns, including counts in the user's other orgs.
+  if (!scopedIds && result.total === 0) {
     try {
       const memberships = await repos.member.listByUser(userId);
       const otherOrgIds = memberships
@@ -246,21 +281,31 @@ export async function getHome(c: Context) {
   // from the SaaS as the org owner), tagged with `source` so the dashboard can
   // badge them and replay the source hint on subsequent calls.
   const localProjects = projects.map((p) => ({ ...p, source: "local" as const }));
-  const cloud = await fetchOrgCloudProjects(organizationId);
 
   let mergedProjects: unknown[] = localProjects;
   let cloudProjectCount = 0;
+  let cloudDeployments = 0;
+  let cloudSuccessDeployments = 0;
   let cloudPartial = false;
-  if (cloud.state === "merged") {
-    const localIds = new Set(localProjects.map((p) => (p as { id: string }).id));
-    const cloudProjects = cloud.projects
-      .filter((p) => !localIds.has((p.id as string) ?? ""))
-      .map((p) => ({ ...p, source: "cloud" as const }));
-    mergedProjects = [...localProjects, ...cloudProjects];
-    cloudProjectCount =
-      Number(cloud.numbers.total_projects ?? cloudProjects.length) || cloudProjects.length;
-  } else if (cloud.state === "unavailable") {
-    cloudPartial = true;
+  // Skip the cloud merge for a scoped token — cloud projects are ones it didn't
+  // create, so they must stay invisible. Only the owner's full session/token
+  // sees the local+cloud union.
+  if (!scopedIds) {
+    const cloud = await fetchOrgCloudProjects(organizationId);
+    if (cloud.state === "merged") {
+      const localIds = new Set(localProjects.map((p) => (p as { id: string }).id));
+      const cloudProjects = cloud.projects
+        .filter((p) => !localIds.has((p.id as string) ?? ""))
+        .map((p) => ({ ...p, source: "cloud" as const }));
+      mergedProjects = [...localProjects, ...cloudProjects];
+      cloudProjectCount =
+        Number(cloud.numbers.total_projects ?? cloudProjects.length) || cloudProjects.length;
+      const cloudNums = cloud.numbers as Record<string, unknown>;
+      cloudDeployments = Number(cloudNums.total_deployments ?? 0) || 0;
+      cloudSuccessDeployments = Number(cloudNums.total_success_deployments ?? 0) || 0;
+    } else if (cloud.state === "unavailable") {
+      cloudPartial = true;
+    }
   }
 
   // The "projects in other orgs" nudge is only useful when the view is truly
@@ -272,8 +317,10 @@ export async function getHome(c: Context) {
     projects: mergedProjects,
     numbers: {
       total_projects: result.total + cloudProjectCount,
-      total_deployments: 0,
-      total_success_deployments: 0,
+      // Alias the dashboard reads (Activity card + ActivityChart "live projects").
+      total_active_projects: result.total + cloudProjectCount,
+      total_deployments: deployStats.total + cloudDeployments,
+      total_success_deployments: deployStats.success + cloudSuccessDeployments,
     },
     otherOrgs,
     ...(cloudPartial ? { cloudPartial: true } : {}),
@@ -282,21 +329,27 @@ export async function getHome(c: Context) {
 
 export async function list(c: Context) {
   const ctx = getRequestContext(c);
-  const { userId, organizationId } = ctx;
+  const { organizationId } = ctx;
+  const scopedIds = await scopedProjectIds(ctx);
   const page = Number(c.req.query("page") ?? 1);
   const perPage = Number(c.req.query("perPage") ?? 20);
-  const result = await projectService.listProjects(organizationId, { page, perPage });
-  result.rows.forEach((project) => {
+  const result = await projectService.listProjects(
+    organizationId,
+    scopedIds ? { page: 1, perPage: 1000 } : { page, perPage },
+  );
+  // Scoped-token isolation: keep only the projects this token may see.
+  const rows = scopedIds ? result.rows.filter((p) => scopedIds.has(p.id)) : result.rows;
+  rows.forEach((project) => {
     refreshProjectFaviconIfStale(project);
   });
   // Tag source for consistency with the home merge. Cloud-project merge for
   // this paginated endpoint is deferred (the dashboard list uses getHome); the
   // tag keeps the field shape uniform for clients that read /projects.
   return c.json({
-    data: result.rows.map((p) => ({ ...p, source: "local" as const })),
-    total: result.total,
-    page: result.page,
-    perPage: result.perPage,
+    data: rows.map((p) => ({ ...p, source: "local" as const })),
+    total: scopedIds ? rows.length : result.total,
+    page: scopedIds ? 1 : result.page,
+    perPage: scopedIds ? rows.length : result.perPage,
   });
 }
 
@@ -319,6 +372,16 @@ export async function create(c: Context) {
       gitBranch: project.gitBranch ?? null,
     },
   });
+  // A scoped token that just created a project now fully controls it: record a
+  // per-project grant so later reads/writes/deletes on this id pass the
+  // restricted-principal check. Only a token carrying a project `create` grant
+  // can reach this route (see permission.ts), so this is exactly the "projects
+  // it creates" scope accruing ownership. No-op for sessions or full tokens.
+  if (ctx.tokenScope) {
+    await repos.patGrant.createMany(ctx.tokenScope.tokenId, [
+      { resourceType: "project", resourceId: project.id, permissions: ["read", "write", "admin"] },
+    ]);
+  }
   return c.json({ data: project }, 201);
 }
 
@@ -443,6 +506,19 @@ export async function remove(c: Context) {
     // surfacing in the audit feed. Security teams only want failed
     // attempts on resources the actor could actually see.
     return c.json({ ok: false, error: "Project not found" }, 404);
+  }
+  // The Openship control plane deploys itself; deleting its app row would drop
+  // the Apps entry + domain while the host service keeps running (and orphan the
+  // edge route). It's managed from the CLI, never torn down via the dashboard.
+  if (proj.appTemplateId === "openship") {
+    return c.json(
+      {
+        ok: false,
+        code: "PROJECT_IS_CONTROL_PLANE",
+        error: "This is the Openship control plane — manage it with the CLI, not the dashboard.",
+      },
+      403,
+    );
   }
   if (proj.deletionInProgress) {
     audit.recordAsync(auditContextFrom(c, organizationId, userId), {
@@ -666,6 +742,28 @@ export async function getResources(c: Context) {
   return c.json({ data: resources });
 }
 
+/** POST /projects/:id/port-check — live, on-demand port-reachability audit of
+ *  the active deployment's container(s). Advisory (never throws on probe
+ *  failure); powers the Domains tab's "port not reachable" hint. */
+export async function portCheck(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  await permission.assert(ctx, { resourceType: "project", resourceId: id, action: "read" });
+  const checks = await checkProjectPorts(ctx, id);
+  return c.json({ data: checks });
+}
+
+/** POST /projects/:id/output-check — live static-output audit of the active
+ *  deployment (advisory; static apps only). Powers the Domains tab's "no output
+ *  found at this path" hint — the file-side twin of /port-check. */
+export async function outputCheck(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  await permission.assert(ctx, { resourceType: "project", resourceId: id, action: "read" });
+  const checks = await checkProjectOutput(ctx, id);
+  return c.json({ data: checks });
+}
+
 export async function updateResources(c: Context) {
   const id = param(c, "id");
   await permission.assert(getRequestContext(c), { resourceType: "project", resourceId: id, action: "write" });
@@ -821,13 +919,16 @@ export async function listLocal(c: Context) {
   if (env.CLOUD_MODE) return c.notFound();
 
   const ctx = getRequestContext(c);
-  const { userId, organizationId } = ctx;
+  const { organizationId } = ctx;
   try {
+    const scopedIds = await scopedProjectIds(ctx);
     const result = await projectService.listProjects(organizationId, {
       page: 1,
-      perPage: 100,
+      perPage: scopedIds ? 1000 : 100,
       });
-    const localProjects = result.rows.filter((p) => p.gitProvider === "local");
+    let localProjects = result.rows.filter((p) => p.gitProvider === "local");
+    // Scoped-token isolation: only the projects this token may see.
+    if (scopedIds) localProjects = localProjects.filter((p) => scopedIds.has(p.id));
     return c.json({ success: true, projects: localProjects });
   } catch {
     return c.json({ success: true, projects: [] });
@@ -1299,9 +1400,10 @@ export async function linkRepo(c: Context) {
     gitFields.autoDeploy = true;
   } else if (strategy === "domain") {
     // User has a verified domain for webhooks → direct delivery
-    const webhookUrl = `https://${project.webhookDomain}/_openship/hooks/github`;
+    // strategy === "domain" ⟹ webhookDomain is set (resolveWebhookStrategy).
+    const webhookUrl = domainWebhookUrl(project.webhookDomain!);
     try {
-      const wh = await registerWebhook(ctx, owner, repo, webhookUrl);
+      const wh = await registerWebhook(ctx, owner, repo, webhookUrl, { projectId: project.id });
       if (wh.hookId) gitFields.webhookId = wh.hookId;
       gitFields.autoDeploy = true;
     } catch {
@@ -1311,7 +1413,7 @@ export async function linkRepo(c: Context) {
     // Self-hosted with a public URL - create a repo-level push webhook.
     let webhookId: number | null = null;
     try {
-      const result = await registerWebhook(ctx, owner, repo);
+      const result = await registerWebhook(ctx, owner, repo, undefined, { projectId: project.id });
       webhookId = result.hookId;
       gitFields.webhookId = webhookId;
       gitFields.autoDeploy = !!webhookId;
@@ -1322,8 +1424,8 @@ export async function linkRepo(c: Context) {
   // strategy === "none": no webhook path is available for this instance yet
 
   await repos.project.update(id, gitFields);
-  if (project.appId) {
-    await repos.projectApp.update(project.appId, {
+  if (project.groupId) {
+    await repos.projectGroup.update(project.groupId, {
       gitProvider: "github",
       gitOwner: owner,
       gitRepo: repo,
@@ -1339,7 +1441,7 @@ export async function linkRepo(c: Context) {
       installationId: (gitFields.installationId as number | undefined) ?? installationId,
       ...(typeof gitFields.webhookId === "number" ? { webhookId: gitFields.webhookId } : {}),
     };
-    const siblings = await repos.project.listByApp(project.appId);
+    const siblings = await repos.project.listByGroup(project.groupId);
     await Promise.all(
       siblings
         .filter((sibling) => sibling.id !== id)
@@ -1406,8 +1508,10 @@ async function ensureSharedWebhook(
 ) {
   const existingHookId =
     project.webhookId ?? (await findSharedWebhookId(project.organizationId, owner, repo));
-  const targetWebhookUrl = webhookUrl ?? `${runtimeTarget.api}/api/webhooks/github`;
-  const result = await registerWebhook(ctx, owner, repo, targetWebhookUrl);
+  const targetWebhookUrl = webhookUrl ?? sharedWebhookUrl();
+  const result = await registerWebhook(ctx, owner, repo, targetWebhookUrl, {
+    projectId: project.id,
+  });
   if (!result.hookId) return null;
 
   if (existingHookId && existingHookId !== result.hookId) {
@@ -1482,7 +1586,8 @@ export async function setAutoDeploy(c: Context) {
     } else if (strategy === "domain") {
       // User has a verified domain - direct webhook delivery
       if (enabled) {
-        const webhookUrl = `https://${project.webhookDomain}/_openship/hooks/github`;
+        // strategy === "domain" ⟹ webhookDomain is set (resolveWebhookStrategy).
+    const webhookUrl = domainWebhookUrl(project.webhookDomain!);
         const webhookId = await ensureSharedWebhook(ctx, project, owner, repo, webhookUrl);
         if (!webhookId) {
           return c.json(
@@ -1640,7 +1745,7 @@ export async function setWebhookDomain(c: Context) {
   await repos.project.update(id, { webhookDomain: hostname });
 
   const scheme = dom.sslStatus === "active" ? "https" : "http";
-  const webhookUrl = `${scheme}://${hostname}/_openship/hooks/github`;
+  const webhookUrl = domainWebhookUrl(hostname, scheme);
 
   audit.recordAsync(auditContextFrom(c, organizationId, userId), {
     eventType: "project.updated",
@@ -1965,7 +2070,7 @@ export async function connectDomain(c: Context) {
   const { userId, organizationId } = ctx;
   const id = param(c, "id");
   await permission.assert(getRequestContext(c), { resourceType: "project", resourceId: id, action: "write" });
-  const body = await c.req.json<{ domain: string; includeWww?: boolean }>();
+  const body = await c.req.json<{ domain: string; includeWww?: boolean; externalIngress?: boolean }>();
 
   if (!body.domain?.trim()) {
     return c.json({ success: false, error: "Domain is required" }, 400);
@@ -1976,6 +2081,7 @@ export async function connectDomain(c: Context) {
       projectId: id,
       hostname: body.domain.trim(),
       isPrimary: true,
+      externalIngress: body.externalIngress ?? false,
     });
 
     audit.recordAsync(auditContextFrom(c, organizationId, userId), {

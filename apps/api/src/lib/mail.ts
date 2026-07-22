@@ -2,23 +2,24 @@ import nodemailer, { type Transporter } from "nodemailer";
 import { env } from "../config/env";
 import { repos } from "@repo/db";
 import { cloudClient } from "./cloud/client";
+import { decrypt } from "./encryption";
 
 /**
- * Email sender with two transport sources:
+ * Email sender with three transport sources, tried in this order for "auto":
  *
- *   1. The provisioned platform mailbox on this instance's mail server
- *      (`openship@<state.domain>`), credentials sourced from
- *      `state.platformMailbox` via `ensureOpenshipPlatformMailbox`.
- *      Preferred when a mail server is present.
- *   2. Static env-configured SMTP (SMTP_HOST/USER/PASS). Used as fallback
- *      when no platform mailbox is provisioned, or when a caller
- *      explicitly requests the cloud / env transport.
+ *   1. Operator-configured instance SMTP (`instance_settings.smtp*`, set in
+ *      Settings → Email). The deliberate, instance-wide transport for ALL
+ *      system mail — password reset, verification, invites, notifications.
+ *      Password decrypted from `smtpPasswordEncrypted`.
+ *   2. The provisioned platform mailbox on this instance's mail server
+ *      (`openship@<state.domain>`), via `ensureOpenshipPlatformMailbox`.
+ *   3. Static env-configured SMTP (SMTP_HOST/USER/PASS) — deployment fallback.
  *
- * Self-hosted instances without either source no-op gracefully — email
+ * Self-hosted instances without any source no-op gracefully — email
  * features (verification, password reset, invitations) are simply
  * disabled.
  *
- * `smtpEnabled` exported for backward compat: true when EITHER source
+ * `smtpEnabled` exported for backward compat: true when ANY source
  * COULD deliver a message. Callers gated on this still work; new code
  * should prefer `await canSendMail()` for a fresh runtime check.
  */
@@ -145,6 +146,103 @@ async function getPlatformTransport(): Promise<{
   }
 }
 
+// ─── Instance SMTP transport (operator-configured, DB-backed) ────────────────
+
+const INSTANCE_TRANSPORT_TTL_MS = 60_000;
+let instanceTransportCache: { transport: Transporter; from: string | undefined } | null = null;
+let instanceTransportCheckedAt = 0;
+
+/**
+ * Operator-configured SMTP from `instance_settings` (Settings → Email). The
+ * deliberate, instance-wide transport for ALL system mail — the highest
+ * priority source in getActiveTransport.
+ *
+ * The password is decrypted from `smtpPasswordEncrypted`; a decrypt failure
+ * (e.g. rotated ENCRYPTION_KEY) DISABLES this source (returns null) rather
+ * than throwing, so it can't brick every outbound email. Result is cached
+ * 60s (positive AND negative), invalidated on save via
+ * invalidateInstanceTransportCache().
+ */
+async function getInstanceTransport(): Promise<{
+  transport: Transporter;
+  from: string | undefined;
+} | null> {
+  // Self-hosted only. On the SaaS (CLOUD_MODE) a stray instance_settings SMTP
+  // row must never override the platform's own multi-tenant transport.
+  if (env.CLOUD_MODE) return null;
+
+  const now = Date.now();
+  if (now - instanceTransportCheckedAt < INSTANCE_TRANSPORT_TTL_MS) {
+    return instanceTransportCache; // may be null (cached "not configured")
+  }
+  instanceTransportCheckedAt = now;
+  instanceTransportCache = null;
+
+  let settings: Awaited<ReturnType<typeof repos.instanceSettings.get>>;
+  try {
+    settings = await repos.instanceSettings.get();
+  } catch (err) {
+    console.warn("[mail] instance-settings lookup failed:", err);
+    return null;
+  }
+
+  const host = settings?.smtpHost?.trim();
+  const user = settings?.smtpUser?.trim();
+  const sealed = settings?.smtpPasswordEncrypted;
+  if (!host || !user || !sealed) return null;
+
+  let pass: string;
+  try {
+    pass = decrypt(sealed);
+  } catch (err) {
+    console.warn(
+      "[mail] instance SMTP password failed to decrypt - disabling instance transport:",
+      err,
+    );
+    return null;
+  }
+
+  const port = settings?.smtpPort ?? 587;
+  const transport = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
+  });
+  instanceTransportCache = { transport, from: settings?.smtpFrom?.trim() || user };
+  return instanceTransportCache;
+}
+
+/**
+ * Drop the cached instance transport so the next send re-reads
+ * `instance_settings`. Call after saving the SMTP config.
+ */
+export function invalidateInstanceTransportCache(): void {
+  instanceTransportCache = null;
+  instanceTransportCheckedAt = 0;
+}
+
+/**
+ * Send a verification email through the operator's configured instance SMTP.
+ * Unlike sendMail (which swallows failures), this THROWS the real transport
+ * error so the Settings → Email "Send test" button can surface it. Throws if
+ * instance SMTP isn't configured.
+ */
+export async function sendInstanceTestEmail(to: string): Promise<void> {
+  const active = await getInstanceTransport();
+  if (!active) {
+    throw new Error("Instance SMTP is not configured.");
+  }
+  await active.transport.sendMail({
+    from: active.from,
+    to,
+    subject: "Openship SMTP test",
+    text:
+      "This is a test message from your Openship instance SMTP configuration. " +
+      "If you received it, outbound email (password resets, invites, notifications) works.",
+  });
+}
+
 // ─── Public surface ──────────────────────────────────────────────────────────
 
 /**
@@ -170,9 +268,10 @@ export const smtpEnabled = true; // callbacks wired; runtime decides delivery
  */
 export const requireEmailVerificationStrict = envSmtpConfigured;
 
-/** Runtime check — true if either source could currently deliver. */
+/** Runtime check — true if any source could currently deliver. */
 export async function canSendMail(): Promise<boolean> {
   if (envSmtpConfigured) return true;
+  if (await getInstanceTransport()) return true;
   const platform = await getPlatformTransport();
   return platform !== null;
 }
@@ -180,36 +279,42 @@ export async function canSendMail(): Promise<boolean> {
 interface ActiveTransport {
   transport: Transporter;
   from: string | undefined;
-  source: "platform" | "env";
+  source: "instance" | "platform" | "env";
 }
 
 /**
- * Pick the right transport for this call. Order honored by preferSource:
- *   - "auto"     → platform first, env fallback
- *   - "platform" → platform only (no fallback)
- *   - "cloud"    → on the SaaS itself (CLOUD_MODE=true), behaves like
- *                  "auto" — the SaaS uses its own platform/env transport.
- *                  Local instances never reach this branch because
- *                  `sendMail` short-circuits to the cloud-client relay
- *                  before calling `getActiveTransport`.
+ * Ordered list of transports to try for this send, best first. sendMail walks
+ * the chain and fails over to the next source when a send THROWS — so a
+ * mistyped instance-SMTP password can't brick all mail (password resets,
+ * verification) when a mail-server mailbox or env transport is also available.
+ *
+ * The operator-configured instance SMTP always LEADS when set — that's why it
+ * powers team invites too, not just resets (invites call preferSource="platform",
+ * but the deliberate global transport should still win). Order:
+ *
+ *   instance (if set) → platform mailbox → env
+ *
+ * For preferSource="platform" env is dropped (branded invites shouldn't
+ * silently fall back to a generic env sender); instance + platform still apply.
+ * "cloud" never reaches here on a local instance (sendMail short-circuits to
+ * the relay first); on the SaaS it behaves like "auto".
  */
-async function getActiveTransport(
+async function getTransportChain(
   preferSource: SendMailSource = "auto",
-): Promise<ActiveTransport | null> {
+): Promise<ActiveTransport[]> {
+  const chain: ActiveTransport[] = [];
+  const instance = await getInstanceTransport();
+  if (instance) chain.push({ transport: instance.transport, from: instance.from, source: "instance" });
   const platform = await getPlatformTransport();
-  if (platform) {
-    return { transport: platform.transport, from: platform.from, source: "platform" };
+  if (platform) chain.push({ transport: platform.transport, from: platform.from, source: "platform" });
+  if (preferSource !== "platform" && envTransport) {
+    chain.push({ transport: envTransport, from: envFrom, source: "env" });
   }
-  if (preferSource === "platform") {
-    return null;
-  }
-  if (envTransport) {
-    return { transport: envTransport, from: envFrom, source: "env" };
-  }
-  return null;
+  return chain;
 }
 
-/** Send an email. No-ops with a warning when no transport is available. */
+/** Send an email. No-ops with a warning when no transport is available; fails
+ *  over across the transport chain when a send throws. */
 export async function sendMail(opts: SendMailOptions): Promise<void> {
   const preferSource = opts.preferSource ?? "auto";
 
@@ -244,8 +349,8 @@ export async function sendMail(opts: SendMailOptions): Promise<void> {
     return;
   }
 
-  const active = await getActiveTransport(preferSource);
-  if (!active) {
+  const chain = await getTransportChain(preferSource);
+  if (chain.length === 0) {
     console.warn(
       `[mail] no transport configured (preferSource=${preferSource}) - skipping email to`,
       opts.to,
@@ -253,13 +358,31 @@ export async function sendMail(opts: SendMailOptions): Promise<void> {
     return;
   }
 
-  await active.transport.sendMail({
-    from: active.from,
-    to: opts.to,
-    subject: opts.subject,
-    html: opts.html,
-    ...(opts.text ? { text: opts.text } : {}),
-  });
+  // Try each transport in priority order; fail over to the next on a send
+  // error so one broken source (e.g. wrong instance-SMTP creds) doesn't block
+  // delivery when another can carry it. Throw only when every source fails.
+  let lastErr: unknown = null;
+  for (let i = 0; i < chain.length; i++) {
+    const active = chain[i];
+    try {
+      await active.transport.sendMail({
+        from: active.from,
+        to: opts.to,
+        subject: opts.subject,
+        html: opts.html,
+        ...(opts.text ? { text: opts.text } : {}),
+      });
+      return;
+    } catch (err) {
+      lastErr = err;
+      const more = i < chain.length - 1;
+      console.warn(
+        `[mail] send via ${active.source} transport failed${more ? " - trying next source" : ""}:`,
+        err,
+      );
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("All mail transports failed");
 }
 
 /**

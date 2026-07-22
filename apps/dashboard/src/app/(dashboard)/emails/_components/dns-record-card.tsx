@@ -47,7 +47,7 @@ export function DnsRecordCard({ label, record }: { label: string; record: DnsRec
           title={t.emails.recordCard.copyValue}
         >
           {copied ? (
-            <Check className="size-3.5 text-emerald-500" />
+            <Check className="size-3.5 text-success" />
           ) : (
             <Copy className="size-3.5 text-muted-foreground" />
           )}

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import { getSession, getDeploymentInfo } from "@/lib/server/session";
+import { getSession, getDeploymentInfoOrNull, needsOrgSelection } from "@/lib/server/session";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import {
   getCloudConnectHandoffUrl,
   buildAuthPageHref,
@@ -86,10 +87,17 @@ export default async function AuthLayout({
       );
     }
 
-    redirect("/");
+    // Don't bounce a logged-in user home if they still need to pick an org:
+    // /select-organization lives in THIS group and the dashboard sends them
+    // here for exactly that. Redirecting to "/" would just loop back. When a
+    // choice is pending, fall through and render the page instead.
+    if (!(await needsOrgSelection(session.session.activeOrganizationId))) {
+      redirect("/");
+    }
   }
 
-  const deploymentInfo = await getDeploymentInfo();
+  const deploymentInfo = await getDeploymentInfoOrNull();
+  if (!deploymentInfo) return <ApiUnavailable />;
 
   return (
     <AuthProviders authMode={deploymentInfo.authMode} cloudAuthUrl={deploymentInfo.cloudAuthUrl} selfHosted={deploymentInfo.selfHosted}>

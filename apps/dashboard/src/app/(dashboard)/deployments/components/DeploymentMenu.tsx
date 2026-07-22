@@ -223,7 +223,7 @@ export const DeploymentMenu: React.FC<DeploymentMenuProps> = ({
               <div className="h-px bg-border/50 my-2" />
               <button
                 onClick={handleCancel}
-                className="w-full px-4 py-2.5 text-start text-sm text-red-500 hover:bg-red-500/10 transition-colors flex items-center gap-3"
+                className="w-full px-4 py-2.5 text-start text-sm text-danger hover:bg-danger-bg transition-colors flex items-center gap-3"
               >
                 <XCircle className="w-4 h-4" />
                 {t.deployments.menu.cancelDeployment}
@@ -297,7 +297,7 @@ export const DeploymentMenu: React.FC<DeploymentMenuProps> = ({
               <div className="h-px bg-border/50 my-2" />
               <button
                 onClick={handleDelete}
-                className="w-full px-4 py-2.5 text-start text-sm text-red-500 hover:bg-red-500/10 transition-colors flex items-center gap-3"
+                className="w-full px-4 py-2.5 text-start text-sm text-danger hover:bg-danger-bg transition-colors flex items-center gap-3"
               >
                 <Trash2 className="w-4 h-4" />
                 {t.deployments.menu.deleteDeployment}

@@ -8,6 +8,10 @@ import { enforceRouteScanAtBoot } from "./lib/route-scanner";
 import { attachTunnelingLifecycle, type TunnelingLifecycle } from "./modules/tunneling";
 
 const port = env.PORT;
+// Bind host. Unset → @hono/node-server listens on 0.0.0.0 (unchanged default).
+// `openship up --public-url` sets 127.0.0.1 so ONLY the same-box dashboard proxy
+// reaches the API — the API itself is never publicly exposed.
+const hostname = process.env.OPENSHIP_API_HOST?.trim() || undefined;
 
 // Hand the adapters' backup-credential decrypt the SAME resolved secret the API
 // encrypts with (env applies the BETTER_AUTH_SECRET default; process.env may
@@ -19,8 +23,8 @@ setBackupCredentialSecret(env.BETTER_AUTH_SECRET);
 // secureRouter). The scanner exits the process on critical errors.
 enforceRouteScanAtBoot(app);
 
-const server = serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`Openship API running on http://localhost:${info.port}`);
+const server = serve({ fetch: app.fetch, port, ...(hostname ? { hostname } : {}) }, (info) => {
+  console.log(`Openship API running on http://${hostname ?? "localhost"}:${info.port}`);
   // Visible echo of the resolved runtime + cloud target. The full
   // `[env]` line at module load already prints OPENSHIP_TARGET + the
   // resolved URLs; this second line confirms the SAME resolution at

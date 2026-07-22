@@ -14,12 +14,12 @@
 
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { localOnly } from "../../middleware";
 import { secureRouter } from "../../lib/secure-router";
 import { cloudProjectProxy } from "../../lib/cloud/project-router";
 import * as ctrl from "./project.controller";
 import * as folder from "./folder/folder.controller";
 import * as transfer from "./transfer.controller";
+import * as routeRules from "../route-rules/route-rule.controller";
 import {
   CreateProjectBody,
   EnsureProjectBody,
@@ -41,13 +41,19 @@ const r = secureRouter(new Hono(), {
    own `organization_id` — no session-mutating auto-switch needed. */
 
 /* ─── Local-only routes (hidden in cloud mode) ─────────────────────────── */
-r.get("/local", { tag: "project:list" }, localOnly, ctrl.listLocal);
+r.get("/local", { tag: "project:list", localOnly: true }, ctrl.listLocal);
 // Collection-scoped writes: org from request (X-Organization-Id or
 // session default); no :id in the URL — the controller resolves the
 // project from the JSON body. `collection: true` keeps the existing
 // :id-required default safe for per-resource routes below.
-r.post("/scan", { tag: "project:write", collection: true }, localOnly, ctrl.scanLocal);
-r.post("/import", { tag: "project:write", collection: true }, localOnly, ctrl.importLocal);
+r.post("/scan", { tag: "project:write", collection: true, localOnly: true }, ctrl.scanLocal);
+r.post("/import", { tag: "project:write", collection: true, localOnly: true }, ctrl.importLocal);
+
+/* ─── Route rules (self-hosted OpenResty edge: rate-limit · ban · allow/deny) ── */
+r.get("/:id/route-rules", { tag: "project:read", localOnly: true }, routeRules.listRouteRules);
+r.post("/:id/route-rules", { tag: "project:write", localOnly: true }, routeRules.createRouteRule);
+r.patch("/:id/route-rules/:ruleId", { tag: "project:write", localOnly: true }, routeRules.updateRouteRule);
+r.delete("/:id/route-rules/:ruleId", { tag: "project:write", localOnly: true }, routeRules.deleteRouteRule);
 
 /* ─── Folder upload → deploy ─────────────────────────────────────────────
  * Browser-based folder deploy for clients with no filesystem-shared API.
@@ -86,8 +92,7 @@ r.post(
 // 404s this in CLOUD_MODE; the 300MB bodyLimit only runs once localOnly passes.
 r.post(
   "/folder/upload/:sessionId",
-  { tag: "project:write", collection: true },
-  localOnly,
+  { tag: "project:write", collection: true, localOnly: true },
   bodyLimit({
     maxSize: 300_000_000,
     onError: (c) => c.json({ error: "Upload exceeds the 300MB limit.", code: "PAYLOAD_TOO_LARGE" }, 413),
@@ -122,6 +127,7 @@ r.post(
   {
     tag: "project:write",
     collection: true,
+    projectCreate: true,
     mcp: {
       description:
         "Create a project from a git or local source (build config baked into the project). For a folder-upload deploy use projects/ensure instead (it accepts the folder/scan config and gitProvider:'upload').",
@@ -163,6 +169,8 @@ r.get("/:id/deletion-preview", { tag: "project:read", mcp: { description: "Previ
 
 /* ─── Build options ────────────────────────────────────────────────────── */
 r.post("/:id/options", { tag: "project:write", mcp: { description: "Set build/deploy options for a project." } }, cloudProjectProxy, ctrl.setOptions);
+r.post("/:id/port-check", { tag: "project:read", readOnly: true, mcp: { description: "Live port-reachability check for the project's active deployment (advisory)." } }, cloudProjectProxy, ctrl.portCheck);
+r.post("/:id/output-check", { tag: "project:read", readOnly: true, mcp: { description: "Live static-output check for the project's active deployment (advisory; static apps)." } }, cloudProjectProxy, ctrl.outputCheck);
 
 /* ─── Enable / Disable ─────────────────────────────────────────────────── */
 r.post("/:id/enable", { tag: "project:write", mcp: { description: "Enable a project (allow deploys / bring online)." } }, cloudProjectProxy, ctrl.enable);
@@ -241,7 +249,7 @@ r.get("/:id/server-logs/stream", { tag: "project:read" }, cloudProjectProxy, ctr
 // Self-hosted ONLY: promote pushes a LOCAL project to the SaaS, and bring-home
 // pulls it back. Meaningless on the SaaS itself (it IS the cloud), so localOnly
 // 404s them there — never proxied, never run in CLOUD_MODE.
-r.post("/:id/transfer/to-cloud", { tag: "project:admin" }, localOnly, transfer.transferToCloud);
-r.post("/:id/transfer/to-self-hosted", { tag: "project:admin" }, localOnly, transfer.transferToSelfHosted);
+r.post("/:id/transfer/to-cloud", { tag: "project:admin", localOnly: true }, transfer.transferToCloud);
+r.post("/:id/transfer/to-self-hosted", { tag: "project:admin", localOnly: true }, transfer.transferToSelfHosted);
 
 export const projectRoutes = r.hono;

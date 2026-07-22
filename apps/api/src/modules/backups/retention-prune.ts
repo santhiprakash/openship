@@ -17,12 +17,7 @@
 import { repos, type BackupPolicy, type BackupRun } from "@repo/db";
 import { resolveDestination } from "@repo/adapters";
 import { toAdapterRow } from "../backup-destinations/hydrate-server";
-import { getJobRunner } from "../../lib/job-runner";
 import { safeErrorMessage } from "@repo/core";
-
-const RETENTION_JOB_ID = "retention-prune-daily";
-// 03:17 UTC — off the every-night-at-3am peak.
-const RETENTION_CRON = "17 3 * * *";
 
 export async function runRetentionSweep(): Promise<{
   policiesProcessed: number;
@@ -144,24 +139,3 @@ async function prunePolicy(policy: BackupPolicy): Promise<number> {
   return dropped;
 }
 
-/**
- * Boot-time registration. Idempotent (registering the same jobId
- * replaces). Survives restarts because the runner is the persistence
- * layer (BullMQ) or re-registers on every boot (in-process).
- */
-export async function scheduleRetentionPrune(): Promise<void> {
-  const runner = await getJobRunner();
-  await runner.scheduleRecurring({
-    jobId: RETENTION_JOB_ID,
-    cronExpression: RETENTION_CRON,
-    onTick: async () => {
-      const stats = await runRetentionSweep();
-      if (stats.runsDeleted > 0 || stats.errors > 0) {
-        console.log(
-          `[retention-prune] ${stats.policiesProcessed} policies, ` +
-            `${stats.runsDeleted} runs dropped, ${stats.errors} errors`,
-        );
-      }
-    },
-  });
-}

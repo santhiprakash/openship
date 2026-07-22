@@ -70,13 +70,13 @@ function openshipDeploySlug(organizationId: string): string {
 
 export interface EnsureOpenshipProjectResult {
   projectId: string;
-  appId: string;
+  groupId: string;
   project: Project;
   releaseDistPath: string;
 }
 
 /**
- * Reconcile the Project + ProjectApp rows that represent "openship
+ * Reconcile the Project + ProjectGroup rows that represent "openship
  * being deployed to operator's server". Idempotent — re-running with
  * the same org returns the same row (and updates if the fixed config
  * drifted since last run).
@@ -91,15 +91,15 @@ export async function ensureOpenshipProject(
   const releaseDistPath = await resolveOpenshipDistDir();
   const slug = openshipDeploySlug(organizationId);
 
-  // ProjectApp + Project rows scoped to the migrating org. Mirror the
+  // ProjectGroup + Project rows scoped to the migrating org. Mirror the
   // webmail pattern: find-by-slug globally, then assert org match; if
   // it's in a different org treat as not-found and create fresh.
-  let app = await repos.projectApp.findFirstBySlug(slug);
+  let app = await repos.projectGroup.findFirstBySlug(slug);
   if (app && app.organizationId !== organizationId) {
     app = undefined;
   }
   if (!app) {
-    app = await repos.projectApp.create({
+    app = await repos.projectGroup.create({
       organizationId,
       name: PROJECT_NAME,
       slug,
@@ -116,7 +116,7 @@ export async function ensureOpenshipProject(
   if (!project) {
     project = await repos.project.create({
       organizationId,
-      appId: app.id,
+      groupId: app.id,
       name: PROJECT_NAME,
       slug,
       environmentName: "Production",
@@ -140,7 +140,7 @@ export async function ensureOpenshipProject(
 
   return {
     projectId: project.id,
-    appId: app.id,
+    groupId: app.id,
     project,
     releaseDistPath,
   };

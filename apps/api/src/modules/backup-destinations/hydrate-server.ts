@@ -34,7 +34,18 @@ import { safeErrorMessage } from "@repo/core";
  */
 export async function toAdapterRow(row: BackupDestination): Promise<BackupDestinationRow> {
   if (row.kind === "openship_server") {
-    return hydrateFromServer(row);
+    if (!row.serverId) {
+      throw new Error(
+        `Destination "${row.name}" is kind=openship_server but has no serverId — corrupted state`,
+      );
+    }
+    return hydrateServerAdapterRow({
+      id: row.id,
+      organizationId: row.organizationId,
+      name: row.name,
+      pathPrefix: row.pathPrefix,
+      serverId: row.serverId,
+    });
   }
   // All other kinds: straight pass-through of the row fields the
   // adapter expects.
@@ -59,16 +70,23 @@ export async function toAdapterRow(row: BackupDestination): Promise<BackupDestin
   };
 }
 
-async function hydrateFromServer(row: BackupDestination): Promise<BackupDestinationRow> {
-  if (!row.serverId) {
-    throw new Error(
-      `Destination "${row.name}" is kind=openship_server but has no serverId — corrupted state`,
-    );
-  }
-  const server = await repos.server.get(row.serverId);
+/**
+ * Build an SFTP adapter row from an already-added server, given only the
+ * destination's identity + remote path. Shared by the persisted-row path
+ * (`toAdapterRow`) and the pre-save draft preflight (which has no DB row yet).
+ */
+export async function hydrateServerAdapterRow(params: {
+  id: string;
+  organizationId: string;
+  name: string;
+  pathPrefix: string | null;
+  serverId: string;
+}): Promise<BackupDestinationRow> {
+  const { id, organizationId, name, pathPrefix, serverId } = params;
+  const server = await repos.server.get(serverId);
   if (!server) {
     throw new Error(
-      `Server ${row.serverId} referenced by destination "${row.name}" no longer exists`,
+      `Server ${serverId} referenced by destination "${name}" no longer exists`,
     );
   }
 
@@ -115,18 +133,18 @@ async function hydrateFromServer(row: BackupDestination): Promise<BackupDestinat
   }
 
   return {
-    id: row.id,
-    organizationId: row.organizationId,
-    name: row.name,
+    id,
+    organizationId,
+    name,
     kind: "openship_server",
     endpoint: null,
     region: null,
     bucket: null,
-    pathPrefix: row.pathPrefix,
+    pathPrefix,
     sshHost: server.sshHost,
     sshPort: server.sshPort ?? 22,
     sshUser: server.sshUser ?? "root",
-    serverId: row.serverId,
+    serverId,
     accessKeyIdEnc: null,
     secretAccessKeyEnc: null,
     sftpPasswordEnc,

@@ -5,6 +5,7 @@ import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Loader2, ArrowLeft, Plus } from "lucide-react";
 import {
   mailApi,
+  mailAdminApi,
   systemApi,
   type MailSetupStatus,
   type DnsRecords,
@@ -14,9 +15,10 @@ import {
 import type { ServerOption } from "@/components/shared/ServerSelector";
 import { PageContainer } from "@/components/ui/PageContainer";
 import { useModal } from "@/context/ModalContext";
+import { useToast } from "@/context/ToastContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { FormModalContent } from "./_components/admin/_shared/form-modal-content";
-import { MailSetupForm } from "./_components/mail-setup-form";
+import { MailSetupForm, type SetupRelay } from "./_components/mail-setup-form";
 import { MailProgress } from "./_components/mail-progress";
 import { MailSidebar } from "./_components/mail-sidebar";
 import { DnsHoldBanner } from "./_components/dns-hold-banner";
@@ -41,6 +43,13 @@ export default function EmailsPage() {
   const [running, setRunning] = useState(false);
   const [domain, setDomain] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
+  const { showToast } = useToast();
+  // Optional outbound relay chosen at install time (SES, all domains). Fired
+  // once via the relay API on the `complete` SSE event. A ref keeps the latest
+  // value available inside the long-lived install callback without stale closure.
+  const [setupRelay, setSetupRelay] = useState<SetupRelay>({ enabled: false, region: "us-east-1", username: "", password: "" });
+  const setupRelayRef = useRef(setupRelay);
+  setupRelayRef.current = setupRelay;
   const [logs, setLogs] = useState<Array<{ stepId: number; level: string; message: string }>>([]);
   const [dnsRecords, setDnsRecords] = useState<DnsRecords | null>(null);
   const [completionData, setCompletionData] = useState<{
@@ -468,12 +477,36 @@ export default function EmailsPage() {
                 // the page would show its install-completed shell with no
                 // credentials/health info until manual refresh.
                 if (selectedServer?.id) {
-                  fetchStatusForServer(selectedServer.id);
-                  // The install just registered/marked this server — refresh
-                  // the registry and pin it in the URL so it stays the
-                  // explicit context on refresh.
-                  refreshMailServers();
-                  setServerInUrl(selectedServer.id);
+                  // Setup-time outbound relay: install is done + state exists,
+                  // so configure it now via the same relay API the Sending tab
+                  // uses. Best-effort — a failure here doesn't fail the install;
+                  // the operator can retry from Sending. Per-domain routing +
+                  // each domain's SES identity are configured there afterward.
+                  const r = setupRelayRef.current;
+                  const finalize = () => {
+                    fetchStatusForServer(selectedServer.id);
+                    refreshMailServers();
+                    setServerInUrl(selectedServer.id);
+                  };
+                  if (r.enabled) {
+                    mailAdminApi.relay
+                      .save(selectedServer.id, {
+                        provider: "ses",
+                        scope: "all",
+                        region: r.region.trim(),
+                        port: 587,
+                        username: r.username.trim(),
+                        password: r.password,
+                      })
+                      .then(() => showToast(t.emailsAdmin.sending.saved, "success", t.emailsAdmin.sending.title))
+                      .catch(() => showToast(t.emailsAdmin.sending.saveFailed, "error", t.emailsAdmin.sending.title))
+                      .finally(finalize);
+                  } else {
+                    // The install just registered/marked this server — refresh
+                    // the registry and pin it in the URL so it stays the
+                    // explicit context on refresh.
+                    finalize();
+                  }
                 }
                 break;
 
@@ -494,7 +527,7 @@ export default function EmailsPage() {
         setRunning(false);
       }
     },
-    [domain, adminPassword, selectedServer, fetchStatusForServer, refreshMailServers, setServerInUrl],
+    [domain, adminPassword, selectedServer, fetchStatusForServer, refreshMailServers, setServerInUrl, showToast, t],
   );
 
   const handleCancel = useCallback(async () => {
@@ -809,6 +842,8 @@ export default function EmailsPage() {
             adminPassword={adminPassword}
             running={running}
             selectedServerId={selectedServer?.id ?? null}
+            relay={setupRelay}
+            onRelayChange={setSetupRelay}
             onDomainChange={setDomain}
             onPasswordChange={setAdminPassword}
             onServerSelect={setSelectedServer}

@@ -2,9 +2,12 @@ import { DeployError } from "@repo/core";
 import type { CommandExecutor } from "../types";
 import type { BuildLogger } from "./build-pipeline";
 import type { PromptUserFn } from "./deploy-pipeline";
+import { probePortListeningOnce } from "../system/port-listen";
 
 export interface PortOccupant {
-  pid: number;
+  /** Owner PID, or `null` when the port is listening but its owner couldn't be
+   *  resolved (procfs-only fallback / non-root ss) — occupancy is still known. */
+  pid: number | null;
   command: string;
   rawCommand?: string;
   systemdUnit?: string;
@@ -32,7 +35,10 @@ async function resolveSystemdUnit(
     ?? cgroup?.match(/(?:^|\/)([^/\n]+\.service)(?:$|\n|\/)/m);
   const systemdUnit = unitMatch?.[1]?.trim();
 
-  if (!systemdUnit) {
+  // Reject anything that isn't a plain systemd unit name — the value is parsed
+  // from /proc text and later interpolated into `systemctl` commands, so a
+  // crafted cgroup leaf must never carry shell metacharacters through.
+  if (!systemdUnit || !/^[A-Za-z0-9@._:\\-]+\.service$/.test(systemdUnit)) {
     return {};
   }
 
@@ -60,36 +66,72 @@ async function freePortOccupant(
     await executor.exec(
       `systemctl stop ${occupant.systemdUnit} 2>/dev/null || true; systemctl reset-failed ${occupant.systemdUnit} 2>/dev/null || true`,
     );
-  } else {
+  } else if (occupant.pid) {
     logger.log(`Killing ${occupant.command} to free port...\n`);
     await executor.exec(`kill -9 ${occupant.pid} 2>/dev/null || true`);
+  } else {
+    logger.log(`Can't free port automatically: ${occupant.command} (owner PID unknown).\n`, "warn");
+    return;
   }
 
   await new Promise((resolve) => setTimeout(resolve, 1000));
 }
 
 /**
- * Probe what process (if any) is listening on a port.
- * Uses `ss` first and falls back to `lsof` when available.
+ * Find who (if anyone) is LISTENing on `port`, via a tiered fallback so the
+ * probe behaves consistently regardless of which tools a host ships:
+ *   1. `ss -l`             — Linux (iproute2, ~always present); yields the PID.
+ *   2. `lsof -sTCP:LISTEN` — macOS + any Linux with lsof; yields the PID.
+ *   3. `/proc/net/tcp{,6}` — tool-free kernel socket table; presence only.
+ *
+ * Every tier is LISTEN-state filtered, so an outbound/ESTABLISHED socket on the
+ * port (e.g. a daemon dialing a remote :443) is never mistaken for an occupant —
+ * that filtering is the whole point of keeping this in ONE place. Tiers 1–2 are
+ * a single exec; tier 3 (reused from `port-listen`) runs only when no PID
+ * surfaced, and is what prevents a false "port free" on a host missing both `ss`
+ * and `lsof`, or when non-root `ss` prints the listener but hides its PID.
+ */
+async function resolveListener(
+  executor: CommandExecutor,
+  port: number,
+): Promise<{ pid: number | null; occupied: boolean }> {
+  const out = await tryExec(
+    executor,
+    `ss -tlnp sport = :${port} 2>/dev/null | grep LISTEN || lsof -ti tcp:${port} -sTCP:LISTEN 2>/dev/null || true`,
+  );
+  if (out) {
+    const ssMatch = out.match(/pid=(\d+)/);
+    // lsof -ti prints one bare PID per line; take the first. An ss LISTEN line
+    // is never a bare number, so this can't mis-parse the ss branch.
+    const lsofMatch = !ssMatch ? out.match(/^\s*(\d+)\s*$/m) : null;
+    const pid = ssMatch
+      ? parseInt(ssMatch[1], 10)
+      : lsofMatch
+        ? parseInt(lsofMatch[1], 10)
+        : null;
+    if (pid) return { pid, occupied: true };
+  }
+  // Tier 3: authoritative presence check with no tool dependency. `true` = a
+  // LISTEN socket exists; `false`/`null` (no signal) → treat as free.
+  const listening = await probePortListeningOnce(executor, port);
+  return { pid: null, occupied: listening === true };
+}
+
+/**
+ * Probe what process (if any) is listening on a port — see `resolveListener` for
+ * the ss → lsof → procfs fallback. Returns `null` when the port is free. When
+ * something is listening but its owner can't be resolved, returns an occupant
+ * with `pid: null` + an "unknown listener" label, so the port is never treated
+ * as free even though there's no PID to act on.
  */
 export async function probeListeningPort(
   executor: CommandExecutor,
   port: number,
 ): Promise<PortOccupant | null> {
   try {
-    const out = await executor.exec(
-      `ss -tlnp sport = :${port} 2>/dev/null | grep LISTEN || lsof -ti tcp:${port} 2>/dev/null || true`,
-    );
-
-    const ssMatch = out.match(/pid=(\d+)/);
-    const lsofMatch = !ssMatch ? out.trim().match(/^(\d+)$/) : null;
-    const pid = ssMatch
-      ? parseInt(ssMatch[1], 10)
-      : lsofMatch
-        ? parseInt(lsofMatch[1], 10)
-        : null;
-
-    if (!pid) return null;
+    const { pid, occupied } = await resolveListener(executor, port);
+    if (!occupied) return null;
+    if (pid === null) return { pid: null, command: "unknown listener" };
 
     let command = `PID ${pid}`;
     let rawCommand: string | undefined;

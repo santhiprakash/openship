@@ -20,9 +20,9 @@ const FEATURES = [
 const HomeWelcome: React.FC = () => {
   const { t } = useI18n();
   return (
-    <div className="px-6 py-12 sm:py-14">
+    <div className="px-6 py-6 sm:py-10 sm:pb-12">
       {/* Illustration */}
-      <div className="relative mx-auto w-60 h-40 mb-7">
+      <div className="relative mx-auto w-60 h-40 mb-2">
         <svg className="absolute inset-0 w-full h-full" viewBox="0 0 240 170" fill="none">
           {/* dashed orbit */}
           <circle cx="120" cy="86" r="64" stroke="var(--th-bd-subtle)" strokeWidth="1.5" strokeDasharray="4 7" />

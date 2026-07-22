@@ -4,16 +4,16 @@ export const getStatusIcon = (status: string) => {
   switch (status) {
     case "success":
     case "live":
-      return <CheckCircle className="w-4 h-4 text-green-500" />;
+      return <CheckCircle className="w-4 h-4 text-success" />;
     case "failed":
-      return <XCircle className="w-4 h-4 text-red-500" />;
+      return <XCircle className="w-4 h-4 text-danger" />;
     case "building":
     case "pending":
-      return <AlertCircle className="w-4 h-4 text-yellow-500 animate-pulse" />;
+      return <AlertCircle className="w-4 h-4 text-warning animate-pulse" />;
     case "paused":
-      return <Clock className="w-4 h-4 text-gray-500" />;
+      return <Clock className="w-4 h-4 text-neutral" />;
     default:
-      return <Clock className="w-4 h-4 text-gray-500" />;
+      return <Clock className="w-4 h-4 text-neutral" />;
   }
 };
 

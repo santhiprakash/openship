@@ -8,6 +8,9 @@ import {
   getBuildMode,
   getDeployDefaults,
   isValidDefaultDeployTarget,
+  getTransferPrefs,
+  isValidTransferMode,
+  isValidTransferCompression,
   type BuildMode,
 } from "./settings.service";
 
@@ -23,12 +26,13 @@ function generateId() {
 /** GET / - return platform settings for the authenticated user */
 export async function get(c: Context) {
   const ctx = getRequestContext(c);
-  const [buildMode, deployDefaults, cloneCreds] = await Promise.all([
+  const [buildMode, deployDefaults, cloneCreds, transferPrefs] = await Promise.all([
     getBuildMode(ctx.userId),
     getDeployDefaults(ctx.userId),
     getCloneCredentialsState(ctx.userId),
+    getTransferPrefs(ctx.userId),
   ]);
-  return c.json({ buildMode, ...deployDefaults, ...cloneCreds });
+  return c.json({ buildMode, ...deployDefaults, ...cloneCreds, ...transferPrefs });
 }
 
 /**
@@ -297,4 +301,40 @@ export async function updateCloneStrategyPreference(c: Context) {
     after: { action: "cloneStrategyPreference.set", cloneStrategyPreference: pref },
   });
   return c.json({ cloneStrategyPreference: pref });
+}
+
+/** PATCH /transfer - set the volume-transfer mode/compression preference. */
+export async function updateTransferPrefs(c: Context) {
+  const ctx = getRequestContext(c);
+  const body = await c.req.json().catch(() => ({}));
+  const patch: { transferMode?: string; transferCompression?: string } = {};
+  if (body?.transferMode !== undefined) {
+    if (!isValidTransferMode(body.transferMode)) {
+      return c.json({ error: "transferMode must be one of: auto, stream, direct, rsync" }, 400);
+    }
+    patch.transferMode = body.transferMode;
+  }
+  if (body?.transferCompression !== undefined) {
+    if (!isValidTransferCompression(body.transferCompression)) {
+      return c.json({ error: "transferCompression must be one of: auto, zstd, gzip, none" }, 400);
+    }
+    patch.transferCompression = body.transferCompression;
+  }
+  if (Object.keys(patch).length === 0) {
+    return c.json({ error: "provide transferMode and/or transferCompression" }, 400);
+  }
+
+  const existing = await repos.settings.findByUser(ctx.userId);
+  if (!existing) {
+    await repos.settings.upsert({ id: generateId(), userId: ctx.userId, buildMode: "auto", ...patch });
+  } else {
+    await repos.settings.update(ctx.userId, patch);
+  }
+  audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
+    eventType: "settings.updated",
+    resourceType: "settings",
+    resourceId: ctx.userId,
+    after: { action: "transferPrefs.set", ...patch },
+  });
+  return c.json(await getTransferPrefs(ctx.userId));
 }

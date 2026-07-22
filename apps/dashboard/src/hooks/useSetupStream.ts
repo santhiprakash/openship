@@ -9,17 +9,20 @@
 
 import { useCallback, useRef, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api";
+import { systemApi } from "@/lib/api";
 import type {
   SetupLogEvent,
   SetupProgressEvent,
   SetupCompleteEvent,
   SetupComponentProgress,
+  SetupPromptEvent,
 } from "@/lib/api/system";
 
 export interface UseSetupStreamCallbacks {
   onLog?: (entry: SetupLogEvent) => void;
   onProgress?: (components: SetupComponentProgress[]) => void;
   onComplete?: (event: SetupCompleteEvent) => void;
+  onPrompt?: (prompt: SetupPromptEvent) => void;
   onError?: (error: Error) => void;
 }
 
@@ -37,6 +40,10 @@ export interface UseSetupStreamReturn {
   components: SetupComponentProgress[];
   /** All log entries received so far */
   logs: SetupLogEvent[];
+  /** Active prompt the install is blocked on, or null */
+  pendingPrompt: SetupPromptEvent | null;
+  /** Answer the active prompt with a chosen action id */
+  respondToPrompt: (action: string) => Promise<void>;
   /** Whether the session has completed */
   isDone: boolean;
   /** Final status */
@@ -51,6 +58,7 @@ export function useSetupStream(
   const [isConnecting, setIsConnecting] = useState(false);
   const [components, setComponents] = useState<SetupComponentProgress[]>([]);
   const [logs, setLogs] = useState<SetupLogEvent[]>([]);
+  const [pendingPrompt, setPendingPrompt] = useState<SetupPromptEvent | null>(null);
   const [isDone, setIsDone] = useState(false);
   const [finalStatus, setFinalStatus] = useState<"completed" | "failed" | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -95,11 +103,16 @@ export function useSetupStream(
           setComponents(event.components);
           callbacksRef.current.onProgress?.(event.components);
         }
+      } else if (json.type === "prompt") {
+        const event = json as SetupPromptEvent;
+        setPendingPrompt(event);
+        callbacksRef.current.onPrompt?.(event);
       } else if (json.type === "complete") {
         const event = json as SetupCompleteEvent;
         setComponents(event.components);
         setFinalStatus(event.status);
         setIsDone(true);
+        setPendingPrompt(null);
         callbacksRef.current.onComplete?.(event);
       }
     }
@@ -125,6 +138,7 @@ export function useSetupStream(
     if (method === "POST") {
       setLogs([]);
       setComponents([]);
+      setPendingPrompt(null);
     }
 
     const controller = new AbortController();
@@ -200,6 +214,15 @@ export function useSetupStream(
     await connectToStream(url, "GET");
   }, [connectToStream]);
 
+  const respondToPrompt = useCallback(async (action: string) => {
+    setPendingPrompt(null);
+    try {
+      await systemApi.respondInstall(action);
+    } catch (err: any) {
+      callbacksRef.current.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  }, []);
+
   const disconnect = useCallback(() => {
     if (abortRef.current) {
       abortRef.current.abort();
@@ -218,6 +241,8 @@ export function useSetupStream(
     isConnecting,
     components,
     logs,
+    pendingPrompt,
+    respondToPrompt,
     isDone,
     finalStatus,
     error,

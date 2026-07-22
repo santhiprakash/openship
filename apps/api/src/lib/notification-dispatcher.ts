@@ -31,6 +31,7 @@
 
 import { repos } from "@repo/db";
 import { categoryForEventType } from "./notification-categories";
+import { fireJobTriggers } from "../modules/jobs/job-events";
 
 export interface NotificationEmitInput {
   organizationId: string;
@@ -95,6 +96,8 @@ export const notification = {
    * enqueuing in the request path.
    */
   emit(input: NotificationEmitInput): void {
+    // Custom jobs can also be TRIGGERED by an event (cheap no-op when unarmed).
+    fireJobTriggers(input.eventType);
     void dispatch(input).catch((err) => {
       console.error(
         `[notification] dispatch failed for eventType=${input.eventType}:`,
@@ -109,6 +112,7 @@ export const notification = {
    * the notification is itself an incident).
    */
   async emitSync(input: NotificationEmitInput): Promise<void> {
+    fireJobTriggers(input.eventType);
     await dispatch(input);
   },
 };

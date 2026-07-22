@@ -74,6 +74,10 @@
     "disconnectAppBody": "Cela supprime l'entrée du compte OAuth Openship. L'installation de la GitHub App reste en place jusqu'à ce que vous la désinstalliez sur GitHub.",
     "cloudExplainer": "L'Openship GitHub App appartient à openship.io. Connectez votre instance à Openship Cloud pour utiliser des jetons d'installation à portée limitée pour cloner des dépôts privés (fonctionne pour les déploiements locaux ET distants).",
     "connectCloud": "Connecter Openship Cloud",
+    "noCloudTitle": "Cloner des dépôts privés sans le cloud",
+    "useSshPerServer": "Clé SSH par serveur",
+    "usePat": "Jeton d’accès",
+    "noCloudHint": "Configurez une clé SSH sur chaque serveur (Serveurs → GitHub), ou ajoutez un jeton d’accès personnel qui fonctionne pour les déploiements locaux et distants.",
     "linkExplainer": "Liez votre compte GitHub pour importer des dépôts, activer le déploiement automatique à chaque push et gérer les branches directement depuis le tableau de bord.",
     "connecting": "Connexion…",
     "connect": "Connecter GitHub",
@@ -282,6 +286,14 @@
       "saveLabel": "Enregistrer l'accès"
     },
     "confirmRemove": "Supprimer ce membre de l'organisation ?",
+    "workspace": {
+      "deleteWorkspace": "Supprimer l'espace de travail",
+      "leaveWorkspace": "Quitter l'espace de travail",
+      "deleteBody": "Supprimer définitivement cet espace de travail et tout ce qu'il contient.",
+      "leaveBody": "Quittez cet espace de travail — il vous faudra une nouvelle invitation pour revenir.",
+      "deleteConfirm": "Supprimer cet espace de travail ? Ses projets, membres et paramètres seront supprimés pour tout le monde. Cette action est irréversible.",
+      "leaveConfirm": "Quitter cet espace de travail ? Vous perdrez l'accès jusqu'à ce que vous soyez réinvité."
+    },
     "toast": {
       "teamNameRequired": "Le nom de l'équipe est requis",
       "teamCreated": "Équipe « {name} » créée — basculement en cours…",
@@ -291,7 +303,12 @@
       "removeFailed": "Échec de la suppression",
       "cancelFailed": "Échec de l'annulation",
       "accessUpdated": "Accès mis à jour",
-      "loadGrantsFailed": "Échec du chargement des octrois"
+      "loadGrantsFailed": "Échec du chargement des octrois",
+      "deleteFailed": "Échec de la suppression de l'espace de travail",
+      "deleteBillingActive": "Annulez l'abonnement actif de cet espace de travail avant de le supprimer.",
+      "deleted": "Espace de travail supprimé",
+      "leaveFailed": "Impossible de quitter l'espace de travail",
+      "left": "Espace de travail quitté"
     }
   },
   "inviteMember": {
@@ -318,6 +335,7 @@
     "toast": {
       "failedSend": "Échec de l'envoi de l'invitation",
       "invitationSent": "Invitation envoyée à {email}",
+      "personalOrgBlocked": "Les espaces de travail personnels ne peuvent pas inviter de membres. Créez d'abord une organisation d'équipe, puis envoyez des invitations.",
       "updateMailSourceFailed": "Échec de la mise à jour de la source de messagerie"
     }
   },
@@ -328,7 +346,8 @@
     "currentMode": "Mode actuel",
     "singleUserLocal": "Mono-utilisateur (local)",
     "migrate": "Migrer",
-    "ownerOnlyTitle": "Seul le propriétaire de l'espace de travail peut migrer"
+    "ownerOnlyTitle": "Seul le propriétaire de l'espace de travail peut migrer",
+    "comingSoon": "La liaison directe à une instance distante arrive bientôt."
   },
   "cloud": {
     "checking": "Vérification…",

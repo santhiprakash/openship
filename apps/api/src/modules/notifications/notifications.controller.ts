@@ -199,7 +199,7 @@ export async function deleteSubscription(c: Context) {
   const ctx = getRequestContext(c);
   const id = c.req.param("id");
   if (!id) return c.json({ error: "id is required" }, 400);
-  await repos.notificationSubscription.delete(id, ctx.organizationId);
+  await repos.notificationSubscription.delete(id, ctx.userId, ctx.organizationId);
   audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
     eventType: "notification_subscription.deleted",
     resourceType: "notifications",

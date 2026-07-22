@@ -11,9 +11,26 @@ export type AdvisorySeverity = "critical" | "recommended" | "info";
 
 export interface AdvisoryAction {
   label: string;
-  /** "update" → drive the in-app updater; "open-url" → open `url` externally. */
-  kind: "update" | "open-url";
+  /**
+   * How the banner's button behaves:
+   *   - "update"        → drive the desktop native updater (desktop only).
+   *   - "open-url"      → open `url` externally.
+   *   - "update-entity" → web-safe update: the dashboard POSTs the apply
+   *                       endpoint for `entityId` (an app/project/self-app),
+   *                       then shows deploy progress. Used by the update
+   *                       advisories the scanner synthesizes.
+   */
+  kind: "update" | "open-url" | "update-entity";
   url?: string;
+  /** For "update-entity": the project/app id to apply the update to. */
+  entityId?: string;
+}
+
+/** What an advisory is about — lets a notice/update target one app/project. */
+export interface AdvisoryTarget {
+  type: "platform" | "app" | "project" | "mail";
+  /** Project/app id when scoped; omitted for platform-wide. */
+  id?: string;
 }
 
 export interface Advisory {
@@ -25,6 +42,8 @@ export interface Advisory {
   title: string;
   message: string;
   action?: AdvisoryAction;
+  /** Optional scope. Absent = platform-wide (the legacy default). */
+  target?: AdvisoryTarget;
 }
 
 export interface AdvisoryManifest {

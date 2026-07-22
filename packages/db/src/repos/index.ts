@@ -20,7 +20,7 @@ export {
   type CreatePatInput,
 } from "./personal-access-token.repo";
 export { createOAuthRepo } from "./oauth.repo";
-export { createProjectAppRepo, type ProjectApp, type NewProjectApp } from "./project-app.repo";
+export { createProjectGroupRepo, type ProjectGroup, type NewProjectGroup } from "./project-group.repo";
 export {
   createProjectRepo,
   type Project,
@@ -36,6 +36,14 @@ export {
   type NewBuildSession,
 } from "./deployment.repo";
 export { createDomainRepo, type Domain, type NewDomain } from "./domain.repo";
+export { createRouteRuleRepo, type RouteRule, type NewRouteRule } from "./route-rule.repo";
+export { createSystemNoticeRepo, type SystemNotice, type NewSystemNotice } from "./system-notice.repo";
+export { createUpdateStatusRepo, type UpdateStatus, type NewUpdateStatus } from "./update-status.repo";
+export {
+  createServerModuleStatusRepo,
+  type ServerModuleStatus,
+  type NewServerModuleStatus,
+} from "./server-module-status.repo";
 export {
   createCloudWebhookBindingRepo,
   type CloudWebhookBinding,
@@ -68,6 +76,16 @@ export {
   type NewInstanceSettings,
 } from "./instance-settings.repo";
 export { createServerRepo, type Server, type NewServer } from "./server.repo";
+export {
+  createServerGithubAuthRepo,
+  type ServerGithubAuth,
+  type NewServerGithubAuth,
+} from "./server-github-auth.repo";
+export {
+  createGithubDeployKeyRepo,
+  type GithubDeployKey,
+  type NewGithubDeployKey,
+} from "./github-deploy-key.repo";
 export {
   createServerTunnelRepo,
   type ServerTunnel,
@@ -117,9 +135,17 @@ export {
   type BackupRunStatus,
   type BackupRestoreStatus,
 } from "./backup.repo";
+export {
+  createDockerMigrationRunRepo,
+  type DockerMigrationRun,
+  type NewDockerMigrationRun,
+  type DockerMigrationStatus,
+} from "./docker-migration.repo";
 export { createMemberRepo, type Member, type MemberRole } from "./member.repo";
 export { createInvitationRepo, type Invitation } from "./invitation.repo";
 export { createAuditEventRepo, type AuditEvent, type NewAuditEvent } from "./audit-event.repo";
+export { createJobRunRepo, type JobRun, type NewJobRun } from "./job-run.repo";
+export { createJobRepo, type Job, type NewJob } from "./job.repo";
 export {
   createOrphanedResourceRepo,
   type OrphanedResource,
@@ -158,6 +184,11 @@ export {
   type ClaimAnniversaryGrantInput,
   type ClaimAnniversaryGrantResult,
 } from "./billing-anniversary-grant.repo";
+export {
+  createBillingUsageSnapshotRepo,
+  type UsageSnapshot,
+  type UsageSnapshotInput,
+} from "./billing-usage-snapshot.repo";
 
 // ─── Convenience: pre-bound repos using the singleton db ─────────────────────
 
@@ -167,10 +198,14 @@ import { createSessionRepo } from "./session.repo";
 import { createAccountRepo } from "./account.repo";
 import { createGitInstallationRepo } from "./git-installation.repo";
 import { createGithubInstallStateRepo } from "./github-install-state.repo";
-import { createProjectAppRepo } from "./project-app.repo";
+import { createProjectGroupRepo } from "./project-group.repo";
 import { createProjectRepo } from "./project.repo";
 import { createDeploymentRepo } from "./deployment.repo";
 import { createDomainRepo } from "./domain.repo";
+import { createRouteRuleRepo } from "./route-rule.repo";
+import { createSystemNoticeRepo } from "./system-notice.repo";
+import { createUpdateStatusRepo } from "./update-status.repo";
+import { createServerModuleStatusRepo } from "./server-module-status.repo";
 import { createCloudWebhookBindingRepo } from "./cloud-webhook-binding.repo";
 import { createGithubWebhookEventRepo } from "./github-webhook-event.repo";
 import { createServiceRepo } from "./service.repo";
@@ -178,6 +213,8 @@ import { createServiceDeploymentRepo } from "./service-deployment.repo";
 import { createSettingsRepo } from "./settings.repo";
 import { createInstanceSettingsRepo } from "./instance-settings.repo";
 import { createServerRepo } from "./server.repo";
+import { createServerGithubAuthRepo } from "./server-github-auth.repo";
+import { createGithubDeployKeyRepo } from "./github-deploy-key.repo";
 import { createServerTunnelRepo } from "./server-tunnel.repo";
 import { createMailServerRepo } from "./mail-server.repo";
 import { createAnalyticsRepo } from "./analytics.repo";
@@ -193,9 +230,12 @@ import {
   createBackupRunRepo,
   createBackupRestoreRepo,
 } from "./backup.repo";
+import { createDockerMigrationRunRepo } from "./docker-migration.repo";
 import { createMemberRepo } from "./member.repo";
 import { createInvitationRepo } from "./invitation.repo";
 import { createAuditEventRepo } from "./audit-event.repo";
+import { createJobRunRepo } from "./job-run.repo";
+import { createJobRepo } from "./job.repo";
 import { createOrphanedResourceRepo } from "./orphaned-resource.repo";
 import { createResourceGrantRepo } from "./resource-grant.repo";
 import { createInvitationPendingGrantRepo } from "./invitation-pending-grant.repo";
@@ -208,6 +248,7 @@ import {
 } from "./notification.repo";
 import { createStripeTopupGrantRepo } from "./stripe-topup-grant.repo";
 import { createBillingAnniversaryGrantRepo } from "./billing-anniversary-grant.repo";
+import { createBillingUsageSnapshotRepo } from "./billing-usage-snapshot.repo";
 
 /**
  * Pre-bound repository instances using the singleton `db`.
@@ -224,10 +265,14 @@ export const repos = {
   account: createAccountRepo(db),
   gitInstallation: createGitInstallationRepo(db),
   githubInstallState: createGithubInstallStateRepo(db),
-  projectApp: createProjectAppRepo(db),
+  projectGroup: createProjectGroupRepo(db),
   project: createProjectRepo(db),
   deployment: createDeploymentRepo(db),
   domain: createDomainRepo(db),
+  routeRule: createRouteRuleRepo(db),
+  notice: createSystemNoticeRepo(db),
+  updateStatus: createUpdateStatusRepo(db),
+  serverModuleStatus: createServerModuleStatusRepo(db),
   cloudWebhookBinding: createCloudWebhookBindingRepo(db),
   githubWebhookEvent: createGithubWebhookEventRepo(db),
   service: createServiceRepo(db),
@@ -235,6 +280,8 @@ export const repos = {
   settings: createSettingsRepo(db),
   instanceSettings: createInstanceSettingsRepo(db),
   server: createServerRepo(db),
+  serverGithubAuth: createServerGithubAuthRepo(db),
+  githubDeployKey: createGithubDeployKeyRepo(db),
   serverTunnel: createServerTunnelRepo(db),
   mailServer: createMailServerRepo(db),
   analytics: createAnalyticsRepo(db),
@@ -248,9 +295,12 @@ export const repos = {
   backupPolicy: createBackupPolicyRepo(db),
   backupRun: createBackupRunRepo(db),
   backupRestore: createBackupRestoreRepo(db),
+  dockerMigrationRun: createDockerMigrationRunRepo(db),
   member: createMemberRepo(db),
   invitation: createInvitationRepo(db),
   auditEvent: createAuditEventRepo(db),
+  jobRun: createJobRunRepo(db),
+  job: createJobRepo(db),
   orphanedResource: createOrphanedResourceRepo(db),
   resourceGrant: createResourceGrantRepo(db),
   invitationPendingGrant: createInvitationPendingGrantRepo(db),
@@ -261,4 +311,5 @@ export const repos = {
   notificationDelivery: createNotificationDeliveryRepo(db),
   stripeTopupGrant: createStripeTopupGrantRepo(db),
   billingAnniversaryGrant: createBillingAnniversaryGrantRepo(db),
+  billingUsageSnapshot: createBillingUsageSnapshotRepo(db),
 } as const;

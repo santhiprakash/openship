@@ -189,9 +189,9 @@ export function BackupTab({ serverId, domain }: { serverId: string; domain: stri
             desc={t.emailsAdmin.backup.keysDesc}
           />
           {keys && (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3.5 py-2.5">
-              <ShieldAlert className="size-4 text-amber-500 mt-0.5 shrink-0" />
-              <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+            <div className="flex items-start gap-2 rounded-xl border border-warning-border bg-warning-bg px-3.5 py-2.5">
+              <ShieldAlert className="size-4 text-warning mt-0.5 shrink-0" />
+              <p className="text-xs text-warning leading-relaxed">
                 {t.emailsAdmin.backup.keysWarning}
               </p>
             </div>
@@ -389,10 +389,10 @@ function RunRow({
 
 function runPresentation(status: BackupRun["status"]) {
   if (status === "succeeded")
-    return { Icon: Check, bg: "bg-emerald-500/10", color: "text-emerald-600 dark:text-emerald-400", spin: false };
+    return { Icon: Check, bg: "bg-success-bg", color: "text-success", spin: false };
   if (status === "failed" || status === "server_error" || status === "cancelled")
-    return { Icon: CircleX, bg: "bg-red-500/10", color: "text-red-600 dark:text-red-400", spin: false };
-  return { Icon: Loader2, bg: "bg-blue-500/10", color: "text-blue-600 dark:text-blue-400", spin: true };
+    return { Icon: CircleX, bg: "bg-danger-bg", color: "text-danger", spin: false };
+  return { Icon: Loader2, bg: "bg-info-bg", color: "text-info", spin: true };
 }
 
 function formatBytes(n: number): string {

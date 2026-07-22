@@ -12,6 +12,7 @@
 
 import { app, net, shell } from "electron";
 import { resolveDesktopUpdate, type GithubReleasePayload } from "@repo/core";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -88,12 +89,14 @@ export async function downloadUpdate(
   const total = Number(res.headers.get("content-length")) || asset.size || 0;
   const file = createWriteStream(dest);
   const reader = res.body.getReader();
+  const hash = createHash("sha256");
   let received = 0;
 
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      hash.update(value);
       if (!file.write(Buffer.from(value))) {
         await new Promise<void>((r) => file.once("drain", r));
       }
@@ -107,6 +110,35 @@ export async function downloadUpdate(
     file.on("finish", () => r());
     file.on("error", j);
   });
+
+  // Integrity gate: verify the sha256 sidecar the release publishes. A MISMATCH
+  // = corrupted/tampered download → refuse (delete + throw). A MISSING sidecar
+  // is a warning, not a hard block (OS code-signing/Gatekeeper is the backstop),
+  // so a release that omits it can never brick auto-update. Mirrors the CLI
+  // dashboard bundle's verify, tuned to fail-open on absence.
+  const digest = hash.digest("hex");
+  let expected: string | null = null;
+  try {
+    const shaRes = await net.fetch(`${asset.url}.sha256`, {
+      headers: { "User-Agent": "Openship-Desktop" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (shaRes.ok) {
+      const tok = (await shaRes.text()).trim().split(/\s+/)[0]?.toLowerCase();
+      if (tok && /^[0-9a-f]{64}$/.test(tok)) expected = tok;
+    }
+  } catch {
+    /* sidecar unreachable → treat as absent (warn below) */
+  }
+  if (expected && expected !== digest) {
+    rmSync(dest, { force: true });
+    throw new Error(
+      `Update checksum mismatch — refusing to install ${asset.name} (expected ${expected}, got ${digest}).`,
+    );
+  }
+  if (!expected) {
+    console.warn(`[updater] no .sha256 sidecar for ${asset.name}; skipping integrity check.`);
+  }
   return dest;
 }
 
@@ -175,15 +207,27 @@ function installMac(dmg: string): void {
     spawnSync("hdiutil", ["detach", mount, "-quiet"]);
   }
 
-  // Wait for us to exit, swap the bundle, relaunch.
+  // Wait for us to exit, then swap SAFELY: build the new bundle BESIDE the old
+  // (a failed copy can't brick us — the old app is untouched), swap it in with
+  // two atomic renames, and if the new bundle won't open, roll back to the
+  // backup. The previous version did `rm -rf <live> && ditto` — a `ditto`
+  // failure after the delete left NO app.
   runDetachedAfterExit(
     [
       "#!/bin/bash",
       `while kill -0 ${process.pid} 2>/dev/null; do sleep 0.4; done`,
-      `rm -rf "${installedApp}"`,
-      `ditto "${staged}" "${installedApp}"`,
-      `open "${installedApp}"`,
-      `rm -rf "${staged}"`,
+      `INSTALLED="${installedApp}"`,
+      `STAGED="${staged}"`,
+      `NEW="$INSTALLED.new"; BAK="$INSTALLED.bak"`,
+      `rm -rf "$NEW" "$BAK"`,
+      // Copy into place beside the old bundle first; on failure relaunch the
+      // untouched old app and bail.
+      `if ! ditto "$STAGED" "$NEW"; then open "$INSTALLED"; rm -rf "$NEW"; exit 0; fi`,
+      // Atomic double-rename (same filesystem) — the install path is never empty
+      // for more than a rename.
+      `mv "$INSTALLED" "$BAK" && mv "$NEW" "$INSTALLED"`,
+      // Relaunch; roll back to the backup if the new bundle fails to open.
+      `if open "$INSTALLED"; then rm -rf "$BAK" "$STAGED"; else rm -rf "$INSTALLED"; mv "$BAK" "$INSTALLED"; open "$INSTALLED"; fi`,
       "",
     ].join("\n"),
     "sh",
@@ -249,13 +293,16 @@ function installWindows(zip: string): void {
 function installLinux(appImage: string): void {
   const current = process.env.APPIMAGE;
   if (!current) return fallbackOpen(appImage);
+  // Stage beside the live AppImage then atomic-rename — a `cp -f` straight over
+  // the running file could leave a half-written, unlaunchable binary if it fails
+  // mid-copy. On any failure the current AppImage is left untouched.
   runDetachedAfterExit(
     [
       "#!/bin/bash",
       `while kill -0 ${process.pid} 2>/dev/null; do sleep 0.4; done`,
-      `cp -f "${appImage}" "${current}"`,
-      `chmod +x "${current}"`,
-      `"${current}" &`,
+      `CUR="${current}"`,
+      `if cp -f "${appImage}" "$CUR.new" && chmod +x "$CUR.new"; then mv -f "$CUR.new" "$CUR"; else rm -f "$CUR.new"; fi`,
+      `"$CUR" &`,
       "",
     ].join("\n"),
     "sh",

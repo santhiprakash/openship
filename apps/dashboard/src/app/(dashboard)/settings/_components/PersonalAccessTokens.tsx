@@ -320,7 +320,7 @@ export function PersonalAccessTokens() {
               </div>
               <button
                 onClick={() => void handleRevoke(tok.id, tok.name)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border/50 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-red-600 hover:border-red-500/30 transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border/50 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-danger hover:border-danger-border transition-colors"
               >
                 <Trash2 className="size-3.5" />
                 {t.settings.tokens.revoke}

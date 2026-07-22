@@ -27,6 +27,7 @@ import {
   boolean,
   integer,
   bigint,
+  doublePrecision,
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
@@ -184,4 +185,37 @@ export const billingAnniversaryGrant = pgTable(
       table.periodStart,
     ),
   ],
+);
+
+// ─── billing_usage_snapshot ──────────────────────────────────────────────────
+// Latest metered-usage snapshot per org, fed by the Oblien `credits.usage`
+// webhook. Oblien remains the authoritative meter/ledger — this is a display
+// cache so the dashboard's balance/usage surface renders instantly without a
+// live Oblien round-trip, and survives when Oblien is briefly unreachable.
+//
+// Credit columns (balance/creditsUsed) are stored in openship MILLI-credits
+// (the Oblien-credit value ×1000) to match PLANS[].monthlyCredits + the
+// dashboard's formatCredits(÷1000). The per-resource columns are raw physical
+// units straight off `data.usage.*` (minutes / GB) and are NOT credits.
+// One row per org (upsert on organization_id).
+
+export const billingUsageSnapshot = pgTable(
+  "billing_usage_snapshot",
+  {
+    organizationId: text("organization_id")
+      .primaryKey()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    /** Remaining credit balance (milli-credits). */
+    balance: doublePrecision("balance"),
+    /** Credits consumed this period (milli-credits). */
+    creditsUsed: doublePrecision("credits_used"),
+    /** Raw metered units this period (physical, not credits). */
+    cpuTimeMinutes: doublePrecision("cpu_time_minutes"),
+    memoryGbMinutes: doublePrecision("memory_gb_minutes"),
+    diskIoGb: doublePrecision("disk_io_gb"),
+    networkGb: doublePrecision("network_gb"),
+    periodStart: timestamp("period_start"),
+    periodEnd: timestamp("period_end"),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
 );

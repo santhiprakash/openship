@@ -12,9 +12,11 @@
  */
 
 import { Hono } from "hono";
+import { db, schema } from "@repo/db";
 import { env } from "../../config/env";
-import { auth } from "../../lib/auth";
+import { auth, isSaasDeployment } from "../../lib/auth";
 import { internalAuth } from "../../middleware/internal-auth";
+import { isLoopbackRequest } from "../../middleware/loopback-peer";
 import * as ctrl from "./auth.controller";
 
 export const authRoutes = new Hono();
@@ -28,5 +30,24 @@ if (env.DEPLOY_MODE === "desktop") {
   authRoutes.get("/desktop-claim", ctrl.desktopClaim);
 }
 
-// Better Auth catch-all — must be last so the desktop overrides win.
+// Invite-only sign-up guard (runs BEFORE the Better Auth catch-all). SaaS keeps
+// open public signup. On self-host the ONLY Better Auth signup allowed is the
+// FIRST account and only from loopback (CLI bootstrap / local dev) — this closes
+// the remote first-admin race and public invite-hijack signup. Every other new
+// account is created via the token-bound POST /api/system/invite-signup, so a
+// remote peer can never create an account through /sign-up here.
+authRoutes.on("POST", "/sign-up/*", async (c, next) => {
+  if (isSaasDeployment) return next();
+  const [anyUser] = await db.select({ id: schema.user.id }).from(schema.user).limit(1);
+  if (!anyUser && isLoopbackRequest(c)) return next();
+  return c.json(
+    {
+      error: "Public sign-up is disabled on this instance. Use your invitation link to join.",
+      code: "SIGNUP_DISABLED",
+    },
+    403,
+  );
+});
+
+// Better Auth catch-all — must be last so the desktop overrides + signup guard win.
 authRoutes.on(["GET", "POST"], "/*", (c) => auth.handler(c.req.raw));

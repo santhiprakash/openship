@@ -8,10 +8,12 @@
  * successful send and `onClose` to dismiss.
  */
 
-import { useState } from "react";
-import { Loader2, Users as UsersIcon, Shield, Lock, Send, Cloud } from "lucide-react";
+import { useState, useEffect } from "react";
+import Link from "next/link";
+import { Loader2, Users as UsersIcon, Shield, Lock, Send, Cloud, AlertTriangle } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import { useToast } from "@/context/ToastContext";
+import { systemApi } from "@/lib/api/system";
 import {
   api,
   getApiErrorMessage,
@@ -35,12 +37,18 @@ export function InviteMemberModal({
   availableTypes,
   selfHosted,
   initialMailSource,
+  cloudConnected,
+  onConnectCloud,
   onInvited,
   onClose,
 }: {
   availableTypes: ResourceType[];
   selfHosted: boolean;
   initialMailSource: MailSource;
+  /** Cloud state is passed in (not read via useCloud) because this content is
+   *  rendered by the ROOT-level modal host, outside the dashboard's CloudProvider. */
+  cloudConnected: boolean;
+  onConnectCloud: () => void;
   onInvited: () => void;
   onClose: () => void;
 }) {
@@ -52,6 +60,34 @@ export function InviteMemberModal({
   const [mailSource, setMailSource] = useState<MailSource>(initialMailSource);
   const [savingMailSource, setSavingMailSource] = useState(false);
   const [inviting, setInviting] = useState(false);
+
+  // Can the selected transport actually deliver the invite email?
+  //   - "platform" (your mail system) → the instance can send (SMTP / mail
+  //     server / env). null = unknown (not yet loaded / no read access).
+  //   - "cloud" → Openship Cloud is connected to relay it (passed in as a prop).
+  const [emailDeliverable, setEmailDeliverable] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!selfHosted) return;
+    let cancelled = false;
+    systemApi
+      .getEmailSettings()
+      .then((r) => {
+        if (!cancelled) setEmailDeliverable(!!r.deliverable);
+      })
+      .catch(() => {
+        if (!cancelled) setEmailDeliverable(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selfHosted]);
+
+  // Block send when the chosen transport can't deliver — the invite link would
+  // never reach the person. Only blocks on a KNOWN-bad state (never on unknown).
+  const transportBlocked =
+    selfHosted &&
+    ((mailSource === "platform" && emailDeliverable === false) ||
+      (mailSource === "cloud" && !cloudConnected));
 
   const changeMailSource = async (next: MailSource) => {
     if (next === mailSource) return;
@@ -153,40 +189,71 @@ export function InviteMemberModal({
         </div>
       </div>
 
-      {/* Mail source — self-hosted only (SaaS always sends via cloud). */}
+      {/* Send via — self-hosted only (SaaS always relays via its own infra).
+          A segmented switch: recessed track, raised active pill. A status dot
+          per option lets you compare deliverability at a glance; a single
+          contextual line below handles the active option's fix (no double
+          messaging). */}
       {selfHosted && (
         <div className="space-y-2">
           <label className="text-sm font-medium text-foreground block">{t.settings.inviteMember.sendVia}</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
+          <div className="grid grid-cols-2 gap-1 rounded-xl border border-border/50 bg-muted/25 p-1">
+            <SendSegment
+              icon={Send}
+              label={t.settings.inviteMember.yourMailServer}
+              statusText={
+                emailDeliverable === false
+                  ? t.settings.inviteMember.mailNotSetUp
+                  : emailDeliverable
+                    ? t.settings.inviteMember.mailReady
+                    : undefined
+              }
+              tone={emailDeliverable === false ? "warn" : emailDeliverable ? "ok" : "pending"}
+              selected={mailSource === "platform"}
+              disabled={inviting || savingMailSource}
               onClick={() => changeMailSource("platform")}
+            />
+            <SendSegment
+              icon={Cloud}
+              label={t.settings.inviteMember.openshipCloud}
+              statusText={cloudConnected ? t.settings.inviteMember.cloudReady : t.settings.inviteMember.cloudNotReady}
+              tone={cloudConnected ? "ok" : "warn"}
+              selected={mailSource === "cloud"}
               disabled={inviting || savingMailSource}
-              aria-pressed={mailSource === "platform"}
-              className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium transition-all disabled:opacity-50 ${
-                mailSource === "platform"
-                  ? "border-primary/40 bg-primary/[0.06] text-foreground"
-                  : "border-border/50 bg-muted/[0.05] text-muted-foreground hover:bg-muted/15"
-              }`}
-            >
-              <Send className="size-3.5" />
-              {t.settings.inviteMember.yourMailServer}
-            </button>
-            <button
-              type="button"
               onClick={() => changeMailSource("cloud")}
-              disabled={inviting || savingMailSource}
-              aria-pressed={mailSource === "cloud"}
-              className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium transition-all disabled:opacity-50 ${
-                mailSource === "cloud"
-                  ? "border-primary/40 bg-primary/[0.06] text-foreground"
-                  : "border-border/50 bg-muted/[0.05] text-muted-foreground hover:bg-muted/15"
-              }`}
-            >
-              <Cloud className="size-3.5" />
-              {t.settings.inviteMember.openshipCloud}
-            </button>
+            />
           </div>
+
+          {mailSource === "platform" && emailDeliverable === false && (
+            <p className="flex items-start gap-1.5 px-1 text-xs text-warning">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.8} />
+              <span>
+                {t.settings.inviteMember.noMailSystem}{" "}
+                <Link
+                  href="/settings?tab=email"
+                  onClick={onClose}
+                  className="font-medium underline underline-offset-2 hover:opacity-80"
+                >
+                  {t.settings.inviteMember.setUpEmail}
+                </Link>
+              </span>
+            </p>
+          )}
+          {mailSource === "cloud" && !cloudConnected && (
+            <p className="flex items-start gap-1.5 px-1 text-xs text-warning">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.8} />
+              <span>
+                {t.settings.inviteMember.cloudNotConnected}{" "}
+                <button
+                  type="button"
+                  onClick={() => onConnectCloud()}
+                  className="font-medium underline underline-offset-2 hover:opacity-80"
+                >
+                  {t.settings.inviteMember.connectCloud}
+                </button>
+              </span>
+            </p>
+          )}
         </div>
       )}
     </>
@@ -249,7 +316,7 @@ export function InviteMemberModal({
         <button
           type="button"
           onClick={handleInvite}
-          disabled={inviting || !email.trim()}
+          disabled={inviting || !email.trim() || transportBlocked}
           className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
         >
           {inviting && <Loader2 className="size-4 animate-spin" />}
@@ -257,6 +324,60 @@ export function InviteMemberModal({
         </button>
       </div>
     </div>
+  );
+}
+
+/** One segment of the send-via switch. Selected = raised pill (card bg + ring +
+ *  shadow) over the recessed track; unselected = flat with a hover wash. The
+ *  status dot color encodes deliverability (green ready / amber needs-setup /
+ *  grey unknown) so both options are comparable at a glance. */
+function SendSegment({
+  icon: Icon,
+  label,
+  statusText,
+  tone,
+  selected,
+  disabled,
+  onClick,
+}: {
+  icon: React.ElementType;
+  label: string;
+  statusText?: string;
+  tone: "ok" | "warn" | "pending";
+  selected: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  const dotClass = tone === "ok" ? "bg-success" : tone === "warn" ? "bg-warning" : "bg-muted-foreground/40";
+  const statusClass = tone === "ok" ? "text-success" : tone === "warn" ? "text-warning" : "text-muted-foreground";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={selected}
+      className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-start transition-all disabled:opacity-50 ${
+        selected
+          ? "bg-card shadow-sm ring-1 ring-inset ring-border/70"
+          : "hover:bg-foreground/[0.03]"
+      }`}
+    >
+      <Icon
+        className={`size-4 shrink-0 ${selected ? "text-primary" : "text-muted-foreground"}`}
+        strokeWidth={1.8}
+      />
+      <span className="min-w-0 flex-1">
+        <span className={`block truncate text-[13px] font-medium ${selected ? "text-foreground" : "text-muted-foreground"}`}>
+          {label}
+        </span>
+        {statusText && (
+          <span className={`mt-0.5 flex items-center gap-1 text-[11px] ${statusClass}`}>
+            <span className={`size-1.5 rounded-full ${dotClass}`} />
+            {statusText}
+          </span>
+        )}
+      </span>
+    </button>
   );
 }
 

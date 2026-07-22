@@ -26,6 +26,16 @@ export const AddDomainBody = Type.Object({
     pattern: "^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$",
   }),
   isPrimary: Type.Optional(Type.Boolean({ default: false })),
+  /** Externally-managed ingress + TLS (Cloudflare Tunnel, LB): verify via TXT
+   *  only, skip certbot, serve plain HTTP. Domain need not resolve to the box. */
+  externalIngress: Type.Optional(Type.Boolean({ default: false })),
+});
+
+/** Operator-supplied certificate (BYO / Cloudflare Origin CA) to install for a
+ *  domain. The cert/key pair is validated (parse + key match) in the adapter. */
+export const UploadCertBody = Type.Object({
+  certPem: Type.String({ minLength: 1, maxLength: 100_000 }),
+  keyPem: Type.String({ minLength: 1, maxLength: 100_000 }),
 });
 
 // ─── Inferred types ──────────────────────────────────────────────────────────
@@ -33,3 +43,4 @@ export const AddDomainBody = Type.Object({
 export type TDomainIdParam = Static<typeof DomainIdParam>;
 export type TListDomainsQuery = Static<typeof ListDomainsQuery>;
 export type TAddDomainBody = Static<typeof AddDomainBody>;
+export type TUploadCertBody = Static<typeof UploadCertBody>;

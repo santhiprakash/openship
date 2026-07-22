@@ -24,6 +24,7 @@ import { Modal } from "@/components/ui/Modal";
 import { imagesApi, type ImageCatalogEntry } from "@/lib/api/images";
 import type { ServiceInput } from "@/lib/api/services";
 import { usePlatform } from "@/context/PlatformContext";
+import { useCloud } from "@/context/CloudContext";
 import { getApiErrorMessage } from "@/lib/api";
 import EnvironmentVariables from "@/components/import-project/EnvironmentVariables";
 import { RoutingSettingsCard } from "@/components/routing/RoutingSettingsCard";
@@ -210,6 +211,7 @@ function bucketEntry(entry: ImageCatalogEntry): string {
 export function AddServiceModal({ open, projectName, isCloudProject, onClose, onSubmit }: AddServiceModalProps) {
   const { t } = useI18n();
   const { deployMode } = usePlatform();
+  const cloud = useCloud();
   // Cloud-only catalog when EITHER the install is the SaaS dashboard
   // (deployMode === "cloud") OR this specific project is deployed to
   // openship cloud (isCloudProject). In either case the local upstream-
@@ -316,7 +318,9 @@ export function AddServiceModal({ open, projectName, isCloudProject, onClose, on
         if (!cancelled) setCatalogLoading(false);
       });
     return () => { cancelled = true; };
-  }, [open, catalogSource]);
+    // Re-fetch when the cloud connection flips (e.g. the user connects from the
+    // empty-state CTA) so the catalog + connected flag refresh without reopening.
+  }, [open, catalogSource, cloud.connected]);
 
   // Bucket every catalog entry once into a curated category. We memoize
   // the assignments so search/filter doesn't re-run bucketEntry per render.
@@ -456,6 +460,7 @@ export function AddServiceModal({ open, projectName, isCloudProject, onClose, on
     <Modal
       isOpen={open}
       onClose={onClose}
+      showCloseButton={false}
       maxWidth={step === "pick" ? "1080px" : "760px"}
       width="100%"
       maxHeight="92vh"
@@ -518,7 +523,9 @@ export function AddServiceModal({ open, projectName, isCloudProject, onClose, on
             onCategoryChange={setActiveCategory}
             totalCount={catalog.length}
             loading={catalogLoading}
+            source={catalogSource}
             cloudConnected={cloudConnected}
+            onConnectCloud={() => cloud.requireCloud(t.projectDetail.services.addModal.cloudConnectTitle)}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
             showCustomTile={showCustomTile}
@@ -568,7 +575,9 @@ function CatalogPickStep({
   onCategoryChange,
   totalCount,
   loading,
+  source,
   cloudConnected,
+  onConnectCloud,
   searchQuery,
   onSearchChange,
   showCustomTile,
@@ -580,7 +589,9 @@ function CatalogPickStep({
   onCategoryChange: (c: string | null) => void;
   totalCount: number;
   loading: boolean;
+  source: "local" | "cloud";
   cloudConnected: boolean | null;
+  onConnectCloud: () => void;
   searchQuery: string;
   onSearchChange: (v: string) => void;
   showCustomTile: boolean;
@@ -589,6 +600,31 @@ function CatalogPickStep({
   const { t } = useI18n();
   const m = t.projectDetail.services.addModal;
   const hasNoResults = !loading && catalog.length === 0 && !showCustomTile;
+
+  // Cloud catalog picked but the instance isn't linked to Openship Cloud yet —
+  // there's nothing to browse, so lead with a connect CTA instead of an empty
+  // pane. Connecting flips `cloud.connected`, which re-fetches the catalog.
+  if (source === "cloud" && cloudConnected === false && !loading) {
+    return (
+      <div className="flex flex-1 min-h-0 items-center justify-center p-8">
+        <div className="flex max-w-sm flex-col items-center text-center">
+          <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-primary/10">
+            <Cloud className="size-7 text-primary" />
+          </div>
+          <h3 className="text-[15px] font-semibold text-foreground">{m.cloudConnectTitle}</h3>
+          <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{m.cloudConnectBody}</p>
+          <button
+            type="button"
+            onClick={onConnectCloud}
+            className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <Cloud className="size-4" />
+            {m.cloudConnectButton}
+          </button>
+        </div>
+      </div>
+    );
+  }
   const activeLabel =
     activeCategory === null
       ? m.allServices
@@ -719,7 +755,7 @@ function SourceSwitcher({
     { value: "cloud", label: t.projectDetail.services.addModal.openshipCloud, icon: Cloud },
   ];
   return (
-    <div className="inline-flex items-center gap-0.5 rounded-xl bg-muted/40 p-0.5 w-fit">
+    <div className="inline-flex w-fit items-center gap-0.5 rounded-xl border border-border/60 bg-muted/60 p-0.5">
       {options.map((opt) => {
         const active = value === opt.value;
         const Icon = opt.icon;
@@ -730,8 +766,8 @@ function SourceSwitcher({
             onClick={() => onChange(opt.value)}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition-all ${
               active
-                ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-card text-foreground shadow-sm ring-1 ring-border/70"
+                : "text-muted-foreground/80 hover:text-foreground"
             }`}
           >
             <Icon className="size-3.5" />
@@ -911,7 +947,7 @@ function ConfigureStep({
     <form onSubmit={onSubmit} className="flex flex-1 flex-col overflow-hidden">
       <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
         {error && (
-          <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-400">
+          <div className="rounded-xl border border-danger-border bg-danger-bg px-3 py-2 text-sm text-danger">
             {error}
           </div>
         )}

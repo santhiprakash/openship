@@ -63,7 +63,7 @@ export function RoutingConfigCard({
   const active = hasRoutingRules(draft);
 
   return (
-    <div className="rounded-2xl border border-border/50 bg-card overflow-hidden">
+    <div className="rounded-2xl border border-border/50 bg-card sadwq">
       {/* Header doubles as the collapse toggle — the editor is advanced/optional
           so it stays tucked away until opened (or auto-opened when rules exist). */}
       <button
@@ -73,8 +73,8 @@ export function RoutingConfigCard({
         className="flex w-full items-center justify-between gap-3 px-5 py-4 text-start transition-colors hover:bg-muted/20"
       >
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <Route className="size-4" />
+          <div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/15">
+            <Route className="size-[18px]" />
           </div>
           <div>
             <h3 className="text-[14px] font-semibold text-foreground">{t.projectSettings.routing.title}</h3>

@@ -15,6 +15,12 @@ interface PublicEndpointsCardProps {
   allowPortEdit?: boolean;
   onChange: (endpoints: PublicEndpoint[], runtimePort?: string) => void;
   saveMode?: "change" | "explicit";
+  /** Drop the card chrome + "Domain" header (when the parent already labels this
+   *  section, e.g. the wizard's "Public domain" toggle). The add-domain "+" moves
+   *  next to Free/Custom. */
+  hideHeader?: boolean;
+  /** Place each route's exposed-port field to the right of its domain input. */
+  portInline?: boolean;
 }
 
 const PublicEndpointsCard: React.FC<PublicEndpointsCardProps> = ({
@@ -25,6 +31,8 @@ const PublicEndpointsCard: React.FC<PublicEndpointsCardProps> = ({
   allowPortEdit = true,
   onChange,
   saveMode = "change",
+  hideHeader = false,
+  portInline = false,
 }) => {
   const { t } = useI18n();
   const w = t.widgets.routing.publicEndpoints;
@@ -120,7 +128,7 @@ const PublicEndpointsCard: React.FC<PublicEndpointsCardProps> = ({
     return interpolate(w.mappedTo, { path: endpoint.targetPath || "/" });
   };
 
-  const renderRoutingCard = (endpoint: PublicEndpoint) => {
+  const renderRoutingCard = (endpoint: PublicEndpoint, actionSlot?: React.ReactNode) => {
     const resolvedUrl = endpoint.domainType === "custom" && endpoint.customDomain
       ? `https://${endpoint.customDomain}`
       : null;
@@ -143,6 +151,8 @@ const PublicEndpointsCard: React.FC<PublicEndpointsCardProps> = ({
         exposedPort={hasServer ? endpoint.port : undefined}
         readOnlyTarget={readOnlyTarget}
         liveUrl={resolvedUrl}
+        actionSlot={actionSlot}
+        portInline={portInline}
         onDomainChange={(value) => handleEndpointChange(endpoint.id, { domain: value })}
         onCustomDomainChange={(value) => handleEndpointChange(endpoint.id, { customDomain: value })}
         onDomainTypeChange={(value) => handleEndpointChange(endpoint.id, { domainType: value })}
@@ -159,6 +169,82 @@ const PublicEndpointsCard: React.FC<PublicEndpointsCardProps> = ({
 
   if (endpoints.length === 0) {
     return null;
+  }
+
+  const addButton = (
+    <button
+      type="button"
+      onClick={handleAddEndpoint}
+      aria-label={w.addDomain}
+      title={w.addDomain}
+      className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl border border-border/50 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+    >
+      <Plus className="size-4" />
+    </button>
+  );
+
+  // Headerless: no card chrome, no "Domain" header — the parent labels the
+  // section. A single route leads with Free/Custom + the add "+" on its right;
+  // multiple routes keep the collapsed rows and add via the bottom button.
+  if (hideHeader) {
+    return (
+      <div className="space-y-3">
+        {hasMultipleEndpoints ? (
+          <>
+            {endpoints.map((endpoint, index) => {
+              const isOpen = expandedIds.has(endpoint.id);
+              const summary =
+                (endpoint.domainType === "custom" ? endpoint.customDomain : endpoint.domain) ||
+                describeEndpointTarget(endpoint);
+              return (
+                <div key={endpoint.id} className="rounded-xl border border-border/50 bg-background/40 overflow-hidden">
+                  <div className="flex items-center justify-between gap-3 px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => toggleExpanded(endpoint.id)}
+                      aria-expanded={isOpen}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                    >
+                      <ChevronDown
+                        className={`size-4 shrink-0 text-muted-foreground transition-transform ${isOpen ? "" : "-rotate-90"}`}
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-sm font-semibold text-foreground leading-tight">
+                          {index === 0 ? w.primaryDomain : interpolate(w.domainN, { n: String(index + 1) })}
+                        </span>
+                        <span className="block truncate text-sm text-muted-foreground">
+                          {isOpen ? describeEndpointTarget(endpoint) : summary}
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveEndpoint(endpoint.id)}
+                      disabled={endpoints.length <= 1}
+                      className="inline-flex shrink-0 items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+                    >
+                      <Trash2 className="size-3.5" />
+                      {w.remove}
+                    </button>
+                  </div>
+                  {isOpen && <div className="p-4 border-t border-border/40">{renderRoutingCard(endpoint)}</div>}
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              onClick={handleAddEndpoint}
+              className="inline-flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Plus className="size-4" />
+              {w.addDomain}
+            </button>
+          </>
+        ) : (
+          renderRoutingCard(endpoints[0], addButton)
+        )}
+      </div>
+    );
   }
 
   return (

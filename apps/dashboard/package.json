@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "ENV_FILE=.env node --import ./scripts/load-env.mjs node_modules/next/dist/bin/next dev",
     "dev:saas": "ENV_FILE=.env.saas node --import ./scripts/load-env.mjs node_modules/next/dist/bin/next dev",
+    "dev:local-saas": "ENV_FILE=.env.local-saas node --import ./scripts/load-env.mjs node_modules/next/dist/bin/next dev",
+    "dev:fresh": "rm -rf .next/cache && ENV_FILE=.env node --import ./scripts/load-env.mjs node_modules/next/dist/bin/next dev",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "next lint",
@@ -26,6 +28,7 @@
     "chart.js": "^4.4.9",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "country-flag-icons": "^1.6.20",
     "lucide-react": "^0.577.0",
     "next": "^16.1.6",
     "react": "^19.2.4",

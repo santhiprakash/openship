@@ -33,7 +33,8 @@
     "sourceLocal": "Lokal",
     "services": "Dienste",
     "static": "Statisch",
-    "standalone": "Standalone"
+    "standalone": "Standalone",
+    "updateAvailable": "Update"
   },
   "hosting": {
     "cloud": "Cloud",
@@ -108,6 +109,7 @@
     "production": "Produktion",
     "lastDeploy": "Letzte Bereitstellung",
     "tabs": {
+      "appSettings": "Einstellungen",
       "overview": "Übersicht",
       "services": "Dienste",
       "domains": "Domains",
@@ -185,7 +187,8 @@
     "topPaths": "Top-Pfade",
     "requestCount": "{count} Anfr.",
     "statusActive": "Aktiv",
-    "statusOff": "Aus"
+    "statusOff": "Aus",
+    "server": "Server"
   },
   "stats": {
     "serverRequests": "Serveranfragen",
@@ -266,6 +269,10 @@
     "newCommitTitle": "Neuer Commit verfügbar",
     "newCommitOn": "auf",
     "newCommitDeployedOn": "— du bist bereitgestellt auf",
+    "newVersionTitle": "Neue Version verfügbar",
+    "newVersionAvailable": "Eine neuere Version ist verfügbar:",
+    "newVersionDeployed": "— du bist bereitgestellt auf",
+    "deployVersion": "Neue Version bereitstellen",
     "deploying": "Wird bereitgestellt…",
     "redeployLatest": "Neueste erneut bereitstellen",
     "deployLatestTitle": "Neueste Änderungen bereitstellen",

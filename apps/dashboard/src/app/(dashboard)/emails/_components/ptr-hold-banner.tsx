@@ -42,16 +42,16 @@ export function PtrHoldBanner({
 }: PtrHoldBannerProps) {
   const { t } = useI18n();
   return (
-    <div className="bg-sky-500/5 border border-sky-500/30 rounded-2xl p-6 mb-6">
+    <div className="bg-info-bg border border-info-border rounded-2xl p-6 mb-6">
       <div className="flex items-start gap-3 mb-5">
-        <div className="w-10 h-10 rounded-xl bg-sky-500/15 flex items-center justify-center shrink-0">
-          <Network className="size-5 text-sky-600" strokeWidth={1.75} />
+        <div className="w-10 h-10 rounded-xl bg-info-bg flex items-center justify-center shrink-0">
+          <Network className="size-5 text-info" strokeWidth={1.75} />
         </div>
         <div className="min-w-0">
-          <h2 className="text-lg font-semibold text-sky-900 dark:text-sky-100">
+          <h2 className="text-lg font-semibold text-info">
             {t.emails.ptr.heading}
           </h2>
-          <p className="text-sm text-sky-900/80 dark:text-sky-100/80 mt-1 leading-snug">
+          <p className="text-sm text-info mt-1 leading-snug">
             {t.emails.ptr.bodyBefore}
             <strong>{t.emails.ptr.bodyStrongPanel}</strong>
             {t.emails.ptr.bodyMid}
@@ -66,13 +66,13 @@ export function PtrHoldBanner({
         {ipv6 && <PtrCard label="IPv6 PTR" ip={ipv6} target={target} />}
       </div>
 
-      <div className="rounded-xl bg-sky-500/5 border border-sky-500/20 p-3 mb-5">
-        <p className="text-xs text-sky-900/80 dark:text-sky-100/80 leading-relaxed">
+      <div className="rounded-xl bg-info-bg border border-info-border p-3 mb-5">
+        <p className="text-xs text-info leading-relaxed">
           <strong>{t.emails.ptr.howTo}</strong>{t.emails.ptr.howToBody}
           <code className="font-mono text-foreground">{target}</code>
           {t.emails.ptr.howToAfter}
         </p>
-        <p className="text-xs text-sky-900/80 dark:text-sky-100/80 leading-relaxed mt-2">
+        <p className="text-xs text-info leading-relaxed mt-2">
           <strong>{t.emails.ptr.verifyWith}</strong>{" "}
           <code className="font-mono text-foreground">dig +short -x {ipv4}</code>
           {t.emails.ptr.shouldReturn}
@@ -80,11 +80,11 @@ export function PtrHoldBanner({
         </p>
       </div>
 
-      <div className="flex items-center justify-end gap-3 pt-4 border-t border-sky-500/20">
+      <div className="flex items-center justify-end gap-3 pt-4 border-t border-info-border">
         <button
           onClick={onAcknowledge}
           disabled={acknowledging}
-          className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg bg-sky-500 text-white hover:bg-sky-500/90 transition-colors disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg bg-info-solid text-white hover:bg-info-solid/90 transition-colors disabled:opacity-50"
         >
           {acknowledging ? (
             <Loader2 className="size-4 animate-spin" />
@@ -176,7 +176,7 @@ function PtrField({
         title={t.emails.ptr.copy}
       >
         {copied ? (
-          <Check className="size-3.5 text-emerald-500" />
+          <Check className="size-3.5 text-success" />
         ) : (
           <Copy className="size-3.5" />
         )}

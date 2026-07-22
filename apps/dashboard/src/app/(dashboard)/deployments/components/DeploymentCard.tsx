@@ -41,16 +41,16 @@ function getServiceStatusChipConfig(
     case "success":
       return {
         label: labels.deployed,
-        bgClass: "bg-emerald-500/10",
-        textClass: "text-emerald-600 dark:text-emerald-400",
-        dotClass: "bg-emerald-500",
+        bgClass: "bg-success-bg",
+        textClass: "text-success",
+        dotClass: "bg-success-solid",
       };
     case "failure":
       return {
         label: labels.failed,
-        bgClass: "bg-red-500/10",
-        textClass: "text-red-600 dark:text-red-400",
-        dotClass: "bg-red-500",
+        bgClass: "bg-danger-bg",
+        textClass: "text-danger",
+        dotClass: "bg-danger-solid",
       };
     case "cancelled":
       return {
@@ -71,33 +71,33 @@ function getServiceStatusChipConfig(
     case "in_progress":
       return {
         label: status === "building" ? labels.building : status === "deploying" ? labels.deploying : labels.running,
-        bgClass: "bg-blue-500/10",
-        textClass: "text-blue-600 dark:text-blue-400",
-        dotClass: "bg-blue-500",
+        bgClass: "bg-info-bg",
+        textClass: "text-info",
+        dotClass: "bg-info-solid",
       };
     case "missing":
       // Drift: the container was removed on the host out-of-band.
       return {
         label: labels.removedOnHost,
-        bgClass: "bg-orange-500/10",
-        textClass: "text-orange-600 dark:text-orange-400",
-        dotClass: "bg-orange-500",
+        bgClass: "bg-warning-bg",
+        textClass: "text-warning",
+        dotClass: "bg-warning-solid",
       };
     case "indeterminate":
       // Started but unverified — connection dropped mid-deploy.
       return {
         label: labels.verifying,
-        bgClass: "bg-amber-500/10",
-        textClass: "text-amber-600 dark:text-amber-400",
-        dotClass: "bg-amber-500",
+        bgClass: "bg-warning-bg",
+        textClass: "text-warning",
+        dotClass: "bg-warning-solid",
       };
     case "pending":
     default:
       return {
         label: labels.pending,
-        bgClass: "bg-amber-500/10",
-        textClass: "text-amber-600 dark:text-amber-400",
-        dotClass: "bg-amber-500",
+        bgClass: "bg-warning-bg",
+        textClass: "text-warning",
+        dotClass: "bg-warning-solid",
       };
   }
 }
@@ -130,14 +130,6 @@ export const DeploymentCard: React.FC<DeploymentCardProps> = ({ deployment, onSt
       className="group relative flex cursor-pointer items-center gap-4 px-4 py-4 transition-colors hover:bg-muted/25"
       onClick={() => router.push(`/build/${deployment.id}`)}
     >
-      {/* Status accent rail — scan a deployment's status at a glance; subtle by
-          default, brightens on hover. Uses the same status color as the pill. */}
-      <span
-        aria-hidden
-        className="absolute inset-y-2 start-0 w-0.5 rounded-full opacity-50 transition-opacity group-hover:opacity-100"
-        style={{ backgroundColor: statusConfig.color }}
-      />
-
       {/* Framework icon */}
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-muted/45 transition-colors group-hover:bg-muted/65">
         {frameworkConfig.icon ? (
@@ -174,7 +166,7 @@ export const DeploymentCard: React.FC<DeploymentCardProps> = ({ deployment, onSt
               the highest-signal one sits closest to the title. */}
           {deployment.isActive && (
             <span
-              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400"
+              className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-success"
               title={t.deployments.card.activeTitle}
             >
               <Activity className="size-2.5" />
@@ -183,7 +175,7 @@ export const DeploymentCard: React.FC<DeploymentCardProps> = ({ deployment, onSt
           )}
           {deployment.pinned && (
             <span
-              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-warning-bg px-2 py-0.5 text-[11px] font-medium text-warning"
               title={t.deployments.card.pinnedTitle}
             >
               <Pin className="size-2.5" />

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Loader2, Check, X } from "lucide-react";
 import { authClient, useSession } from "@/lib/auth-client";
 import { api } from "@/lib/api";
+import { getApiErrorMessage } from "@/lib/api/client";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 
 type InviteState =
@@ -34,6 +35,14 @@ export default function AcceptInvitePage() {
   const { t } = useI18n();
   const m = t.misc.acceptInvite;
   const [state, setState] = useState<InviteState>({ kind: "loading" });
+  // Inline "create account" form (self-host invite-only). We do NOT send people
+  // to a public /register page — the account is created token-bound via
+  // /api/system/invite-signup, then we sign in + accept.
+  const [showSignup, setShowSignup] = useState(false);
+  const [signupName, setSignupName] = useState("");
+  const [signupPassword, setSignupPassword] = useState("");
+  const [signupBusy, setSignupBusy] = useState(false);
+  const [signupError, setSignupError] = useState<string | null>(null);
 
   const inviteId = String(params.id);
 
@@ -127,6 +136,40 @@ export default function AcceptInvitePage() {
     router.push("/");
   };
 
+  // Create the account for the invited email (token-bound, server-side), then
+  // sign in and accept. No public /register — the account can only be minted for
+  // the invitation's own email via the invitation id.
+  const handleInviteSignup = async (email: string) => {
+    if (signupName.trim().length < 1) {
+      setSignupError("Name is required");
+      return;
+    }
+    if (signupPassword.length < 8) {
+      setSignupError("Password must be at least 8 characters");
+      return;
+    }
+    setSignupBusy(true);
+    setSignupError(null);
+    try {
+      await api.post("system/invite-signup", {
+        invitationId: inviteId,
+        name: signupName.trim(),
+        password: signupPassword,
+      });
+    } catch (err) {
+      setSignupBusy(false);
+      setSignupError(getApiErrorMessage(err, m.acceptFailed ?? "Sign-up failed"));
+      return;
+    }
+    const si = await authClient.signIn.email({ email, password: signupPassword });
+    if (si.error) {
+      setSignupBusy(false);
+      setSignupError(si.error.message ?? (m.acceptFailed ?? "Sign-in failed"));
+      return;
+    }
+    await handleAccept();
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-6">
       <div className="w-full max-w-md rounded-2xl border border-border/50 bg-card p-6 space-y-5">
@@ -146,20 +189,81 @@ export default function AcceptInvitePage() {
                 {m.needsLoginPost}
               </p>
             </div>
-            <div className="flex flex-col gap-2">
-              <Link
-                href={`/auth/signin?redirect=${encodeURIComponent(`/accept-invite/${inviteId}`)}`}
-                className="block w-full text-center py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors"
+            {showSignup ? (
+              <form
+                className="flex flex-col gap-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void handleInviteSignup(state.email || "");
+                }}
               >
-                {m.signIn}
-              </Link>
-              <Link
-                href={`/auth/signup?email=${encodeURIComponent(state.email || "")}&redirect=${encodeURIComponent(`/accept-invite/${inviteId}`)}`}
-                className="block w-full text-center py-2.5 border border-border/50 rounded-xl text-sm font-medium hover:bg-muted/40 transition-colors"
-              >
-                {m.createAccount}
-              </Link>
-            </div>
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="invite-name" className="text-xs font-medium text-muted-foreground">
+                    Name
+                  </label>
+                  <input
+                    id="invite-name"
+                    type="text"
+                    autoComplete="name"
+                    value={signupName}
+                    onChange={(e) => setSignupName(e.target.value)}
+                    className="w-full rounded-xl border border-border/50 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                    required
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="invite-password" className="text-xs font-medium text-muted-foreground">
+                    Password
+                  </label>
+                  <input
+                    id="invite-password"
+                    type="password"
+                    autoComplete="new-password"
+                    value={signupPassword}
+                    onChange={(e) => setSignupPassword(e.target.value)}
+                    className="w-full rounded-xl border border-border/50 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                    minLength={8}
+                    required
+                  />
+                  <p className="text-[11px] text-muted-foreground">At least 8 characters.</p>
+                </div>
+                {signupError && <p className="text-xs text-destructive">{signupError}</p>}
+                <button
+                  type="submit"
+                  disabled={signupBusy}
+                  className="flex items-center justify-center gap-2 w-full py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-60"
+                >
+                  {signupBusy && <Loader2 className="size-4 animate-spin" />}
+                  {m.createAccount}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSignup(false);
+                    setSignupError(null);
+                  }}
+                  className="text-xs text-muted-foreground hover:underline"
+                >
+                  {m.signIn}
+                </button>
+              </form>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <Link
+                  href={`/auth/signin?redirect=${encodeURIComponent(`/accept-invite/${inviteId}`)}`}
+                  className="block w-full text-center py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors"
+                >
+                  {m.signIn}
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setShowSignup(true)}
+                  className="block w-full text-center py-2.5 border border-border/50 rounded-xl text-sm font-medium hover:bg-muted/40 transition-colors"
+                >
+                  {m.createAccount}
+                </button>
+              </div>
+            )}
           </>
         ) : state.kind === "ready" ? (
           <>
@@ -199,8 +303,8 @@ export default function AcceptInvitePage() {
           </div>
         ) : state.kind === "accepted" ? (
           <div className="flex flex-col items-center gap-3 py-4 text-center">
-            <div className="w-12 h-12 rounded-full bg-emerald-500/10 flex items-center justify-center">
-              <Check className="size-6 text-emerald-500" />
+            <div className="w-12 h-12 rounded-full bg-success-bg flex items-center justify-center">
+              <Check className="size-6 text-success" />
             </div>
             <p className="text-base font-medium text-foreground">{m.acceptedTitle}</p>
             <p className="text-sm text-muted-foreground">{m.acceptedRedirect}</p>

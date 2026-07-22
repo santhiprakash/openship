@@ -134,16 +134,27 @@ their configuration from that file at boot.
 
 ## Run Openship
 
-If you installed the CLI (the install script or npm), start Openship with a single command:
+If you installed the CLI (the install script or npm), the quickest start is the **guided setup** — run:
+
+```bash
+openship
+```
+
+With no arguments, `openship` walks you through it: private or public, your domain (if public), and your
+**admin name, email, and password**. It then deploys, creates your admin account, and prints the URL to sign
+in. This is the recommended way to stand up a new instance.
+
+Prefer to skip the prompts? `openship up` starts the same background service directly:
 
 ```bash
 openship up
 ```
 
-This installs Openship as a **background service that starts on boot and restarts itself if it crashes** —
+Either way, Openship runs as a **background service that starts on boot and restarts itself if it crashes** —
 like a delivery truck that always comes back to the depot. It runs the API on `:4000` and the dashboard on
 `:3001` (the dashboard is downloaded automatically the first time), backed by a small embedded database with
-no external services to set up. On your own machine, local access needs no login.
+no external services to set up. A CLI instance always requires a login — the admin you create during
+`openship` setup.
 
 ```bash
 openship stop              # stop the service — it won't restart or come back on reboot

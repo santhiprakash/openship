@@ -84,8 +84,9 @@ function BillingCtaLink({
 function formatPlanPrice(tier: PlanTierId, bt: BillingStrings): string {
   const plan = PLANS[tier];
   const monthly = plan.price.monthly;
-  if (monthly === null) return bt.sidebar.contactSales;
   if (monthly === 0) return bt.sidebar.freeForever;
+  if (tier === "enterprise") return bt.sidebar.contactSales;
+  if (monthly === null) return bt.pricing.comingSoon; // paid tier, price not finalized
   return interpolate(bt.sidebar.perMonth, { price: (monthly / 100).toFixed(0) });
 }
 

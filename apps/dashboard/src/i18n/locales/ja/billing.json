@@ -1,4 +1,18 @@
 {
+  "header": {
+    "credits": "Credits",
+    "creditsSuffix": "of {limit}",
+    "overQuota": "Over quota",
+    "bandwidth": "Bandwidth",
+    "bandwidthNote": "combined in + out",
+    "build": "Build time",
+    "min": "min",
+    "capacity": "Capacity",
+    "workspaces": "workspaces",
+    "vcpus": "vCPU",
+    "ram": "RAM",
+    "diskCap": "disk"
+  },
   "tabs": {
     "overview": "概要",
     "usage": "使用量",

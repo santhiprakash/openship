@@ -70,6 +70,7 @@ export function projectServicesToDeployableServices(services: Service[]): Deploy
     domain: s.domain ?? undefined,
     customDomain: s.customDomain ?? undefined,
     domainType: s.domainType === "custom" ? "custom" : "free",
+    publicEndpoints: (s.publicEndpoints as DeployableService["publicEndpoints"]) ?? undefined,
     rootDirectory: s.rootDirectory ?? undefined,
     installCommand: s.installCommand ?? undefined,
     buildCommand: s.buildCommand ?? undefined,

@@ -87,6 +87,19 @@ const ComposeFieldsBlock = {
   domain: Type.Optional(Type.String({ maxLength: 255 })),
   customDomain: Type.Optional(Type.String({ maxLength: 255 })),
   domainType: Type.Optional(Type.Union([Type.Literal("free"), Type.Literal("custom")])),
+  // Additional public routes (one per port) — a multi-port service (e.g. Convex's
+  // 3210 API + 3211 HTTP actions). Entry[0] mirrors the scalar fields above.
+  publicEndpoints: Type.Optional(
+    Type.Array(
+      Type.Object({
+        port: Type.Optional(Type.Union([Type.Number(), Type.String()])),
+        domain: Type.Optional(Type.String({ maxLength: 255 })),
+        customDomain: Type.Optional(Type.String({ maxLength: 255 })),
+        domainType: Type.Optional(Type.Union([Type.Literal("free"), Type.Literal("custom")])),
+      }),
+      { maxItems: 20 },
+    ),
+  ),
   restart: Type.Optional(RestartEnum),
   enabled: Type.Optional(Type.Boolean()),
   sortOrder: Type.Optional(Type.Number({ minimum: 0 })),

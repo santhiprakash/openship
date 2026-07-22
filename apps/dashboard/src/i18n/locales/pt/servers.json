@@ -1,4 +1,35 @@
 {
+  "github": {
+    "title": "Acesso ao GitHub",
+    "desc": "Como este servidor se autentica no GitHub para clonar repositórios privados.",
+    "loadFailed": "Não foi possível carregar o status do GitHub",
+    "connected": "Conectado",
+    "modeToken": "Token",
+    "modeSshKey": "Chave SSH",
+    "modeDeployKey": "Chaves de deploy",
+    "connectDevice": "Conectar ao GitHub",
+    "deviceHint": "Abra o link e informe este código:",
+    "open": "Abrir GitHub",
+    "connecting": "Aguardando autorização…",
+    "connectFailed": "Falha na conexão",
+    "connectedToast": "GitHub conectado para este servidor",
+    "patPlaceholder": "ghp_… (cole um token)",
+    "patHint": "Um token de acesso pessoal armazenado criptografado para este servidor.",
+    "save": "Salvar",
+    "savedToast": "Salvo",
+    "saveFailed": "Falha ao salvar",
+    "tokenAs": "Autenticado como",
+    "sshGenerate": "Gerar chave SSH",
+    "sshAddHint": "Adicione esta chave à sua conta do GitHub e depois faça o deploy:",
+    "openGithubKeys": "Abrir chaves SSH do GitHub",
+    "copy": "Copiar",
+    "deployKeyUse": "Usar chaves de deploy por repositório",
+    "deployKeyHint": "O Openship registra uma chave de deploy somente leitura em cada repositório no primeiro deploy.",
+    "deployKeyActive": "Modo chave de deploy ativo — as chaves são criadas no primeiro deploy.",
+    "deployKeysRegistered": "chaves de deploy registradas",
+    "disconnect": "Desconectar",
+    "disconnectedToast": "GitHub desconectado"
+  },
   "list": {
     "title": "Servidores",
     "subtitle": "Faça a gestão dos seus servidores de implantação e infraestrutura",
@@ -19,7 +50,14 @@
     "serverOverview": "Visão geral do servidor",
     "totalServers": "Total de Servidores",
     "connectedLabel": "Conectado",
-    "errors": "Erros"
+    "errors": "Erros",
+    "checking": "Verificando",
+    "online": "Online",
+    "offline": "Offline",
+    "authKey": "chave",
+    "authPassword": "senha",
+    "projects": "Projetos",
+    "regions": "Regiões"
   },
   "form": {
     "sshConnection": "Conexão SSH",
@@ -68,6 +106,7 @@
     "tabs": {
       "overview": "Visão Geral",
       "components": "Componentes",
+      "github": "Git",
       "security": "Segurança",
       "ports": "Portas",
       "terminal": "Terminal"
@@ -77,6 +116,7 @@
     "edit": "Editar",
     "removeServer": "Remover Servidor",
     "serverNotFound": "Servidor não encontrado",
+    "serverNotFoundDesc": "Este servidor não está no seu espaço de trabalho ou você não tem acesso a ele. Pode ter sido removido.",
     "noServerConfigured": "Nenhum servidor configurado com o id “{id}”.",
     "editServer": "Editar Servidor",
     "editSubtitle": "Atualize os detalhes de conexão de {name}",
@@ -267,6 +307,8 @@
     "autoDesc": "Verifique os requisitos e instale tudo automaticamente. Um clique — o Openship cuida do Docker, OpenResty e Git.",
     "stepTitle": "Configuração Passo a Passo",
     "stepDesc": "Revise cada componente e escolha o que instalar. Veja o status detalhado antes de prosseguir.",
+    "skipTitle": "Ignorar por agora",
+    "skipDesc": "Adicione o servidor sem instalar nada — apenas monitore seu estado. Você pode executar a configuração mais tarde na página do servidor.",
     "connecting": "Conectando ao servidor…",
     "runningChecks": "Executando verificações de saúde do sistema via SSH",
     "connectionFailed": "Falha na conexão",
@@ -318,5 +360,17 @@
     "serverCheck": "Verificação do Servidor",
     "security": "Segurança",
     "portForwarding": "Encaminhamento de Portas"
+  },
+  "tabsNav": {
+    "servers": "Servidores",
+    "cluster": "Cluster",
+    "networking": "Rede"
+  },
+  "comingSoon": {
+    "badge": "Em breve",
+    "clusterTitle": "Clusters",
+    "clusterBody": "Agrupe servidores em um cluster e deixe o Openship agendar e equilibrar as implantações entre eles.",
+    "networkingTitle": "Rede",
+    "networkingBody": "Links privados, roteamento em malha e regras de firewall entre seus servidores — geridos em um só lugar."
   }
 }

@@ -1,4 +1,35 @@
 {
+  "github": {
+    "title": "Accès GitHub",
+    "desc": "Comment ce serveur s'authentifie auprès de GitHub pour cloner des dépôts privés.",
+    "loadFailed": "Impossible de charger l'état GitHub",
+    "connected": "Connecté",
+    "modeToken": "Jeton",
+    "modeSshKey": "Clé SSH",
+    "modeDeployKey": "Clés de déploiement",
+    "connectDevice": "Se connecter à GitHub",
+    "deviceHint": "Ouvrez le lien et saisissez ce code :",
+    "open": "Ouvrir GitHub",
+    "connecting": "En attente d'autorisation…",
+    "connectFailed": "Échec de la connexion",
+    "connectedToast": "GitHub connecté pour ce serveur",
+    "patPlaceholder": "ghp_… (collez un jeton)",
+    "patHint": "Un jeton d'accès personnel stocké chiffré pour ce serveur.",
+    "save": "Enregistrer",
+    "savedToast": "Enregistré",
+    "saveFailed": "Échec de l'enregistrement",
+    "tokenAs": "Authentifié en tant que",
+    "sshGenerate": "Générer une clé SSH",
+    "sshAddHint": "Ajoutez cette clé à votre compte GitHub puis déployez :",
+    "openGithubKeys": "Ouvrir les clés SSH GitHub",
+    "copy": "Copier",
+    "deployKeyUse": "Utiliser des clés de déploiement par dépôt",
+    "deployKeyHint": "Openship enregistre une clé de déploiement en lecture seule sur chaque dépôt au premier déploiement.",
+    "deployKeyActive": "Mode clé de déploiement actif — les clés sont créées au premier déploiement.",
+    "deployKeysRegistered": "clés de déploiement enregistrées",
+    "disconnect": "Déconnecter",
+    "disconnectedToast": "GitHub déconnecté"
+  },
   "list": {
     "title": "Serveurs",
     "subtitle": "Gérez vos serveurs de déploiement et votre infrastructure",
@@ -19,7 +50,14 @@
     "serverOverview": "Aperçu du serveur",
     "totalServers": "Total des serveurs",
     "connectedLabel": "Connectés",
-    "errors": "Erreurs"
+    "errors": "Erreurs",
+    "checking": "Vérification",
+    "online": "En ligne",
+    "offline": "Hors ligne",
+    "authKey": "clé",
+    "authPassword": "mot de passe",
+    "projects": "Projets",
+    "regions": "Régions"
   },
   "form": {
     "sshConnection": "Connexion SSH",
@@ -68,6 +106,7 @@
     "tabs": {
       "overview": "Aperçu",
       "components": "Composants",
+      "github": "Git",
       "security": "Sécurité",
       "ports": "Ports",
       "terminal": "Terminal"
@@ -77,6 +116,7 @@
     "edit": "Modifier",
     "removeServer": "Supprimer le serveur",
     "serverNotFound": "Serveur introuvable",
+    "serverNotFoundDesc": "Ce serveur n'est pas dans votre espace de travail ou vous n'y avez pas accès. Il a peut-être été supprimé.",
     "noServerConfigured": "Aucun serveur configuré avec l'identifiant « {id} ».",
     "editServer": "Modifier le serveur",
     "editSubtitle": "Mettre à jour les détails de connexion pour {name}",
@@ -267,6 +307,8 @@
     "autoDesc": "Vérifiez les exigences et installez tout automatiquement. En un clic — Openship gère Docker, OpenResty et Git.",
     "stepTitle": "Configuration pas à pas",
     "stepDesc": "Examinez chaque composant et choisissez ce qu'il faut installer. Consultez l'état détaillé avant de poursuivre.",
+    "skipTitle": "Ignorer pour l'instant",
+    "skipDesc": "Ajoutez le serveur sans rien installer — surveillez simplement son état. Vous pourrez lancer la configuration plus tard depuis la page du serveur.",
     "connecting": "Connexion au serveur…",
     "runningChecks": "Exécution des vérifications de l'état du système via SSH",
     "connectionFailed": "Échec de la connexion",
@@ -318,5 +360,17 @@
     "serverCheck": "Vérification du serveur",
     "security": "Sécurité",
     "portForwarding": "Redirection de ports"
+  },
+  "tabsNav": {
+    "servers": "Serveurs",
+    "cluster": "Cluster",
+    "networking": "Réseau"
+  },
+  "comingSoon": {
+    "badge": "Bientôt",
+    "clusterTitle": "Clusters",
+    "clusterBody": "Regroupez des serveurs en cluster et laissez Openship planifier et équilibrer les déploiements entre eux.",
+    "networkingTitle": "Réseau",
+    "networkingBody": "Liens privés, routage en maillage et règles de pare-feu sur vos serveurs — gérés au même endroit."
   }
 }

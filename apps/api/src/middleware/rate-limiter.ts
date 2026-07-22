@@ -29,6 +29,7 @@ import { isLoopbackPeer, peerAddress } from "./loopback-peer";
 import { rateLimit, type PolicyId } from "../lib/rate-limit";
 import { POLICIES } from "../lib/rate-limit/policies";
 import { getRequestContext } from "../lib/request-context";
+import { env } from "../config";
 
 function resolveSubjectId(
   c: Context,
@@ -57,6 +58,24 @@ function resolveSubjectId(
 }
 
 async function enforce(c: Context, policyId: PolicyId): Promise<Response | null> {
+  // Local dev / on-host: a loopback connection with NO trusted proxy in front
+  // is the operator or the dev server itself — exempt it from the ORDINARY
+  // limits, or every dev request buckets under 127.0.0.1 and 429s en masse (the
+  // dashboard fires many github/home + get-session + health/env calls per
+  // render). SaaS sets TRUST_PROXY and limits by the real X-Forwarded-For
+  // client, so this can't fire there.
+  //
+  // CRITICAL: NEVER exempt the auth/login gate. Behind a same-host reverse proxy
+  // that forwards over loopback without TRUST_PROXY/OPENSHIP_PUBLIC_URL set (an
+  // easy operator misconfig), EVERY internet request arrives as a loopback peer
+  // — exempting `auth-tight`/`auth-loose` would silently disable sign-in
+  // brute-force throttling. The auth gate always enforces (proxied traffic
+  // buckets under one loopback key when no client IP is trustable).
+  const isAuthGate = policyId === "auth-tight" || policyId === "auth-loose";
+  if (!isAuthGate && !env.TRUST_PROXY && !env.OPENSHIP_PUBLIC_URL && isLoopbackPeer(peerAddress(c))) {
+    return null;
+  }
+
   const policy = POLICIES[policyId];
   const subjectId = resolveSubjectId(c, policy.subject);
   if (!subjectId) {

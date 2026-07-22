@@ -61,6 +61,8 @@ export interface ComposePipelineOpts {
   /** Path to the git-credential relay helper on the build host (desktop relay).
    *  When set, service clones authenticate through it instead of a token. */
   gitCredentialHelperPath?: string;
+  /** Per-server SSH clone credential (ssh-server-key / deploy-key mode). */
+  gitSsh?: { privateKey: string; knownHosts: string };
   /** Clone each service's source on the remote build host instead of cloning on
    *  the orchestrator and transferring the context. */
   cloneOnServer?: boolean;
@@ -90,6 +92,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     runtimeResources,
     gitToken,
     gitCredentialHelperPath,
+    gitSsh,
     cloneOnServer,
   } = opts;
 
@@ -116,6 +119,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     buildResources,
     gitToken,
     gitCredentialHelperPath,
+    gitSsh,
     cloneOnServer,
     targetServiceIds,
     refreshServiceIds,
@@ -205,6 +209,9 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
         failedServiceNames: composeResult.summary.failedServices,
         warningMessage: composeResult.warning,
       },
+      ...(composeResult.portChecks && composeResult.portChecks.length > 0
+        ? { portCheck: composeResult.portChecks }
+        : {}),
     },
   });
 }

@@ -19,7 +19,8 @@
     "current": "الحالية",
     "cloudLabel": "السحابة: {email}",
     "linkedToCloud": "مرتبط بسحابة Openship كـ {email}",
-    "backToSetup": "العودة إلى الإعداد"
+    "backToSetup": "العودة إلى الإعداد",
+    "personal": "شخصي"
   },
   "migration": {
     "inProgressTitle": "جارٍ الترحيل",
@@ -43,6 +44,7 @@
     "descGlobal": "الصفحة التي تبحث عنها غير موجودة أو تم نقلها.",
     "descDashboard": "هذه الصفحة غير موجودة أو ربما تم نقلها. تحقق من الرابط، أو عُد إلى لوحة التحكم.",
     "backToDashboard": "العودة إلى لوحة التحكم",
-    "viewDeployments": "عرض عمليات النشر"
+    "viewDeployments": "عرض عمليات النشر",
+    "copyId": "نسخ المعرّف"
   }
 }

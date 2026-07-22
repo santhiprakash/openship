@@ -441,7 +441,7 @@ export const ServerTerminal = forwardRef<ServerTerminalHandle, ServerTerminalPro
           className={
             "flex items-center justify-between gap-3 border-b px-4 py-2 text-xs " +
             (banner.tone === "error"
-              ? "border-red-500/30 bg-red-500/10 text-red-200"
+              ? "border-danger-border bg-danger-bg text-danger"
               : banner.tone === "info"
                 ? "border-border/60 bg-zinc-900/80 text-zinc-300"
                 : "border-border/60 bg-zinc-900/80 text-zinc-400")

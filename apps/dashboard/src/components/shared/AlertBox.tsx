@@ -9,19 +9,19 @@ interface AlertBoxProps {
 const AlertBox: React.FC<AlertBoxProps> = ({ type, title, message }) => {
   const styles = {
     info: {
-      container: 'bg-indigo-50 border-indigo-200',
-      title: 'text-indigo-900',
-      message: 'text-indigo-800',
+      container: 'bg-info-bg border-info-border',
+      title: 'text-info',
+      message: 'text-info',
     },
     warning: {
-      container: 'bg-amber-50 border-amber-200',
-      title: 'text-amber-900',
-      message: 'text-amber-800',
+      container: 'bg-warning-bg border-warning-border',
+      title: 'text-warning',
+      message: 'text-warning',
     },
     danger: {
-      container: 'bg-red-50 border-red-200',
-      title: 'text-red-900',
-      message: 'text-red-800',
+      container: 'bg-danger-bg border-danger-border',
+      title: 'text-danger',
+      message: 'text-danger',
     },
   };
 

@@ -79,23 +79,23 @@ export const getStatusConfig = (status: string) => {
     case "success":
       return {
         icon: 'checkmark-72-1658234612.png',
-        color: "var(--color-emerald-500)",
-        bgColor: "bg-emerald-500/10",
-        borderColor: "border-emerald-500/20",
+        color: "var(--color-success)",
+        bgColor: "bg-success-bg",
+        borderColor: "border-success-border",
         label: "Deployed",
       };
     case "failed":
       return {
         icon: 'close remove-802-1662363936.png',
-        color: "var(--color-red-500)",
-        bgColor: "bg-red-500/10",
-        borderColor: "border-red-500/20",
+        color: "var(--color-danger)",
+        bgColor: "bg-danger-bg",
+        borderColor: "border-danger-border",
         label: "Failed",
       };
     case "canceled":
       return {
         icon: 'close%20circle-73-1658234612.png',
-        color: "var(--color-gray-500)",
+        color: "var(--color-neutral)",
         bgColor: "bg-muted/60",
         borderColor: "border-border/50",
         label: "Canceled",
@@ -103,23 +103,23 @@ export const getStatusConfig = (status: string) => {
     case "building":
       return {
         icon: 'loading-51-1663582768.png',
-        color: "var(--color-blue-500)",
-        bgColor: "bg-blue-500/10",
-        borderColor: "border-blue-500/20",
+        color: "var(--color-info)",
+        bgColor: "bg-info-bg",
+        borderColor: "border-info-border",
         label: "Building",
       };
     case "deploying":
       return {
         icon: 'loading-51-1663582768.png',
-        color: "var(--color-blue-500)",
-        bgColor: "bg-blue-500/10",
-        borderColor: "border-blue-500/20",
+        color: "var(--color-info)",
+        bgColor: "bg-info-bg",
+        borderColor: "border-info-border",
         label: "Deploying",
       };
     case "cancelled":
       return {
         icon: 'close%20circle-73-1658234612.png',
-        color: "var(--color-gray-500)",
+        color: "var(--color-neutral)",
         bgColor: "bg-muted/60",
         borderColor: "border-border/50",
         label: "Canceled",
@@ -131,9 +131,9 @@ export const getStatusConfig = (status: string) => {
       // wholly green.
       return {
         icon: 'circle%20clock-39-1658435834.png',
-        color: "var(--color-amber-500)",
-        bgColor: "bg-amber-500/10",
-        borderColor: "border-amber-500/20",
+        color: "var(--color-warning)",
+        bgColor: "bg-warning-bg",
+        borderColor: "border-warning-border",
         label: "Partial",
       };
     case "rejected":
@@ -142,7 +142,7 @@ export const getStatusConfig = (status: string) => {
       // (otherwise the project falls back to draft). Record + logs are kept.
       return {
         icon: 'close%20circle-73-1658234612.png',
-        color: "var(--color-gray-500)",
+        color: "var(--color-neutral)",
         bgColor: "bg-muted/60",
         borderColor: "border-border/50",
         label: "Rejected",
@@ -153,17 +153,17 @@ export const getStatusConfig = (status: string) => {
       // status resolves to deployed/failed once the host is reachable.
       return {
         icon: 'loading-51-1663582768.png',
-        color: "var(--color-amber-500)",
-        bgColor: "bg-amber-500/10",
-        borderColor: "border-amber-500/20",
+        color: "var(--color-warning)",
+        bgColor: "bg-warning-bg",
+        borderColor: "border-warning-border",
         label: "Verifying",
       };
     default:
       return {
         icon: 'circle%20clock-39-1658435834.png',
-        color: "var(--color-amber-500)",
-        bgColor: "bg-amber-500/10",
-        borderColor: "border-amber-500/20",
+        color: "var(--color-warning)",
+        bgColor: "bg-warning-bg",
+        borderColor: "border-warning-border",
         label: "Pending",
       };
   }

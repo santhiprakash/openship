@@ -8,6 +8,8 @@ dist/
 .next-saas/
 .turbo/
 out/
+# fumadocs generated content source (apps/web/.source) — compiled from source.config.ts
+.source/
 # Self-hosted server release bundle (apps/api/scripts/build-release.ts)
 apps/api/release-dist/
 # Desktop staged payload (apps/desktop/build/stage.ts)
@@ -20,6 +22,7 @@ apps/desktop/resources/
 .env.local
 .env.*.local
 .env.saas
+.env.local-saas
 
 # Dev-only generated secrets (per-machine, not for prod)
 .dev-secrets.json

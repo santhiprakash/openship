@@ -13,6 +13,12 @@ export type {
   MultiServiceGroupHandle,
   MultiServiceDeployConfig,
   MultiServiceDeployResult,
+  DockerMount,
+  DockerPortBinding,
+  DockerContainerSummary,
+  DockerContainerDetail,
+  DockerVolumeInfo,
+  DockerNetworkInfo,
 } from "./types";
 export { assertCapability, isMultiServiceRuntime } from "./types";
 export { runBuildPipeline, BuildLogger, parseLogLevel, type BuildEnvironment } from "./build-pipeline";

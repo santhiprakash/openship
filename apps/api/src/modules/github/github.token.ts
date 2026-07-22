@@ -99,6 +99,11 @@ export interface TokenContext {
   installationId?: number;
   /** Project id — for per-project clone token lookup. */
   projectId?: string;
+  /** Target server id — threaded so `canResolveTokenFor` (preflight) can stay
+   *  in lockstep with a per-server credential consulted upstream in
+   *  clone-auth.ts. `tokenFor` itself has no per-server branch (SSH can't be a
+   *  TokenResult); this is plumbing for parity, not resolution. */
+  serverId?: string;
 }
 
 // ─── The dispatcher ─────────────────────────────────────────────────────────

@@ -13,8 +13,10 @@ import {
   createDestination,
   deleteDestination,
   getDestination,
+  getDestinationUsage,
   listDestinations,
   preflightDestination,
+  preflightDraft as preflightDraftService,
   updateDestination,
   type CreateDestinationInput,
   type UpdateDestinationInput,
@@ -32,6 +34,17 @@ export async function getOne(c: Context) {
   await permission.assert(getRequestContext(c), { resourceType: "backup_destination", resourceId: id, action: "read" });
   try {
     return c.json({ data: await getDestination(ctx, id) });
+  } catch (err) {
+    return c.json({ error: safeErrorMessage(err) }, 404);
+  }
+}
+
+export async function getUsage(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  await permission.assert(ctx, { resourceType: "backup_destination", resourceId: id, action: "read" });
+  try {
+    return c.json({ data: await getDestinationUsage(ctx, id) });
   } catch (err) {
     return c.json({ error: safeErrorMessage(err) }, 404);
   }
@@ -80,5 +93,30 @@ export async function preflight(c: Context) {
     return c.json({ data: result });
   } catch (err) {
     return c.json({ error: safeErrorMessage(err) }, 404);
+  }
+}
+
+/**
+ * Test an UNSAVED destination (the modal's "Test connection"). Body is a
+ * CreateDestinationInput; an optional `id` lets edit-mode reuse stored secrets
+ * for fields left blank. Nothing is persisted. The route tag gates write.
+ */
+export async function preflightDraft(c: Context) {
+  const ctx = getRequestContext(c);
+  const body = await c.req
+    .json<CreateDestinationInput & { id?: string }>()
+    .catch(() => null);
+  if (!body || typeof body.kind !== "string") {
+    return c.json({ error: "A destination kind is required" }, 400);
+  }
+  const { id, ...input } = body;
+  if (id) {
+    await permission.assert(ctx, { resourceType: "backup_destination", resourceId: id, action: "write" });
+  }
+  try {
+    const result = await preflightDraftService(ctx, input, id);
+    return c.json({ data: result });
+  } catch (err) {
+    return c.json({ error: safeErrorMessage(err) }, 400);
   }
 }

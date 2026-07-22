@@ -18,6 +18,7 @@ import {
   Sparkles,
   Download,
   ExternalLink,
+  Loader2,
   X,
 } from "lucide-react";
 import type { AdvisorySeverity } from "@repo/core";
@@ -25,8 +26,8 @@ import { useI18n, interpolate } from "@/components/i18n-provider";
 import { useUpdates } from "./useUpdates";
 
 const SEVERITY = {
-  critical: { border: "border-red-500/30", bg: "bg-red-500/10", fg: "text-red-500", Icon: AlertTriangle },
-  recommended: { border: "border-amber-500/30", bg: "bg-amber-500/10", fg: "text-amber-500", Icon: AlertCircle },
+  critical: { border: "border-danger-border", bg: "bg-danger-bg", fg: "text-danger", Icon: AlertTriangle },
+  recommended: { border: "border-warning-border", bg: "bg-warning-bg", fg: "text-warning", Icon: AlertCircle },
   info: { border: "border-primary/30", bg: "bg-primary/10", fg: "text-primary", Icon: Info },
 } as const;
 
@@ -53,20 +54,80 @@ export function UpdateCenter() {
     whatsNewVersion,
     dismissAdvisory,
     dismissWhatsNew,
-    startDesktopUpdate,
+    beginUpdate,
+    updatePhase,
+    updateProgress,
+    updateError,
   } = useUpdates();
   const { t } = useI18n();
   const w = t.widgets.updates;
   const [notesOpen, setNotesOpen] = useState(false);
 
   const advisory = state?.advisories[0]; // most severe first
-  const showUpdate = !advisory && !muted && state?.updateAvailable;
+  // An in-flight download/install owns the top surface — suppress the advisory
+  // and "update available" banners so we never show "update available" next to
+  // its own progress bar.
+  const updating = desktop && updatePhase !== "idle";
+  const showUpdate = !updating && !advisory && !muted && state?.updateAvailable;
+  const updatingVersion = state?.latestVersion ?? latest?.version ?? "";
+  const pct = Math.round(Math.min(1, Math.max(0, updateProgress)) * 100);
   const changelog = state?.latestChangelogUrl ?? "https://github.com/oblien/openship/releases";
 
   return (
     <>
+      {/* ── In-app update progress (desktop) ────────────────────────── */}
+      {updating && (
+        <div className="px-4 pt-4 sm:px-6 sm:pt-6">
+          <div className="rounded-2xl border border-border/60 bg-card px-4 py-3">
+            {updatePhase === "error" ? (
+              <div className="flex items-center gap-3">
+                <AlertCircle className="size-5 shrink-0 text-danger" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13.5px] font-semibold text-foreground">{w.updateFailed}</p>
+                  {updateError && (
+                    <p className="mt-0.5 truncate text-[12px] text-muted-foreground">{updateError}</p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={beginUpdate}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-foreground px-3 py-1.5 text-[13px] font-medium text-background transition-opacity hover:opacity-90"
+                >
+                  <Download className="size-3.5" />
+                  {w.retry}
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-3">
+                  {updatePhase === "installing" ? (
+                    <Loader2 className="size-5 shrink-0 animate-spin text-primary" />
+                  ) : (
+                    <Download className="size-5 shrink-0 text-primary" />
+                  )}
+                  <p className="min-w-0 flex-1 text-[13.5px] text-foreground">
+                    {updatePhase === "installing"
+                      ? w.installing
+                      : interpolate(w.downloading, { version: updatingVersion })}
+                    {updatePhase === "downloading" && (
+                      <span className="text-muted-foreground"> · {pct}%</span>
+                    )}
+                  </p>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-foreground/10">
+                  <div
+                    className="h-full rounded-full bg-primary transition-[width] duration-150"
+                    style={{ width: updatePhase === "installing" ? "100%" : `${pct}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── Advisory banner (critical/recommended/info) ─────────────── */}
-      {advisory && (() => {
+      {!updating && advisory && (() => {
         const s = SEVERITY[advisory.severity as AdvisorySeverity];
         const Icon = s.Icon;
         return (
@@ -87,7 +148,7 @@ export function UpdateCenter() {
                   ) : advisory.action?.kind === "update" && desktop ? (
                     <button
                       type="button"
-                      onClick={startDesktopUpdate}
+                      onClick={beginUpdate}
                       className="inline-flex items-center gap-1.5 rounded-lg bg-foreground px-3 py-1.5 text-[13px] font-medium text-background transition-opacity hover:opacity-90"
                     >
                       <Download className="size-3.5" />
@@ -132,7 +193,7 @@ export function UpdateCenter() {
               {desktop && (
                 <button
                   type="button"
-                  onClick={startDesktopUpdate}
+                  onClick={beginUpdate}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-foreground px-3 py-1.5 text-[13px] font-medium text-background transition-opacity hover:opacity-90"
                 >
                   <Download className="size-3.5" />
@@ -147,7 +208,7 @@ export function UpdateCenter() {
 
       {/* ── "What's new" card (once, after an update) ───────────────── */}
       {whatsNewVersion && (
-        <div className="fixed bottom-4 end-4 z-50 w-[360px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border/60 bg-card shadow-2xl">
+        <div className="fixed bottom-4 end-4 z-50 w-[360px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border/60 bg-popover/90 shadow-2xl backdrop-blur-xl">
           <div className="flex items-start gap-3 px-4 py-4">
             <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
               <Sparkles className="size-4.5" />

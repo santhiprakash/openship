@@ -119,6 +119,8 @@
     "addServer": "Eigenen Server hinzufügen",
     "continue": "Weiter",
     "chooseServer": "Einen Server auswählen",
+    "searchPlaceholder": "Server suchen…",
+    "noServersMatch": "Keine Server entsprechen deiner Suche.",
     "requireCloudFeature": "Deployen auf Openship Cloud",
     "saveDefault": "Als meinen Standard für jedes Deployment speichern.",
     "saveDefaultHint": "Ändern Sie ihn später in den Einstellungen oder pro Deploy über die Auswahl auf dieser Seite.",

@@ -57,7 +57,12 @@ const RESPONSE_HOP_BY_HOP = new Set([
 ]);
 
 function internalApiBase(): string {
-  const url = process.env.INTERNAL_API_URL ?? "http://127.0.0.1:4000";
+  // INTERNAL_API_URL is the canonical knob (docker-compose, `openship up`).
+  // Fall back to OPENSHIP_LOCAL_API_URL so the desktop app — which serves this
+  // same proxy-baked bundle but runs the API on a DYNAMIC port and only sets
+  // OPENSHIP_LOCAL_API_URL — targets its real API instead of the :4000 default.
+  const url =
+    process.env.INTERNAL_API_URL ?? process.env.OPENSHIP_LOCAL_API_URL ?? "http://127.0.0.1:4000";
   return url.replace(/\/+$/, "");
 }
 

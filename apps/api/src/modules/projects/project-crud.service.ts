@@ -3,10 +3,25 @@
  */
 
 import { repos, type Deployment, type NewProject, type Project, type Server } from "@repo/db";
-import { slugify, NotFoundError, ConflictError, ValidationError, SYSTEM, safeErrorMessage } from "@repo/core";
+import {
+  slugify,
+  NotFoundError,
+  ConflictError,
+  ValidationError,
+  SYSTEM,
+  safeErrorMessage,
+  compareSemver,
+  isReleaseProvider,
+  isBehind,
+  GITHUB_REPO,
+  type ReleaseSource,
+  type UpdatableIdentity,
+} from "@repo/core";
 import type { ResourceConfig } from "@repo/adapters";
 import { encodeResources } from "../../lib/resources";
 import { normalizeRollbackWindow } from "../../lib/release-retention";
+import { resolveLatestVersion, resolveLatestReleaseTag, readApiVersion } from "../../lib/release-resolver";
+import { resolveLatestImageDigest } from "../../lib/image-registry";
 import { env } from "../../config";
 import { assertResourceInOrg } from "../../lib/controller-helpers";
 import type { RequestContext } from "../../lib/request-context";
@@ -98,6 +113,7 @@ export async function enrichProject(p: Project) {
   return {
     ...p,
     deployTarget,
+    serverId,
     serverName,
     ...readActiveDeploymentSummary(activeDep),
     resources: encodeResources(production, build, p.sleepMode ?? "auto_sleep", p.port ?? 3000),
@@ -153,6 +169,7 @@ export async function enrichProjectsBatch(
     return {
       ...p,
       deployTarget,
+      serverId,
       serverName,
       ...readActiveDeploymentSummary(activeDep),
       resources: encodeResources(production, build, p.sleepMode ?? "auto_sleep", p.port ?? 3000),
@@ -165,16 +182,22 @@ function projectGitUrl(owner?: string | null, repo?: string | null) {
 }
 
 function resolveProjectSource(data: TCreateProjectBody) {
-  const safeLocalPath = data.localPath && !env.CLOUD_MODE ? data.localPath : undefined;
-  const gitOwner = safeLocalPath ? undefined : data.gitOwner;
-  const gitRepo = safeLocalPath ? undefined : data.gitRepo;
+  // Release/dist source: a prebuilt dist, no git repo and no stored localPath
+  // (its dir is resolved per-deploy). The source repo, if any, lives in
+  // releaseSource — the project-level gitOwner/gitRepo columns stay null so the
+  // commit-drift path is never taken for it.
+  const isRelease = isReleaseProvider(data.gitProvider);
+  const safeLocalPath = !isRelease && data.localPath && !env.CLOUD_MODE ? data.localPath : undefined;
+  const gitOwner = isRelease || safeLocalPath ? undefined : data.gitOwner;
+  const gitRepo = isRelease || safeLocalPath ? undefined : data.gitRepo;
 
   return {
     safeLocalPath,
     gitOwner,
     gitRepo,
-    gitProvider: safeLocalPath ? "local" : (data.gitProvider ?? "github"),
+    gitProvider: isRelease ? "release" : safeLocalPath ? "local" : (data.gitProvider ?? "github"),
     gitUrl: projectGitUrl(gitOwner, gitRepo),
+    releaseSource: isRelease ? ((data.releaseSource as ReleaseSource | undefined) ?? null) : null,
   };
 }
 
@@ -197,12 +220,12 @@ async function ensureProjectApp(
   slug: string,
   organizationId: string,
 ) {
-  let app = await repos.projectApp.findBySlugInOrg(organizationId, slug);
+  let app = await repos.projectGroup.findBySlugInOrg(organizationId, slug);
   if (app) return { app, created: false };
 
   const source = resolveProjectSource(data);
 
-  app = await repos.projectApp.create({
+  app = await repos.projectGroup.create({
     organizationId,
     name: data.name,
     slug,
@@ -217,7 +240,7 @@ async function ensureProjectApp(
 }
 
 function buildProductionProjectInput(
-  appId: string,
+  groupId: string,
   data: TCreateProjectBody,
   slug: string,
   routing: ProjectRouteState,
@@ -227,7 +250,7 @@ function buildProductionProjectInput(
 
   return {
     organizationId,
-    appId,
+    groupId,
     name: data.name,
     slug,
     environmentName: "Production",
@@ -239,6 +262,7 @@ function buildProductionProjectInput(
     gitRepo: source.gitRepo,
     gitBranch: data.gitBranch ?? "main",
     gitUrl: source.gitUrl,
+    releaseSource: source.releaseSource,
     installationId: data.installationId,
     autoDeploy: !!(env.CLOUD_MODE && source.gitOwner && source.gitRepo),
     framework: data.framework ?? "unknown",
@@ -262,6 +286,8 @@ function buildProductionProjectInput(
     rollbackWindow:
       data.rollbackWindow !== undefined ? normalizeRollbackWindow(data.rollbackWindow) : null,
     cloudArchiveStrategy: data.cloudArchiveStrategy ?? undefined,
+    isApp: data.isApp ?? false,
+    appTemplateId: data.appTemplateId ?? null,
   };
 }
 
@@ -317,7 +343,7 @@ async function createProductionProject(
     return created;
   } catch (err) {
     if (appCreated) {
-      await repos.projectApp.softDelete(app.id).catch(() => {});
+      await repos.projectGroup.softDelete(app.id).catch(() => {});
     }
     throw err;
   }
@@ -335,10 +361,31 @@ async function uniqueProjectSlug(organizationId: string, baseSlug: string) {
   return slug;
 }
 
+/**
+ * A cheap "current version" label for an app environment — the real axis for
+ * apps (which have no meaningful git branch). Release/self/webmail → semver;
+ * image apps → the running image tag. Null for git projects (they keep branch).
+ */
+async function resolveEnvVersion(row: Project, latest: Deployment | null): Promise<string | null> {
+  if (row.appTemplateId === "openship" || row.appTemplateId === "mail-webmail") return readApiVersion();
+  if (isReleaseProvider(row.gitProvider)) {
+    const pinned = (row.releaseSource as ReleaseSource | null)?.pinnedVersion;
+    return latest?.releaseVersion ?? pinned ?? null;
+  }
+  if (row.isApp && !row.gitOwner) {
+    const services = await repos.service.listByProject(row.id).catch(() => []);
+    const svc = services.find((s) => s.exposed && s.image) ?? services.find((s) => s.image);
+    const ref = svc?.image;
+    if (ref) return ref.includes(":") ? (ref.split(":").pop() ?? null) : "latest";
+  }
+  return null;
+}
+
 function environmentSummary(
   p: Project,
   latestStatus?: string | null,
   primaryDomain?: string | null,
+  version?: string | null,
 ) {
   return {
     id: p.id,
@@ -350,6 +397,10 @@ function environmentSummary(
     activeDeploymentId: p.activeDeploymentId,
     latestDeploymentStatus: latestStatus ?? null,
     primaryDomain,
+    // App axis: version instead of branch. Null for git projects.
+    version: version ?? null,
+    isApp: !!p.isApp,
+    gitProvider: p.gitProvider ?? null,
   };
 }
 
@@ -375,15 +426,36 @@ async function findProjectByAppSlug(
   slug: string,
   branch?: string | null,
 ): Promise<Project | null> {
-  const app = await repos.projectApp.findBySlugInOrg(organizationId, slug);
+  const app = await repos.projectGroup.findBySlugInOrg(organizationId, slug);
   if (app) {
-    return selectProjectForBranch(await repos.project.listByApp(app.id), branch);
+    return selectProjectForBranch(await repos.project.listByGroup(app.id), branch);
   }
 
   return (await repos.project.findBySlugInOrg(organizationId, slug)) ?? null;
 }
 
 // ─── Ensure project (create or return existing) ─────────────────────────────
+
+/**
+ * Enforce the project cap before creating one. On Openship Cloud (CLOUD_MODE) a
+ * cloud org maps 1:1 to its owning SaaS user, so this per-org count IS the
+ * per-user cap (env CLOUD_MAX_PROJECTS_PER_USER, default 2). Self-hosted is not
+ * metered — it uses the high SYSTEM.PROJECTS.MAX_PER_USER safety cap. Called
+ * from BOTH createProject and ensureProject so the folder-upload/ensure path
+ * can't bypass it.
+ */
+async function assertProjectQuota(organizationId: string): Promise<void> {
+  const cap = env.CLOUD_MODE
+    ? env.CLOUD_MAX_PROJECTS_PER_USER
+    : SYSTEM.PROJECTS.MAX_PER_USER;
+  const { total } = await repos.projectGroup.listByOrganization(organizationId, {
+    page: 1,
+    perPage: 1,
+  });
+  if (total >= cap) {
+    throw new ValidationError(`Project limit reached (${cap})`);
+  }
+}
 
 export async function ensureProject(
   data: EnsureProjectBody,
@@ -407,6 +479,9 @@ export async function ensureProject(
   let created = false;
 
   if (!project) {
+    // No existing match → this ensure will create. Enforce the cap here too
+    // (the folder-upload deploy flow reaches creation only through ensure).
+    await assertProjectQuota(organizationId);
     project = await createProductionProject(
       data,
       desiredSlug,
@@ -450,8 +525,8 @@ export async function ensureProject(
         throw new ConflictError(`Project slug "${data.slug}" already exists`);
       }
 
-      const existingApp = await repos.projectApp.findBySlugInOrg(organizationId, data.slug);
-      if (existingApp && existingApp.id !== project.appId) {
+      const existingApp = await repos.projectGroup.findBySlugInOrg(organizationId, data.slug);
+      if (existingApp && existingApp.id !== project.groupId) {
         throw new ConflictError(`Project slug "${data.slug}" already exists`);
       }
 
@@ -497,11 +572,11 @@ export async function ensureProject(
     }
 
     if (
-      project.appId &&
+      project.groupId &&
       typeof update.slug === "string" &&
       project.environmentSlug === "production"
     ) {
-      await repos.projectApp.update(project.appId, { slug: update.slug });
+      await repos.projectGroup.update(project.groupId, { slug: update.slug });
     }
 
     // Re-sync monorepo sub-apps if the request carries them. The sync method
@@ -538,14 +613,14 @@ export async function listProjects(
     { page: 1, perPage: 1000 },
   );
 
-  const byApp = new Map<string, Project[]>();
+  const byGroup = new Map<string, Project[]>();
   for (const p of projects) {
-    const list = byApp.get(p.appId) ?? [];
+    const list = byGroup.get(p.groupId) ?? [];
     list.push(p);
-    byApp.set(p.appId, list);
+    byGroup.set(p.groupId, list);
   }
 
-  const displays = Array.from(byApp.values())
+  const displays = Array.from(byGroup.values())
     .map(selectDisplayProject)
     .filter((p): p is Project => !!p)
     .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0));
@@ -573,13 +648,7 @@ export async function createProject(
 ) {
   const slug = slugify(data.name);
 
-  const { total } = await repos.projectApp.listByOrganization(organizationId, {
-    page: 1,
-    perPage: 1,
-  });
-  if (total >= SYSTEM.PROJECTS.MAX_PER_USER) {
-    throw new ValidationError(`Project limit reached (${SYSTEM.PROJECTS.MAX_PER_USER})`);
-  }
+  await assertProjectQuota(organizationId);
 
   const existing = await findProjectByAppSlug(organizationId, slug);
   if (existing) throw new ConflictError(`Project "${data.name}" already exists`);
@@ -678,12 +747,21 @@ export async function updateProject(
     const beforeState = await resolveProjectRouteState(p).catch(() => null);
     const previousHostnames = beforeState?.projectDomains.map((d) => d.hostname) ?? [];
 
-    await syncProjectRouteState(p, {
-      nextPublicEndpoints: data.publicEndpoints,
-      slug: typeof update.slug === "string" ? update.slug : p.slug,
-    }).catch((err) =>
-      console.warn(`[updateProject] route sync failed (non-fatal): ${safeErrorMessage(err)}`),
-    );
+    // Best-effort ONLY for incidental re-syncs (a slug/port edit) — the field
+    // edit is already committed and the next deploy re-syncs routes. But when
+    // the caller EXPLICITLY sent publicEndpoints, the domain add/edit IS the
+    // operation: swallowing a failure here would return success while nothing
+    // was persisted (silent drop). Fail loudly so the real reason (e.g. a slug
+    // conflict) surfaces to the user instead of a false success.
+    try {
+      await syncProjectRouteState(p, {
+        nextPublicEndpoints: data.publicEndpoints,
+        slug: typeof update.slug === "string" ? update.slug : p.slug,
+      });
+    } catch (err) {
+      if (data.publicEndpoints !== undefined) throw err;
+      console.warn(`[updateProject] route sync failed (non-fatal): ${safeErrorMessage(err)}`);
+    }
 
     // Re-apply the live route so a domain/port edit takes effect without a
     // redeploy (best-effort — the DB rows are already committed).
@@ -705,7 +783,7 @@ export async function updateProject(
     await applyProjectRouting(projectId);
   }
 
-  if (p.appId) {
+  if (p.groupId) {
     const appUpdate: Record<string, unknown> = {};
     if (typeof update.name === "string") appUpdate.name = update.name;
     if (typeof update.slug === "string" && p.environmentSlug === "production")
@@ -720,7 +798,7 @@ export async function updateProject(
     if (typeof update.installationId === "number" || update.installationId === null)
       appUpdate.installationId = update.installationId;
     if (Object.keys(appUpdate).length > 0) {
-      await repos.projectApp.update(p.appId, appUpdate);
+      await repos.projectGroup.update(p.groupId, appUpdate);
     }
   }
   const updated = await repos.project.findById(projectId);
@@ -736,14 +814,15 @@ export async function listProjectEnvironments(
   const p = await repos.project.findById(projectId);
   assertResourceInOrg(p, "Project", organizationId, projectId);
 
-  const rows = await repos.project.listByApp(p.appId);
+  const rows = await repos.project.listByGroup(p.groupId);
   const enriched = await Promise.all(
     rows.map(async (row) => {
       const [latest, primary] = await Promise.all([
         repos.deployment.findLatestByProject(row.id),
         repos.domain.getPrimaryByProject(row.id),
       ]);
-      return environmentSummary(row, latest?.status ?? null, primary?.hostname ?? null);
+      const version = await resolveEnvVersion(row, latest ?? null);
+      return environmentSummary(row, latest?.status ?? null, primary?.hostname ?? null, version);
     }),
   );
 
@@ -771,14 +850,14 @@ export async function createProjectEnvironment(
   const environmentType =
     data.environmentType ?? (environmentSlug === "production" ? "production" : "development");
 
-  const existing = (await repos.project.listByApp(base.appId)).find(
+  const existing = (await repos.project.listByGroup(base.groupId)).find(
     (row) => row.environmentSlug === environmentSlug,
   );
   if (existing) {
     throw new ConflictError(`Environment "${environmentName}" already exists`);
   }
 
-  const app = await repos.projectApp.findById(base.appId);
+  const app = await repos.projectGroup.findById(base.groupId);
   const projectSlug = await uniqueProjectSlug(
     organizationId,
     environmentSlug === "production" ? base.slug : `${app?.slug ?? base.slug}-${environmentSlug}`,
@@ -806,7 +885,14 @@ export async function createProjectEnvironment(
 
   const created = await repos.project.create({
     organizationId,
-    appId: base.appId,
+    groupId: base.groupId,
+    // The catalog-app marker is a property of the whole cluster, not one
+    // environment — carry it to every sibling so a new env of a catalog app
+    // (e.g. a "staging" Convex) stays an app, and the cluster never drops off
+    // the Apps tab when its production env is removed. (Until the marker is
+    // moved onto project_app itself; see the rename plan.)
+    isApp: base.isApp,
+    appTemplateId: base.appTemplateId,
     name: app?.name ?? base.name,
     slug: projectSlug,
     environmentName,
@@ -860,21 +946,51 @@ export async function createProjectEnvironment(
  * rate limit) or a project with no successful deploy yet reports `behind:false`
  * so we never show a false "outdated" nudge.
  */
+/**
+ * Source-drift status for the "your deploy is behind — redeploy" dashboard
+ * nudge. Dispatches on the project's source shape and returns a `mode`-tagged
+ * union so the client can render the right banner:
+ *   - commit  → git-backed: compares the branch HEAD sha against the deployed sha
+ *   - release → release/dist: compares the newest advertised semver against the
+ *               deployed release version ("new version available vX→vY")
+ * Unsupported sources (local, upload, git project with no owner/repo) return
+ * `{ supported:false }` and the banner stays hidden.
+ */
 export async function getProjectCommitStatus(
-  ctx: RequestContext,
+  // Nullable so the background updates:scan (no user session) can reuse this one
+  // resolver: the git-commit branch needs GitHub auth from ctx and is skipped
+  // when absent (git projects still get checked on-demand from their page); the
+  // release/image/self branches need no ctx.
+  ctx: RequestContext | null,
   projectId: string,
   organizationId: string,
 ) {
   const p = await repos.project.findById(projectId);
   assertResourceInOrg(p, "Project", organizationId, projectId);
 
-  // Only GitHub-backed projects have a remote branch HEAD to compare against.
+  if (isReleaseProvider(p.gitProvider)) {
+    return getReleaseDriftStatus(p);
+  }
+
+  // Self-app + webmail: both ship from the oblien/openship release stream but
+  // carry no releaseSource (they deploy via localPath/migration), so they'd
+  // otherwise fall through to {supported:false}. Compare the running version
+  // against the latest published release.
+  if (p.appTemplateId === "openship" || p.appTemplateId === "mail-webmail") {
+    return getSelfReleaseDrift(p);
+  }
+
+  // Commit-source: only GitHub-backed projects have a remote branch HEAD to compare against.
   if (!p.gitOwner || !p.gitRepo) {
-    return { supported: false as const };
+    // Repo-less services/app projects (n8n/Convex/…): image-tag/digest drift.
+    // Returns {supported:false} when the project has no image services.
+    return getImageDriftStatus(p);
   }
 
   const branch = p.gitBranch?.trim() || "main";
-  const head = await getLatestCommit(ctx, p.gitOwner, p.gitRepo, branch).catch(() => null);
+  const head = ctx
+    ? await getLatestCommit(ctx, p.gitOwner, p.gitRepo, branch).catch(() => null)
+    : null;
 
   let deployedSha: string | null = null;
   if (p.activeDeploymentId) {
@@ -894,12 +1010,144 @@ export async function getProjectCommitStatus(
 
   return {
     supported: true as const,
+    mode: "commit" as const,
     behind,
     latestInProgress,
     branch,
     latestSha,
     latestMessage: head?.message ?? null,
     deployedSha,
+  };
+}
+
+/**
+ * Release/dist drift: compare the newest advertised version (github latest
+ * release tag, or a `versionUrl`) against the deployed release version. A
+ * `pinnedVersion` source has no drift — it's fixed. The self-app (openship
+ * template) never deploys through the pipeline, so its `current` falls back to
+ * the running API's own version.
+ */
+async function getReleaseDriftStatus(p: Project) {
+  const source = (p.releaseSource as ReleaseSource | null) ?? null;
+  if (!source) return { supported: false as const };
+
+  let current: string | null = null;
+  if (p.activeDeploymentId) {
+    const dep = await repos.deployment.findById(p.activeDeploymentId).catch(() => null);
+    current = dep?.releaseVersion ?? null;
+  }
+  if (!current && p.appTemplateId === "openship") {
+    current = readApiVersion();
+  }
+
+  const latest = source.pinnedVersion
+    ? source.pinnedVersion.replace(/^v/, "")
+    : await resolveLatestVersion(source);
+
+  const behind = Boolean(latest && current && compareSemver(latest, current) > 0);
+
+  const latestInProgress =
+    behind && latest
+      ? Boolean(
+          await repos.deployment
+            .findInProgressByReleaseVersion(p.id, latest)
+            .catch(() => undefined),
+        )
+      : false;
+
+  return {
+    supported: true as const,
+    mode: "release" as const,
+    behind,
+    latestInProgress,
+    latestVersion: latest,
+    currentVersion: current,
+    pinned: Boolean(source.pinnedVersion),
+  };
+}
+
+/**
+ * Self-app / webmail release drift. Both are `isApp` projects that deploy from a
+ * prebuilt dist (no releaseSource), but their version tracks the running API
+ * (`readApiVersion`) and their upstream is the openship release stream. Compare
+ * the running version against the latest published release tag.
+ */
+async function getSelfReleaseDrift(p: Project) {
+  const current = readApiVersion();
+  const latest = await resolveLatestReleaseTag(GITHUB_REPO).catch(() => null);
+  const behind = Boolean(latest && current && compareSemver(latest, current) > 0);
+  const latestInProgress =
+    behind && latest
+      ? Boolean(
+          await repos.deployment.findInProgressByReleaseVersion(p.id, latest).catch(() => undefined),
+        )
+      : false;
+  return {
+    supported: true as const,
+    mode: "release" as const,
+    behind,
+    latestInProgress,
+    latestVersion: latest,
+    currentVersion: current,
+    pinned: false,
+  };
+}
+
+/**
+ * Image-tag/digest drift for repo-less services/app projects (template apps like
+ * n8n/Convex). For each image-only service, compare the content digest actually
+ * running (recorded on the active deployment's service_deployment row) against
+ * the current digest the tag resolves to in the registry. `behind` if ANY
+ * service's tag has moved. Fail-soft: a service whose latest digest can't be
+ * resolved (private/unknown registry) simply reports `behind:false`.
+ */
+async function getImageDriftStatus(p: Project) {
+  const services = await repos.service.listByProject(p.id).catch(() => []);
+  const imageServices = services.filter((s) => s.image && !s.build && (s.enabled ?? true));
+  if (imageServices.length === 0) return { supported: false as const };
+
+  const deployedByService = new Map<string, { digest?: string; ref?: string }>();
+  if (p.activeDeploymentId) {
+    const sds = await repos.service.listByDeployment(p.activeDeploymentId).catch(() => []);
+    for (const sd of sds) {
+      deployedByService.set(sd.serviceId, {
+        digest: sd.imageDigest ?? undefined,
+        ref: sd.imageRef ?? undefined,
+      });
+    }
+  }
+
+  const serviceStatuses = await Promise.all(
+    imageServices.map(async (svc) => {
+      const deployed = deployedByService.get(svc.id);
+      const latestDigest = await resolveLatestImageDigest(svc.image!).catch(() => null);
+      const current: UpdatableIdentity = {
+        kind: "image",
+        ref: deployed?.ref ?? svc.image!,
+        digest: deployed?.digest,
+      };
+      const latest: UpdatableIdentity = {
+        kind: "image",
+        ref: svc.image!,
+        digest: latestDigest ?? undefined,
+      };
+      return {
+        serviceId: svc.id,
+        name: svc.name,
+        ref: svc.image!,
+        deployedDigest: deployed?.digest ?? null,
+        latestDigest,
+        behind: latestDigest ? isBehind(current, latest) : false,
+      };
+    }),
+  );
+
+  return {
+    supported: true as const,
+    mode: "image" as const,
+    behind: serviceStatuses.some((s) => s.behind),
+    latestInProgress: false,
+    services: serviceStatuses,
   };
 }
 

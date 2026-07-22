@@ -46,7 +46,7 @@ export interface ManifestProjectEntry {
   slug: string;
   name: string;
   organizationId: string;
-  appId: string;
+  groupId: string;
   appName?: string | null;
   appSlug?: string | null;
   gitProvider?: string | null;

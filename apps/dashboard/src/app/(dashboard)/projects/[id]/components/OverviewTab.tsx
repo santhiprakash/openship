@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { useProjectInfo, useAnalyticsData } from "@/hooks/useProjectEndpoints";
 import { useI18n, interpolate } from "@/components/i18n-provider";
@@ -157,6 +158,27 @@ export const OverviewTab = () => {
               value={String(projectData.port || 3000)}
               loading={showProjectInfoSkeleton}
             />
+          )}
+          {/* Which self-hosted server this runs on — links to the server page. */}
+          {deployTarget === "server" && (showProjectInfoSkeleton || projectData.serverName) && (
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-[13px] text-muted-foreground">{t.projects.overview.server}</span>
+              {showProjectInfoSkeleton ? (
+                <div className="h-[14px] w-24 rounded bg-muted-foreground/20 animate-pulse" />
+              ) : projectData.serverId ? (
+                <Link
+                  href={`/servers/${projectData.serverId}`}
+                  className="inline-flex max-w-[180px] items-center gap-1.5 truncate text-[13px] font-medium text-foreground transition-colors hover:text-primary"
+                >
+                  {projectData.serverName}
+                  <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
+                </Link>
+              ) : (
+                <span className="max-w-[180px] truncate text-[13px] font-medium text-foreground">
+                  {projectData.serverName}
+                </span>
+              )}
+            </div>
           )}
         </Card>
 
@@ -329,8 +351,8 @@ export const OverviewTab = () => {
         className="w-full bg-card rounded-2xl border border-border/50 px-4 py-3 flex items-center justify-between hover:bg-accent/50 transition-colors group"
       >
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-            <Layers className="size-3.5 text-emerald-500" />
+          <div className="w-7 h-7 rounded-lg bg-success-bg flex items-center justify-center">
+            <Layers className="size-3.5 text-success" />
           </div>
           <span className="text-[13px] font-medium text-foreground">{t.projects.overview.services}</span>
           {serviceCount > 0 && (
@@ -406,7 +428,7 @@ const ICON_COLORS: Record<string, { bg: string; text: string }> = {
   primary: { bg: "bg-primary/10", text: "text-primary" },
   orange: { bg: "bg-orange-500/10", text: "text-orange-500" },
   blue: { bg: "bg-blue-500/10", text: "text-blue-500" },
-  emerald: { bg: "bg-emerald-500/10", text: "text-emerald-500" },
+  emerald: { bg: "bg-success-bg", text: "text-success" },
 };
 
 function Card({
@@ -469,12 +491,12 @@ function StatusItem({
         <span
           className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
             active
-              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              ? "bg-success-bg text-success"
               : "bg-muted/60 text-muted-foreground/60"
           }`}
         >
           <span
-            className={`w-1.5 h-1.5 rounded-full ${active ? "bg-emerald-500" : "bg-muted-foreground/30"}`}
+            className={`w-1.5 h-1.5 rounded-full ${active ? "bg-success-solid" : "bg-muted-foreground/30"}`}
           />
           {active ? t.projects.overview.statusActive : t.projects.overview.statusOff}
         </span>

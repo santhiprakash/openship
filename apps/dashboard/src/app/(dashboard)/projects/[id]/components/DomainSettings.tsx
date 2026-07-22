@@ -1,8 +1,11 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   Copy,
   ExternalLink,
   Globe,
@@ -12,13 +15,16 @@ import {
   Plus,
   RefreshCw,
   ShieldAlert,
+  ShieldCheck,
   Star,
   X,
 } from "lucide-react";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { RoutingConfigCard } from "./RoutingConfigCard";
+import { RouteRules } from "./RouteRules";
 import { invalidateProjectCaches } from "@/hooks/useProjectEndpoints";
 import { getApiErrorMessage, projectsApi, deployApi, domainsApi, serviceKind, servicesApi, type Service, type ServiceInput } from "@/lib/api";
+import { openTriggeredBuild } from "@/lib/deploy-nav";
 import { useToast } from "@/context/ToastContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import type { Dictionary } from "@/i18n";
@@ -31,11 +37,16 @@ import {
   createPublicEndpoint,
   ensurePublicEndpoints,
   type PublicEndpoint,
+  type PortCheckUI,
+  type OutputCheckUI,
 } from "@/context/deployment/types";
 
 interface DnsRecord {
   type: "CNAME" | "A" | "TXT";
   host: string;
+  /** Fully-qualified record name — always correct; shown as the fallback when
+   *  the provider won't take the relative host (multi-part TLDs like co.uk). */
+  name?: string;
   value: string;
 }
 
@@ -54,6 +65,12 @@ interface DomainSummaryItem {
   hostname: string;
   typeLabel: string;
   mappedLabel: string;
+  /** Numeric routed port + owning service id — used to match a live
+   *  port-reachability check to this card. */
+  mappedPort?: number;
+  serviceId?: string;
+  /** Routed path (static apps) — used to match a live static-output check. */
+  targetPath?: string;
   liveUrl: string;
   isPrimary: boolean;
   /** True when the row exists in DB but verified=false / status=pending. */
@@ -185,7 +202,11 @@ function resolveDomainSsl(hostname: string, domain: any, baseDomain: string, t: 
 
   switch (domain?.sslStatus) {
     case "active":
-      return { label: s.active, tone: "success" };
+      // Operator-supplied cert (BYO / Origin CA) — flag it so the user knows
+      // it won't auto-renew via certbot.
+      return { label: domain?.manualSsl ? s.manual : s.active, tone: "success" };
+    case "external":
+      return { label: s.external, tone: "success" };
     case "provisioning":
       return { label: s.provisioning, tone: "warning" };
     case "expired":
@@ -210,6 +231,7 @@ export const DomainSettings = () => {
   } = useProjectSettings();
   const { showToast } = useToast();
   const { t } = useI18n();
+  const router = useRouter();
   const { baseDomain, selfHosted } = usePlatform();
 
   const [newDomain, setNewDomain] = useState("");
@@ -217,8 +239,14 @@ export const DomainSettings = () => {
   // Same model services use; single-app just gets a lighter form.
   const [newDomainType, setNewDomainType] = useState<"free" | "custom">("custom");
   const [newDomainPort, setNewDomainPort] = useState("");
+  // Static apps route a custom domain to a deployment PATH (not a port). Default
+  // "/", user-editable so one project can serve different paths per domain.
+  const [newDomainPath, setNewDomainPath] = useState("/");
   const [showCustomDomainSection, setShowCustomDomainSection] = useState(false);
   const [includeWww, setIncludeWww] = useState(false);
+  // TLS + ingress handled upstream (Cloudflare Tunnel / LB): verify via TXT
+  // only, skip certbot, serve plain HTTP. The domain need not resolve to us.
+  const [externalIngress, setExternalIngress] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   // Hostname of the row currently running its Renew action. Null when no
   // renew is in flight. Per-row so multi-domain projects can renew one
@@ -226,6 +254,12 @@ export const DomainSettings = () => {
   const [renewingHostname, setRenewingHostname] = useState<string | null>(null);
   // Domain id currently running its read-only "Recheck SSL" action.
   const [recheckingDomainId, setRecheckingDomainId] = useState<string | null>(null);
+  // Domain targeted by the "Upload certificate" modal (BYO / Origin CA), plus
+  // the PEM inputs and in-flight flag. Null when the modal is closed.
+  const [certUploadDomain, setCertUploadDomain] = useState<{ domainId: string; hostname: string } | null>(null);
+  const [certPem, setCertPem] = useState("");
+  const [keyPem, setKeyPem] = useState("");
+  const [isUploadingCert, setIsUploadingCert] = useState(false);
   const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
   // Live preview of the DNS records the user will need to apply, derived
   // from the hostname they're typing. For self-hosted projects the
@@ -246,6 +280,15 @@ export const DomainSettings = () => {
   } | null>(null);
   const [editingRouteServiceId, setEditingRouteServiceId] = useState<string | null>(null);
   const [routeSavingServiceId, setRouteSavingServiceId] = useState<string | null>(null);
+  // Local draft for the "Edit route" modal — the card edits this in memory; the
+  // API is hit ONCE on Save (not on every toggle/keystroke).
+  const [routeDraft, setRouteDraft] = useState<{
+    exposed: boolean;
+    domainType: "free" | "custom";
+    domain: string;
+    customDomain: string;
+    exposedPort: string;
+  } | null>(null);
   // "Add route" form (services projects): a generic domain → port entry. The
   // port is matched to the service that owns it; that service is then exposed.
   const [showAddRoute, setShowAddRoute] = useState(false);
@@ -262,6 +305,16 @@ export const DomainSettings = () => {
   // row currently running its verify check so the button can spin and
   // disable. Null when no verify is in flight.
   const [verifyingDomainId, setVerifyingDomainId] = useState<string | null>(null);
+  // After a failed verify, remember which record(s) still aren't resolving so
+  // the pending card can name them and auto-open its DNS records. Keyed by row.
+  const [verifyFailure, setVerifyFailure] = useState<
+    { domainId: string; cnameVerified: boolean; txtVerified: boolean } | null
+  >(null);
+  // Live port reachability of the active deployment (advisory) — drives the
+  // per-card "nothing responded on port X" hint. [] = no signal → no hint.
+  const [portChecks, setPortChecks] = useState<PortCheckUI[]>([]);
+  // Static apps only: live "is there output at this path?" (advisory).
+  const [outputChecks, setOutputChecks] = useState<OutputCheckUI[]>([]);
   const services = servicesData.services;
   const servicesLoading = servicesData.isLoading;
   const hasProjectServer = projectData.options?.hasServer ?? buildData.hasServer ?? true;
@@ -327,6 +380,8 @@ export const DomainSettings = () => {
           mappedLabel: hasProjectServer
             ? (mappedPort ? interpolate(t.projectSettings.domains.portLabel, { port: String(mappedPort) }) : t.projectSettings.domains.noPortSelected)
             : (endpoint?.targetPath || "/"),
+          mappedPort: hasProjectServer ? (Number(mappedPort) || undefined) : undefined,
+          targetPath: hasProjectServer ? undefined : (endpoint?.targetPath || "/"),
           liveUrl: `https://${hostname}`,
           isPrimary: index === 0,
           needsVerify,
@@ -400,6 +455,24 @@ export const DomainSettings = () => {
       setEditingRouteServiceId(null);
     }
   }, [editingRouteServiceId, services]);
+
+  // Seed the edit-route draft once per open (keyed on the service id, NOT on
+  // `services` — a background refresh must not clobber in-progress edits).
+  useEffect(() => {
+    const svc = services.find((s) => s.id === editingRouteServiceId);
+    if (!svc) {
+      setRouteDraft(null);
+      return;
+    }
+    setRouteDraft({
+      exposed: svc.exposed,
+      domainType: svc.domainType === "custom" ? "custom" : "free",
+      domain: svc.domain ?? "",
+      customDomain: svc.customDomain ?? "",
+      exposedPort: svc.exposedPort || firstContainerPort(svc.ports),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingRouteServiceId]);
 
   // Live-preview DNS records as the user types — self-hosted only.
   //
@@ -476,6 +549,13 @@ export const DomainSettings = () => {
     const isCustom = newDomainType === "custom";
     const portValue = newDomainPort.trim();
 
+    // The "Include www" toggle owns the www record — a hand-typed "www."
+    // prefix would double it up, so block it with guidance instead.
+    if (isCustom && host.startsWith("www.")) {
+      showToast(t.projectSettings.domains.add.noWww, "error", t.projectSettings.domains.toast.addDomainTitle);
+      return;
+    }
+
     if (hasProjectServer) {
       const portNum = Number(portValue);
       if (!portValue || !Number.isFinite(portNum) || portNum < 1 || portNum > 65535) {
@@ -490,7 +570,7 @@ export const DomainSettings = () => {
       // up front. persist (below) then attaches the port and lists it; the
       // backend keeps it pending until /verify.
       if (isCustom) {
-        const result = await projectsApi.connectDomain(id, { domain: host, includeWww });
+        const result = await projectsApi.connectDomain(id, { domain: host, includeWww, externalIngress });
         if (!result.success) {
           showToast(
             result.error || t.projectSettings.domains.toast.addDomainFailed,
@@ -510,7 +590,7 @@ export const DomainSettings = () => {
       const nextEndpoint = createPublicEndpoint({
         domainType: newDomainType,
         ...(isCustom ? { customDomain: host } : { domain: host }),
-        ...(hasProjectServer ? { port: portValue } : { targetPath: "/" }),
+        ...(hasProjectServer ? { port: portValue } : { targetPath: newDomainPath.trim() || "/" }),
       });
       const label = isCustom ? host : `${host}.${baseDomain}`;
       const ok = await persistPublicEndpoints(
@@ -525,7 +605,9 @@ export const DomainSettings = () => {
       // free has nothing to verify, so collapse it.
       setNewDomain("");
       setNewDomainPort(projectRuntimePort);
+      setNewDomainPath("/");
       setIncludeWww(false);
+      setExternalIngress(false);
       if (!isCustom) {
         setShowCustomDomainSection(false);
         setDnsRecords([]);
@@ -564,6 +646,7 @@ export const DomainSettings = () => {
             : d,
         );
         updateDomains(updatedDomains);
+        setVerifyFailure((f) => (f?.domainId === domainId ? null : f));
         invalidateProjectCaches(id);
         showToast(
           result.message || interpolate(t.projectSettings.domains.toast.verifiedSuccess, { hostname }),
@@ -571,9 +654,13 @@ export const DomainSettings = () => {
           t.projectSettings.domains.toast.verifiedTitle,
         );
       } else {
-        // 422 path. result.cnameVerified/txtVerified explain what's
-        // still missing so the user knows whether DNS hasn't propagated
-        // OR they forgot the TXT challenge. Surface verbatim.
+        // 422 path. cnameVerified/txtVerified pinpoint what's still missing —
+        // stash it so the pending card names the record + opens its DNS panel.
+        setVerifyFailure({
+          domainId,
+          cnameVerified: !!result.cnameVerified,
+          txtVerified: !!result.txtVerified,
+        });
         showToast(
           result.message || interpolate(t.projectSettings.domains.toast.verifyNotYet, { hostname }),
           "error",
@@ -590,6 +677,77 @@ export const DomainSettings = () => {
     } finally {
       setVerifyingDomainId(null);
     }
+  };
+
+  // Human hint naming which DNS record still isn't resolving after a failed
+  // verify — powers the pending card's inline message + auto-opens its records.
+  const verifyHintFor = (domainId?: string): string | null => {
+    if (!domainId || verifyFailure?.domainId !== domainId) return null;
+    const vm = t.projectSettings.domains.verifyMissing;
+    if (!verifyFailure.cnameVerified && !verifyFailure.txtVerified) return vm.both;
+    if (!verifyFailure.cnameVerified) return vm.cname;
+    if (!verifyFailure.txtVerified) return vm.txt;
+    return null;
+  };
+
+  // Live port reachability, fetched once per project. Best-effort: a failure
+  // just leaves the hints off (the probe itself never blocks or false-positives).
+  useEffect(() => {
+    let cancelled = false;
+    deployApi
+      .checkPorts(id)
+      .then((res) => {
+        if (!cancelled) setPortChecks(res.data ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setPortChecks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  // Match a live "not listening" check to a card — by service id (compose) or
+  // routed port (single-app). Only a definitive checked result yields a hint.
+  const portHintFor = (
+    mappedPort?: number,
+    serviceId?: string,
+  ): { port: number; serviceName?: string } | null => {
+    const match = portChecks.find(
+      (c) =>
+        c.checked &&
+        !c.listening &&
+        (serviceId ? c.serviceId === serviceId : c.serviceId == null && c.port === mappedPort),
+    );
+    return match ? { port: match.port, serviceName: match.serviceName } : null;
+  };
+
+  // Static-output reachability, fetched once per static project (server apps
+  // use the port check instead). Best-effort: a failure just leaves hints off.
+  useEffect(() => {
+    if (hasProjectServer) {
+      setOutputChecks([]);
+      return;
+    }
+    let cancelled = false;
+    deployApi
+      .checkOutput(id)
+      .then((res) => {
+        if (!cancelled) setOutputChecks(res.data ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setOutputChecks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, hasProjectServer]);
+
+  // Match a "no output found" check to a static card by routed path.
+  const outputHintFor = (targetPath?: string): { path: string } | null => {
+    if (!targetPath) return null;
+    const match = outputChecks.find((c) => c.checked && !c.found && c.path === targetPath);
+    return match ? { path: match.path } : null;
   };
 
   const handleRenewDomainSsl = async (hostname: string) => {
@@ -653,6 +811,30 @@ export const DomainSettings = () => {
     }
   };
 
+  const handleUploadCert = async () => {
+    if (!certUploadDomain || isUploadingCert) return;
+    const { domainId, hostname } = certUploadDomain;
+    if (!certPem.trim() || !keyPem.trim()) return;
+    setIsUploadingCert(true);
+    try {
+      await domainsApi.uploadCertificate(domainId, { certPem: certPem.trim(), keyPem: keyPem.trim() });
+      showToast(interpolate(t.projectSettings.domains.toast.certUploaded, { hostname }), "success", t.projectSettings.domains.toast.sslTitle);
+      setCertUploadDomain(null);
+      setCertPem("");
+      setKeyPem("");
+      invalidateProjectCaches(id);
+    } catch (error) {
+      console.error("Failed to upload certificate:", error);
+      showToast(
+        getApiErrorMessage(error, interpolate(t.projectSettings.domains.toast.certUploadFailed, { hostname })),
+        "error",
+        t.projectSettings.domains.toast.sslTitle,
+      );
+    } finally {
+      setIsUploadingCert(false);
+    }
+  };
+
   const handleStartEditingDomains = () => {
     setPublicEndpoints(draftPublicEndpoints);
     setIsEditingDomains(true);
@@ -661,6 +843,33 @@ export const DomainSettings = () => {
   const handleCancelEditingDomains = () => {
     setPublicEndpoints(draftPublicEndpoints);
     setIsEditingDomains(false);
+  };
+
+  // A project with a deployment but NO public route yet has no edge (OpenResty)
+  // installed — e.g. a just-migrated image-only services stack, or an
+  // internal-only stack deployed with no domains. OpenResty is only ever
+  // ensured by a DEPLOY (the single routing-ensure pipe, and the only place the
+  // edge-takeover consent modal can show). So adding the FIRST route must kick a
+  // deploy; a normal already-routed project keeps the live best-effort apply
+  // (no redeploy). Self-hosted only — cloud routes via the cloud edge.
+  const isEdgeless = () =>
+    selfHosted &&
+    !!projectData.activeDeploymentId &&
+    domainSummaries.length === 0 &&
+    !services.some((s) => s.enabled && s.exposed);
+
+  // Redeploy (image-only needs no source) so the deploy preflight installs
+  // OpenResty + registers the new route, then land on the build screen where
+  // the takeover modal surfaces if the old proxy still holds 80/443. Route is
+  // already saved, so a trigger failure is non-fatal (deploy manually).
+  const publishFirstRoute = async () => {
+    try {
+      const res = await deployApi.trigger({ projectId: id });
+      showToast(t.projectSettings.domains.toast.publishing, "success", t.projectSettings.domains.toast.domainsTitle);
+      openTriggeredBuild(router, res, id);
+    } catch (error) {
+      showToast(getApiErrorMessage(error, t.projectSettings.domains.toast.publishFailed), "error", t.projectSettings.domains.toast.domainsTitle);
+    }
   };
 
   // Persist a specific ordering of the project's public endpoints. Endpoint
@@ -672,6 +881,7 @@ export const DomainSettings = () => {
     endpoints: PublicEndpoint[],
     successMessage = t.projectSettings.domains.toast.routingUpdated,
   ): Promise<boolean> => {
+    const wasEdgeless = isEdgeless();
     const payload = endpoints
       .map((endpoint) => buildPublicEndpointPayload(endpoint, hasProjectServer))
       .filter((endpoint): endpoint is NonNullable<ReturnType<typeof buildPublicEndpointPayload>> => endpoint !== null);
@@ -737,6 +947,9 @@ export const DomainSettings = () => {
       if (id) invalidateProjectCaches(id);
       showToast(successMessage, "success", t.projectSettings.domains.toast.domainsTitle);
       setIsEditingDomains(false);
+      // First route on an edge-less project → deploy to install OpenResty + show
+      // the takeover modal. Navigates away to the build screen.
+      if (wasEdgeless) await publishFirstRoute();
       return true;
     } catch (error) {
       showToast(getApiErrorMessage(error, t.projectSettings.domains.toast.routingUpdateFailed), "error", t.projectSettings.domains.toast.domainsTitle);
@@ -813,7 +1026,7 @@ export const DomainSettings = () => {
       return {
         connected: false,
         statusLabel: t.projectSettings.domains.route.disabled,
-        statusClass: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+        statusClass: "bg-warning-bg text-warning",
         detail: service.exposed ? t.projectSettings.domains.route.routePaused : t.projectSettings.domains.route.serviceDisabled,
         liveUrl,
       };
@@ -832,13 +1045,17 @@ export const DomainSettings = () => {
     return {
       connected: true,
       statusLabel: t.projectSettings.domains.route.public,
-      statusClass: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      statusClass: "bg-success-bg text-success",
       detail: service.domainType === "custom" ? t.projectSettings.domains.typeCustom : t.projectSettings.domains.typeFree,
       liveUrl,
     };
   };
 
-  const handleServiceRouteUpdate = async (serviceId: string, patch: Partial<ServiceInput>) => {
+  const handleServiceRouteUpdate = async (
+    serviceId: string,
+    patch: Partial<ServiceInput>,
+  ): Promise<boolean> => {
+    const wasEdgeless = isEdgeless();
     setRouteSavingServiceId(serviceId);
     try {
       const result = await servicesApi.update(id, serviceId, patch);
@@ -846,9 +1063,14 @@ export const DomainSettings = () => {
         throw new Error("Failed to update service route");
       }
       await refreshServices();
+      // First exposed route on an edge-less project → deploy to install
+      // OpenResty + show the takeover modal (navigates to the build screen).
+      if (wasEdgeless && patch.exposed) await publishFirstRoute();
+      return true;
     } catch (error) {
       console.error("Failed to update service route:", error);
       showToast(t.projectSettings.domains.toast.routeUpdateFailed, "error");
+      return false;
     } finally {
       setRouteSavingServiceId(null);
     }
@@ -934,6 +1156,8 @@ export const DomainSettings = () => {
             hostname,
             typeLabel: service.domainType === "custom" ? t.projectSettings.domains.typeCustom : t.projectSettings.domains.typeFree,
             mappedLabel: interpolate(t.projectSettings.domains.portLabel, { port: String(service.exposedPort || firstContainerPort(service.ports) || "auto") }),
+            mappedPort: Number(service.exposedPort || firstContainerPort(service.ports)) || undefined,
+            serviceId: service.id,
             liveUrl: `https://${hostname}`,
             isPrimary: domain?.isPrimary ?? false,
             needsVerify: !!domain && domain.verified === false,
@@ -949,7 +1173,6 @@ export const DomainSettings = () => {
   // the card's header icon. `onEditRoute` adds the per-service "Edit route" item.
   const buildDomainMenuActions = (opts: {
     domain: DomainSummaryItem;
-    isVerifying: boolean;
     isManagedRow: boolean;
     isRenewing: boolean;
     isRechecking: boolean;
@@ -957,7 +1180,7 @@ export const DomainSettings = () => {
     onSetPrimary?: () => void;
     isSettingPrimary?: boolean;
   }): MenuAction[] => {
-    const { domain, isVerifying, isManagedRow, isRenewing, isRechecking, onEditRoute, onSetPrimary, isSettingPrimary } = opts;
+    const { domain, isManagedRow, isRenewing, isRechecking, onEditRoute, onSetPrimary, isSettingPrimary } = opts;
     const m = t.projectSettings.domains.menu;
     const items: MenuAction[] = [];
     if (onEditRoute) {
@@ -972,15 +1195,8 @@ export const DomainSettings = () => {
         disabled: isSettingPrimary,
       });
     }
-    if (domain.needsVerify && domain.domainId) {
-      items.push({
-        id: "verify",
-        label: isVerifying ? m.verifying : m.verify,
-        icon: <RefreshCw className={isVerifying ? "size-4 animate-spin" : "size-4"} />,
-        onClick: () => void handleVerifyDomain(domain.domainId!, domain.hostname),
-        disabled: isVerifying,
-      });
-    }
+    // Verify is NOT in this menu — pending cards render a direct inline Verify
+    // button instead (see DomainOverviewCard), so it's never a scavenger hunt.
     if (!isManagedRow && !domain.needsVerify && domain.domainId) {
       items.push({
         id: "renew",
@@ -996,6 +1212,12 @@ export const DomainSettings = () => {
         onClick: () => void handleRecheckSsl(domain.domainId!, domain.hostname),
         disabled: isRechecking,
       });
+      items.push({
+        id: "upload-cert",
+        label: m.uploadCert,
+        icon: <ShieldCheck className="size-4" />,
+        onClick: () => setCertUploadDomain({ domainId: domain.domainId!, hostname: domain.hostname }),
+      });
     }
     return items;
   };
@@ -1003,6 +1225,39 @@ export const DomainSettings = () => {
   const editingRouteService =
     services.find((service) => service.id === editingRouteServiceId) ?? null;
   const editingRoute = editingRouteService ? getServiceRouteSummary(editingRouteService) : null;
+
+  // Diff the edit-route draft against the service to enable Save + build the patch.
+  const routeOriginalPort = editingRouteService
+    ? editingRouteService.exposedPort || firstContainerPort(editingRouteService.ports)
+    : "";
+  const routeDirty = Boolean(
+    editingRouteService &&
+      routeDraft &&
+      (routeDraft.exposed !== editingRouteService.exposed ||
+        routeDraft.domainType !== (editingRouteService.domainType === "custom" ? "custom" : "free") ||
+        routeDraft.domain !== (editingRouteService.domain ?? "") ||
+        routeDraft.customDomain !== (editingRouteService.customDomain ?? "") ||
+        routeDraft.exposedPort !== routeOriginalPort),
+  );
+  const routeSaving = editingRouteService ? routeSavingServiceId === editingRouteService.id : false;
+
+  const handleSaveRoute = async () => {
+    if (!editingRouteService || !routeDraft) return;
+    const patch: Partial<ServiceInput> = {};
+    if (routeDraft.exposed !== editingRouteService.exposed) patch.exposed = routeDraft.exposed;
+    if (routeDraft.domainType !== (editingRouteService.domainType === "custom" ? "custom" : "free"))
+      patch.domainType = routeDraft.domainType;
+    if (routeDraft.domain !== (editingRouteService.domain ?? "")) patch.domain = routeDraft.domain;
+    if (routeDraft.customDomain !== (editingRouteService.customDomain ?? ""))
+      patch.customDomain = routeDraft.customDomain;
+    if (routeDraft.exposedPort !== routeOriginalPort) patch.exposedPort = routeDraft.exposedPort;
+    if (Object.keys(patch).length === 0) {
+      setEditingRouteServiceId(null);
+      return;
+    }
+    const ok = await handleServiceRouteUpdate(editingRouteService.id, patch);
+    if (ok) setEditingRouteServiceId(null);
+  };
 
   const hasMultipleProjectDomains = domainSummaries.length > 1;
   // Toggling "Hide setup" should also wipe in-flight connect/verify state
@@ -1064,15 +1319,28 @@ export const DomainSettings = () => {
   // True when the panel is showing preview (pre-Connect) data only. Used
   // to tweak the explainer text inside the panel.
   const isPreviewOnly = dnsRecords.length === 0 && previewedRecords.length > 0;
+  // Custom domains must be entered bare; the "Include www" toggle adds the www
+  // record. A typed "www." prefix is a mistake, so flag it and block submit.
+  const newDomainHasWww =
+    newDomainType === "custom" && newDomain.trim().toLowerCase().startsWith("www.");
 
   return (
     <div className="space-y-5">
-      <RoutingConfigCard
-        id={id}
-        initial={projectData.routingConfig}
-        onSaved={(cfg) => setProjectData((prev) => ({ ...prev, routingConfig: cfg }))}
-      />
-      {showCustomDomainSection ? (
+      {domainsData.isLoading ? (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {[0, 1].map((i) => (
+            <div key={i} className="rounded-2xl border border-border/50 bg-card p-5">
+              <div className="h-4 w-32 animate-pulse rounded bg-muted/60" />
+              <div className="mt-4 h-5 w-48 animate-pulse rounded bg-muted/50" />
+              <div className="mt-4 space-y-2">
+                <div className="h-3 w-full animate-pulse rounded bg-muted/40" />
+                <div className="h-3 w-2/3 animate-pulse rounded bg-muted/40" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {!domainsData.isLoading && showCustomDomainSection ? (
         // Custom Domain setup sits ABOVE the existing list so the form
         // is the first thing the user sees after clicking Add domain —
         // they don't have to scroll past their existing domains to find
@@ -1120,9 +1388,12 @@ export const DomainSettings = () => {
                     <span className="shrink-0 pe-4 text-sm text-muted-foreground">.{baseDomain}</span>
                   )}
                 </div>
+                {newDomainHasWww && (
+                  <p className="text-xs text-danger">{t.projectSettings.domains.add.noWww}</p>
+                )}
               </div>
 
-              {hasProjectServer && (
+              {hasProjectServer ? (
                 <div className="space-y-2">
                   <label className="text-[13px] font-medium text-foreground">{t.projectSettings.domains.add.mapsToPort}</label>
                   <input
@@ -1133,11 +1404,23 @@ export const DomainSettings = () => {
                     className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/40"
                   />
                 </div>
+              ) : (
+                <div className="space-y-2">
+                  <label className="text-[13px] font-medium text-foreground">{t.projectSettings.domains.add.servesPath}</label>
+                  <input
+                    value={newDomainPath}
+                    onChange={(e) => setNewDomainPath(e.target.value)}
+                    placeholder="/"
+                    className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/40"
+                  />
+                  <p className="text-[12px] text-muted-foreground">{t.projectSettings.domains.add.servesPathHint}</p>
+                  <p className="text-[12px] text-warning">{t.projectSettings.domains.add.servesPathRedeploy}</p>
+                </div>
               )}
 
               {newDomainType === "custom" && (
-                <div className="flex items-center justify-between rounded-xl border border-border/50 bg-muted/25 px-4 py-3">
-                  <div>
+                <div className="flex items-center justify-between gap-4 rounded-xl border border-border/50 bg-muted/25 px-4 py-3">
+                  <div className="min-w-0">
                     <p className="text-[13px] font-medium text-foreground">{t.projectSettings.domains.add.includeWww}</p>
                     <p className="text-[12px] text-muted-foreground">
                       {interpolate(t.projectSettings.domains.add.includeWwwDesc, { domain: newDomain || t.projectSettings.domains.add.includeWwwFallback })}
@@ -1145,10 +1428,29 @@ export const DomainSettings = () => {
                   </div>
                   <button
                     onClick={() => setIncludeWww((value) => !value)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${includeWww ? "bg-primary" : "bg-muted"}`}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${includeWww ? "bg-primary" : "bg-muted"}`}
                   >
                     <span
                       className={`inline-block h-4 w-4 transform rounded-full bg-background transition-transform ${includeWww ? "translate-x-6" : "translate-x-1"}`}
+                    />
+                  </button>
+                </div>
+              )}
+
+              {newDomainType === "custom" && (
+                <div className="flex items-center justify-between gap-4 rounded-xl border border-border/50 bg-muted/25 px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-medium text-foreground">{t.projectSettings.domains.add.externalIngress}</p>
+                    <p className="text-[12px] text-muted-foreground">
+                      {t.projectSettings.domains.add.externalIngressDesc}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setExternalIngress((value) => !value)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${externalIngress ? "bg-primary" : "bg-muted"}`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-background transition-transform ${externalIngress ? "translate-x-6" : "translate-x-1"}`}
                     />
                   </button>
                 </div>
@@ -1160,7 +1462,8 @@ export const DomainSettings = () => {
                   disabled={
                     !newDomain.trim() ||
                     (hasProjectServer && !newDomainPort.trim()) ||
-                    isSubmitting
+                    isSubmitting ||
+                    newDomainHasWww
                   }
                   className="inline-flex items-center gap-2 rounded-xl bg-foreground px-4 py-2.5 text-[13px] font-medium text-background transition-colors hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -1223,7 +1526,7 @@ export const DomainSettings = () => {
         </div>
       ) : null}
 
-      {!isEditingDomains && !hasDomain ? (
+      {!isEditingDomains && !hasDomain && !domainsData.isLoading ? (
         // No domain attached yet — show the local URL as the access point
         // alongside the Add domain CTA. This is the cold-start state; once
         // any domain (free or custom) is attached, we render the list below.
@@ -1267,9 +1570,9 @@ export const DomainSettings = () => {
               const isManagedRow = domain.hostname.toLowerCase().endsWith(`.${baseDomain}`);
               const isRenewing = renewingHostname === domain.hostname;
               const isRechecking = recheckingDomainId === domain.domainId;
+              const canVerify = domain.needsVerify && !!domain.domainId;
               const menuActions = buildDomainMenuActions({
                 domain,
-                isVerifying,
                 isManagedRow,
                 isRenewing,
                 isRechecking,
@@ -1285,6 +1588,14 @@ export const DomainSettings = () => {
                   key={domain.id}
                   domain={domain}
                   menuActions={menuActions}
+                  onVerify={canVerify ? () => void handleVerifyDomain(domain.domainId!, domain.hostname) : undefined}
+                  verifying={isVerifying}
+                  verifyHint={verifyHintFor(domain.domainId)}
+                  autoOpenRecords={!!domain.domainId && verifyFailure?.domainId === domain.domainId}
+                  loadRecords={canVerify ? () => domainsApi.records(domain.domainId!).then((r) => r.data.records) : undefined}
+                  onCopy={handleCopy}
+                  portHint={portHintFor(domain.mappedPort, domain.serviceId)}
+                  outputHint={outputHintFor(domain.targetPath)}
                 />
               );
             })}
@@ -1414,9 +1725,10 @@ export const DomainSettings = () => {
           ) : (
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               {serviceRouteCards.map(({ service, summary }) => {
+                const isVerifying = !!verifyingDomainId && verifyingDomainId === summary.domainId;
+                const canVerify = summary.needsVerify && !!summary.domainId;
                 const menuActions = buildDomainMenuActions({
                   domain: summary,
-                  isVerifying: !!verifyingDomainId && verifyingDomainId === summary.domainId,
                   isManagedRow: summary.hostname.toLowerCase().endsWith(`.${baseDomain}`),
                   isRenewing: renewingHostname === summary.hostname,
                   isRechecking: recheckingDomainId === summary.domainId,
@@ -1428,14 +1740,41 @@ export const DomainSettings = () => {
                       : undefined,
                   isSettingPrimary: settingPrimaryId === summary.id,
                 });
-                return <DomainOverviewCard key={summary.id} domain={summary} menuActions={menuActions} />;
+                return (
+                  <DomainOverviewCard
+                    key={summary.id}
+                    domain={summary}
+                    menuActions={menuActions}
+                    onVerify={canVerify ? () => void handleVerifyDomain(summary.domainId!, summary.hostname) : undefined}
+                    verifying={isVerifying}
+                    verifyHint={verifyHintFor(summary.domainId)}
+                    autoOpenRecords={!!summary.domainId && verifyFailure?.domainId === summary.domainId}
+                    loadRecords={canVerify ? () => domainsApi.records(summary.domainId!).then((r) => r.data.records) : undefined}
+                    onCopy={handleCopy}
+                    portHint={portHintFor(summary.mappedPort, summary.serviceId)}
+                  />
+                );
               })}
             </div>
           )}
         </div>
       )}
 
-      {editingRouteService && editingRoute && (
+      {/* Routing (rewrites/redirects/headers) — advanced, sits AFTER the
+          domain/route cards so the primary domain list leads the page. */}
+      <RoutingConfigCard
+        id={id}
+        initial={projectData.routingConfig}
+        onSaved={(cfg) => setProjectData((prev) => ({ ...prev, routingConfig: cfg }))}
+      />
+
+      {/* Edge security rules (rate-limit / ban / geo / hotlink) — a distinct
+          feature from the routing config above, but the same kind of edge
+          concern, so it sits right here, collapsed by default. Moved out of the
+          Advanced tab. */}
+      <RouteRules />
+
+      {editingRouteService && editingRoute && routeDraft && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
           onClick={() => setEditingRouteServiceId(null)}
@@ -1466,40 +1805,105 @@ export const DomainSettings = () => {
             <div className="px-5 py-5">
               <RoutingSettingsCard
                 projectName={projectLabel}
-                domain={editingRouteService.domain ?? ""}
-                customDomain={editingRouteService.customDomain ?? ""}
-                domainType={editingRouteService.domainType === "custom" ? "custom" : "free"}
-                exposed={editingRouteService.exposed}
+                domain={routeDraft.domain}
+                customDomain={routeDraft.customDomain}
+                domainType={routeDraft.domainType}
+                exposed={routeDraft.exposed}
                 ports={editingRouteService.ports}
-                // Pre-fill the current route port. exposedPort is only set on an
-                // explicit choice; when unset the effective port is the service's
-                // container port from its compose `ports` mapping (e.g. "8080:80"
-                // → "80"), so fall back to that instead of showing an empty field.
-                exposedPort={editingRouteService.exposedPort || firstContainerPort(editingRouteService.ports)}
-                disabled={routeSavingServiceId === editingRouteService.id}
+                exposedPort={routeDraft.exposedPort}
+                disabled={routeSaving}
                 liveUrl={editingRoute.connected ? editingRoute.liveUrl : null}
-                onExposedChange={(value) =>
-                  handleServiceRouteUpdate(editingRouteService.id, { exposed: value })
-                }
-                onDomainTypeChange={(value) =>
-                  handleServiceRouteUpdate(editingRouteService.id, { domainType: value })
-                }
-                onDomainChange={(value) =>
-                  handleServiceRouteUpdate(editingRouteService.id, { domain: value })
-                }
-                onCustomDomainChange={(value) =>
-                  handleServiceRouteUpdate(editingRouteService.id, { customDomain: value })
-                }
-                onExposedPortChange={(value) =>
-                  handleServiceRouteUpdate(editingRouteService.id, { exposedPort: value })
-                }
-                saveMode="explicit"
+                // The card edits the in-memory draft only — the API is hit ONCE
+                // on Save. saveMode="change" reports each edit straight to state
+                // (no per-keystroke/per-toggle request, no inline pill).
+                onExposedChange={(value) => setRouteDraft((prev) => (prev ? { ...prev, exposed: value } : prev))}
+                onDomainTypeChange={(value) => setRouteDraft((prev) => (prev ? { ...prev, domainType: value } : prev))}
+                onDomainChange={(value) => setRouteDraft((prev) => (prev ? { ...prev, domain: value } : prev))}
+                onCustomDomainChange={(value) => setRouteDraft((prev) => (prev ? { ...prev, customDomain: value } : prev))}
+                onExposedPortChange={(value) => setRouteDraft((prev) => (prev ? { ...prev, exposedPort: value } : prev))}
+                saveMode="change"
               />
-              {!editingRouteService.enabled && editingRouteService.exposed && (
-                <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">
+              {!editingRouteService.enabled && routeDraft.exposed && (
+                <p className="mt-3 text-xs text-warning">
                   {t.projectSettings.domains.editRoute.disabledWarning}
                 </p>
               )}
+            </div>
+
+            <div className="flex items-center justify-end border-t border-border/40 px-5 py-4">
+              <button
+                type="button"
+                onClick={handleSaveRoute}
+                disabled={!routeDirty || routeSaving}
+                className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-primary px-4 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {routeSaving && <Loader2 className="size-3.5 animate-spin" />}
+                {t.projectSettings.domains.editRoute.save}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {certUploadDomain && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
+          onClick={() => !isUploadingCert && setCertUploadDomain(null)}
+        >
+          <div
+            className="w-full max-w-2xl overflow-hidden rounded-2xl border border-border/60 bg-card shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-4 border-b border-border/40 px-5 py-4">
+              <div className="min-w-0">
+                <h3 className="text-[14px] font-semibold text-foreground">{t.projectSettings.domains.certUpload.title}</h3>
+                <p className="mt-0.5 truncate text-[12px] text-muted-foreground">{certUploadDomain.hostname}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCertUploadDomain(null)}
+                disabled={isUploadingCert}
+                className="inline-flex min-h-9 items-center rounded-xl bg-foreground/[0.06] px-3 text-[12px] font-medium text-foreground transition-colors hover:bg-foreground/[0.1] disabled:opacity-50"
+              >
+                {t.projectSettings.domains.certUpload.close}
+              </button>
+            </div>
+
+            <div className="space-y-4 px-5 py-5">
+              <p className="text-[12px] text-muted-foreground">{t.projectSettings.domains.certUpload.desc}</p>
+              <div className="space-y-1.5">
+                <label className="text-[12px] font-medium text-foreground">{t.projectSettings.domains.certUpload.certLabel}</label>
+                <textarea
+                  value={certPem}
+                  onChange={(event) => setCertPem(event.target.value)}
+                  placeholder={t.projectSettings.domains.certUpload.certPlaceholder}
+                  spellCheck={false}
+                  rows={6}
+                  className="w-full resize-y rounded-xl border border-border/60 bg-background px-3 py-2 font-mono text-[12px] text-foreground outline-none focus:border-primary"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[12px] font-medium text-foreground">{t.projectSettings.domains.certUpload.keyLabel}</label>
+                <textarea
+                  value={keyPem}
+                  onChange={(event) => setKeyPem(event.target.value)}
+                  placeholder={t.projectSettings.domains.certUpload.keyPlaceholder}
+                  spellCheck={false}
+                  rows={6}
+                  className="w-full resize-y rounded-xl border border-border/60 bg-background px-3 py-2 font-mono text-[12px] text-foreground outline-none focus:border-primary"
+                />
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => void handleUploadCert()}
+                  disabled={isUploadingCert || !certPem.trim() || !keyPem.trim()}
+                  className="inline-flex min-h-9 items-center gap-2 rounded-xl bg-primary px-4 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+                >
+                  {isUploadingCert && <Loader2 className="size-4 animate-spin" />}
+                  {isUploadingCert ? t.projectSettings.domains.certUpload.submitting : t.projectSettings.domains.certUpload.submit}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1510,7 +1914,7 @@ export const DomainSettings = () => {
 
 const ICON_TONES = {
   primary: "bg-primary/10 text-primary",
-  emerald: "bg-emerald-500/10 text-emerald-500",
+  emerald: "bg-success-bg text-success",
   blue: "bg-blue-500/10 text-blue-500",
   orange: "bg-orange-500/10 text-orange-500",
 } as const;
@@ -1533,7 +1937,7 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-border/50 bg-card overflow-hidden">
+    <div className="rounded-2xl border border-border/50 bg-card sadwq">
       <div className="border-b border-border/40 px-5 py-4">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div
@@ -1588,9 +1992,9 @@ function StatusPill({
   children: React.ReactNode;
 }) {
   const styles = {
-    success: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-    warning: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-    danger: "bg-red-500/10 text-red-600 dark:text-red-400",
+    success: "bg-success-bg text-success",
+    warning: "bg-warning-bg text-warning",
+    danger: "bg-danger-bg text-danger",
     neutral: "bg-muted/60 text-muted-foreground",
   }[tone];
 
@@ -1655,22 +2059,67 @@ function firstContainerPort(ports?: string[] | null): string {
 function DomainOverviewCard({
   domain,
   menuActions = [],
+  onVerify,
+  verifying = false,
+  verifyHint,
+  loadRecords,
+  onCopy,
+  autoOpenRecords = false,
+  portHint,
+  outputHint,
 }: {
   domain: DomainSummaryItem;
-  /** Secondary actions (edit, verify, renew, …) collapsed into a ⋯ menu. Visit
-   *  is a plain icon, not a menu item — it's the one everyday action. */
+  /** Secondary actions (edit, renew, …) collapsed into a ⋯ menu. Visit is a
+   *  plain icon; Verify is a direct inline button below, not a menu item. */
   menuActions?: MenuAction[];
+  onVerify?: () => void;
+  verifying?: boolean;
+  /** Message naming the DNS record that still isn't resolving after a fail. */
+  verifyHint?: string | null;
+  /** Lazy-fetch the DNS records for this row (pending custom domains only). */
+  loadRecords?: () => Promise<DnsRecord[]>;
+  onCopy?: (text: string) => void | Promise<void>;
+  /** Open the records section immediately (used right after a failed verify). */
+  autoOpenRecords?: boolean;
+  /** Live port-reachability advisory ("nothing responded on port X"). */
+  portHint?: { port: number; serviceName?: string } | null;
+  /** Live static-output advisory ("no build output found at this path"). */
+  outputHint?: { path: string } | null;
 }) {
   const { t } = useI18n();
+  const d = t.projectSettings.domains;
+  const canVerify = domain.needsVerify && !!domain.domainId;
+  const [recordsOpen, setRecordsOpen] = useState(false);
+  const [records, setRecords] = useState<DnsRecord[] | null>(null);
+  const [recordsLoading, setRecordsLoading] = useState(false);
+
+  const openRecords = useCallback(async () => {
+    setRecordsOpen(true);
+    if (records !== null || !loadRecords) return;
+    setRecordsLoading(true);
+    try {
+      setRecords(await loadRecords());
+    } catch {
+      setRecords([]);
+    } finally {
+      setRecordsLoading(false);
+    }
+  }, [records, loadRecords]);
+
+  // A just-failed verify opens the records so the fix is right there.
+  useEffect(() => {
+    if (autoOpenRecords) void openRecords();
+  }, [autoOpenRecords, openRecords]);
+
   return (
-    <div className="rounded-2xl border border-border/50 bg-card overflow-hidden">
+    <div className="rounded-2xl border border-border/50 bg-card sadwq">
       <div className="flex items-start justify-between gap-2 border-b border-border/40 px-5 py-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="text-[15px] font-semibold text-foreground">{domain.title}</h3>
             {domain.isPrimary ? (
               <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
-                {t.projectSettings.domains.overview.primary}
+                {d.overview.primary}
               </span>
             ) : null}
           </div>
@@ -1682,8 +2131,8 @@ function DomainOverviewCard({
               href={domain.liveUrl}
               target="_blank"
               rel="noopener noreferrer"
-              title={t.projectSettings.domains.overview.visit}
-              aria-label={t.projectSettings.domains.overview.visit}
+              title={d.overview.visit}
+              aria-label={d.overview.visit}
               className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               <ExternalLink className="size-4" />
@@ -1695,9 +2144,77 @@ function DomainOverviewCard({
 
       <div className="space-y-4 px-5 py-4">
         <div className="break-all text-[15px] font-semibold text-foreground">{domain.hostname}</div>
-        <InfoRow label={t.projectSettings.domains.overview.mappedTo} value={domain.mappedLabel} />
-        <InfoRow label={t.projectSettings.domains.overview.status} value={<StatusPill tone={domain.status.tone}>{domain.status.label}</StatusPill>} />
-        <InfoRow label={t.projectSettings.domains.overview.ssl} value={<StatusPill tone={domain.ssl.tone}>{domain.ssl.label}</StatusPill>} />
+        <InfoRow label={d.overview.mappedTo} value={domain.mappedLabel} />
+        <InfoRow label={d.overview.status} value={<StatusPill tone={domain.status.tone}>{domain.status.label}</StatusPill>} />
+        <InfoRow label={d.overview.ssl} value={<StatusPill tone={domain.ssl.tone}>{domain.ssl.label}</StatusPill>} />
+
+        {portHint ? (
+          <div className="flex items-start gap-2 rounded-xl border border-warning-border bg-warning-bg/40 px-3 py-2.5 text-[12px] text-warning">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              {portHint.serviceName
+                ? interpolate(d.portHint.bodyService, { service: portHint.serviceName, port: String(portHint.port) })
+                : interpolate(d.portHint.body, { port: String(portHint.port) })}
+            </span>
+          </div>
+        ) : null}
+
+        {outputHint ? (
+          <div className="flex items-start gap-2 rounded-xl border border-warning-border bg-warning-bg/40 px-3 py-2.5 text-[12px] text-warning">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+            <span>{interpolate(d.outputHint.body, { path: outputHint.path })}</span>
+          </div>
+        ) : null}
+
+        {canVerify ? (
+          <div className="space-y-3 border-t border-border/40 pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={onVerify}
+                disabled={verifying}
+                className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {verifying ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+                {verifying ? d.menu.verifying : d.menu.verify}
+              </button>
+              {loadRecords ? (
+                <button
+                  type="button"
+                  onClick={() => (recordsOpen ? setRecordsOpen(false) : void openRecords())}
+                  className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-foreground/[0.06] px-3.5 text-[13px] font-medium text-foreground transition-colors hover:bg-foreground/[0.1]"
+                >
+                  <Link2 className="size-3.5" />
+                  {d.records.toggle}
+                  <ChevronDown className={`size-3.5 transition-transform ${recordsOpen ? "rotate-180" : ""}`} />
+                </button>
+              ) : null}
+            </div>
+
+            {verifyHint ? <p className="text-[12px] text-warning">{verifyHint}</p> : null}
+
+            {recordsOpen ? (
+              <div className="space-y-2">
+                <p className="text-[12px] text-muted-foreground">{d.records.hint}</p>
+                {recordsLoading ? (
+                  <div className="flex items-center gap-2 py-2 text-[12px] text-muted-foreground">
+                    <Loader2 className="size-3.5 animate-spin" /> {d.records.loading}
+                  </div>
+                ) : records && records.length > 0 ? (
+                  records.map((record, i) => (
+                    <DnsRecordRow
+                      key={`${record.type}-${record.host}-${i}`}
+                      record={record}
+                      onCopy={onCopy ?? (() => {})}
+                    />
+                  ))
+                ) : (
+                  <p className="py-2 text-[12px] text-muted-foreground">{d.records.none}</p>
+                )}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1719,6 +2236,11 @@ function DnsRecordRow({
             {record.type}
           </div>
           <div className="mt-1 text-[13px] font-medium text-foreground">{record.host}</div>
+          {record.name && record.name !== record.host ? (
+            <code className="mt-0.5 block break-all text-[11px] text-muted-foreground/70">
+              {record.name}
+            </code>
+          ) : null}
           <code className="mt-2 block break-all text-[12px] text-muted-foreground">
             {record.value || "-"}
           </code>

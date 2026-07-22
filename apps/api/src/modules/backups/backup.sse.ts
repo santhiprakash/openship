@@ -15,8 +15,8 @@
  *     cleanly.
  */
 
-import { EventEmitter } from "node:events";
 import type { BackupRun, BackupRunStatus } from "@repo/db";
+import { createRunBus } from "../../lib/run-sse";
 
 export type BackupRunEvent =
   | {
@@ -48,29 +48,8 @@ const TERMINAL_STATUSES: ReadonlySet<BackupRunStatus> = new Set([
   "server_error",
 ]);
 
-class BackupRunBus extends EventEmitter {
-  /** Emit + clean up if the event is terminal. */
-  publish(runId: string, event: BackupRunEvent): void {
-    this.emit(runId, event);
-    if (event.type === "complete" || (event.type === "transition" && TERMINAL_STATUSES.has(event.status))) {
-      // Defer the close so any pending listeners flush first.
-      setImmediate(() => {
-        this.removeAllListeners(runId);
-      });
-    }
-  }
-
-  subscribe(runId: string, listener: (event: BackupRunEvent) => void): () => void {
-    this.on(runId, listener);
-    return () => this.off(runId, listener);
-  }
-
-  hasSubscribers(runId: string): boolean {
-    return this.listenerCount(runId) > 0;
-  }
-}
-
-export const backupRunBus = new BackupRunBus();
-// Bump the per-channel listener cap — multiple dashboard tabs may
-// subscribe to the same run.
-backupRunBus.setMaxListeners(32);
+export const backupRunBus = createRunBus<BackupRunEvent>(
+  (event) =>
+    event.type === "complete" ||
+    (event.type === "transition" && TERMINAL_STATUSES.has(event.status)),
+);

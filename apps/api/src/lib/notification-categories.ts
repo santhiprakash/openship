@@ -71,6 +71,26 @@ export const CATEGORIES: readonly NotificationCategory[] = [
     defaultEnabled: true,
   },
 
+  // ── Jobs ─────────────────────────────────────────────────────────────────
+  {
+    id: "job.run.failed",
+    label: "Job failed",
+    description: "A scheduled or manual job run errored out. Includes the job + exit code.",
+    defaultEnabled: true,
+  },
+  {
+    id: "job.run.succeeded",
+    label: "Job succeeded",
+    description: "Each successful job run. Off by default — can be high volume.",
+    defaultEnabled: false,
+  },
+  {
+    id: "job.run.started",
+    label: "Job started",
+    description: "A job began running. Off by default — mostly useful per-job.",
+    defaultEnabled: false,
+  },
+
   // ── Domains / SSL ──────────────────────────────────────────────────────────
   {
     id: "domain.expiring",
@@ -150,6 +170,11 @@ const EVENT_TYPE_TO_CATEGORY: Record<string, string> = {
   "backup_restore.completed": "backup.restore_completed",
   "backup_restore.failed": "backup.restore_completed",
 
+  // Jobs
+  "job_run.failed": "job.run.failed",
+  "job_run.succeeded": "job.run.succeeded",
+  "job_run.started": "job.run.started",
+
   // Domains / SSL
   "domain.expiring": "domain.expiring",
   "ssl.renewal_failed": "domain.expiring",
@@ -164,7 +189,11 @@ const EVENT_TYPE_TO_CATEGORY: Record<string, string> = {
   // Billing
   "billing.payment_failed": "billing.alert",
   "billing.invoice_overdue": "billing.alert",
+  "billing.credit_exhausted": "billing.alert",
+  "billing.credit_restored": "billing.alert",
+  "billing.credit_low": "quota.warning",
   "quota.threshold_reached": "quota.warning",
+  "quota.threshold_fired": "quota.warning",
 };
 
 export function categoryForEventType(eventType: string): string | undefined {

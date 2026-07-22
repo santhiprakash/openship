@@ -48,7 +48,7 @@ export const SettingSection = ({
               <>
                 <button
                   onClick={onSave}
-                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all duration-200 font-medium text-sm"
+                  className="flex items-center gap-2 px-4 py-2 bg-success-solid text-white rounded-lg hover:bg-success-solid/90 transition-all duration-200 font-medium text-sm"
                 >
                   <Save className="w-4 h-4" />
                   {t.projectSettings.settingSection.save}

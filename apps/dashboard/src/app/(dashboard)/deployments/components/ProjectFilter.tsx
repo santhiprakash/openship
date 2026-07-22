@@ -39,7 +39,7 @@ export const ProjectFilter: React.FC<ProjectFilterProps> = ({
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex h-10 min-w-[170px] items-center justify-between gap-2 rounded-xl border border-border bg-background px-3.5 text-sm font-medium text-foreground/80 transition-colors hover:bg-muted/25"
+        className="flex h-10 min-w-[170px] items-center justify-between gap-2 rounded-xl border border-border/50 bg-card px-3.5 text-sm font-medium text-foreground/80 transition-colors hover:bg-muted/25"
       >
         <div className="flex items-center gap-2">
           <Layers className="size-4 text-muted-foreground" />

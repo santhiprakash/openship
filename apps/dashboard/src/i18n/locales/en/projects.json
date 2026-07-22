@@ -3,7 +3,8 @@
     "loading": "Loading...",
     "countOne": "{count} project",
     "countOther": "{count} projects",
-    "noTargetProjects": "No projects deployed to this target yet."
+    "noTargetProjects": "No projects deployed to this target yet.",
+    "noTargetDesc": "Deploy an app to this target, or create a new project to get started."
   },
   "status": {
     "live": "Live",
@@ -30,10 +31,12 @@
   },
   "card": {
     "liveVersion": "Live version v{version}",
+    "appBadge": "App",
     "sourceLocal": "Local",
     "services": "Services",
     "static": "Static",
-    "standalone": "Standalone"
+    "standalone": "Standalone",
+    "updateAvailable": "Update"
   },
   "hosting": {
     "cloud": "Cloud",
@@ -96,7 +99,11 @@
     "teardownFailedAt": "Teardown failed at: {reasons}. Retry, or force-delete to orphan them.",
     "teardownFailed": "Teardown failed",
     "cleanupFailedTitle": "Cleanup failed",
-    "alreadyDeleted": "Project already deleted"
+    "alreadyDeleted": "Project already deleted",
+    "forceModalTitle": "Couldn't remove it from the source",
+    "forceModalBody": "The runtime couldn't be reached (or kept failing), so this project wasn't torn down. You can delete it from Openship anyway — the record is removed now and any leftover resources are reclaimed automatically once the server is reachable.",
+    "forceModalConfirm": "Delete from storage",
+    "forceModalCancel": "Cancel"
   },
   "sidebar": {
     "project": "Project",
@@ -108,6 +115,7 @@
     "production": "Production",
     "lastDeploy": "Last Deploy",
     "tabs": {
+      "appSettings": "Settings",
       "overview": "Overview",
       "services": "Apps & Services",
       "domains": "Domains",
@@ -142,6 +150,15 @@
     "deployNow": "Deploy now",
     "connectSource": "Connect a source",
     "settings": "Settings",
+    "detailsTitle": "Details",
+    "detailsDescription": "What this project deploys and where",
+    "type": "Type",
+    "typeApp": "App",
+    "typeProject": "Project",
+    "target": "Target",
+    "targetPending": "Chosen at deploy",
+    "services": "Services",
+    "created": "Created",
     "attemptsTitle": "Deploy attempts",
     "attemptsDescription": "Every build for this project — click one to open it",
     "sourceTitle": "Source",
@@ -153,6 +170,8 @@
     "build": "Build",
     "noSourceText": "No source connected yet.",
     "connectLink": "Connect a repository or local path",
+    "managedImages": "Managed container images",
+    "managedImagesText": "This app runs from prebuilt images — there's no repository to connect. Just deploy.",
     "deleteTitle": "Delete project",
     "deleteDescription": "Remove this project — can't be undone",
     "deleteConfirmPrefix": "Permanently delete",
@@ -185,7 +204,8 @@
     "topPaths": "Top Paths",
     "requestCount": "{count} req",
     "statusActive": "Active",
-    "statusOff": "Off"
+    "statusOff": "Off",
+    "server": "Server"
   },
   "stats": {
     "serverRequests": "Server Requests",
@@ -266,6 +286,10 @@
     "newCommitTitle": "New commit available",
     "newCommitOn": "on",
     "newCommitDeployedOn": "— you're deployed on",
+    "newVersionTitle": "New version available",
+    "newVersionAvailable": "A newer release is available:",
+    "newVersionDeployed": "— you're deployed on",
+    "deployVersion": "Deploy new version",
     "deploying": "Deploying…",
     "redeployLatest": "Redeploy latest",
     "deployLatestTitle": "Deploy Latest Changes",

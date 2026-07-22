@@ -184,7 +184,7 @@ const ModalRenderer: React.FC<ModalRendererProps> = memo(({ instance = { config:
       case 'primary':
         return 'bg-primary text-primary-foreground hover:bg-primary/90';
       case 'danger':
-        return 'bg-red-600 text-white hover:bg-red-700';
+        return 'bg-danger-solid text-white hover:bg-danger-solid/90';
       case 'secondary':
       default:
         return 'bg-muted text-foreground hover:bg-muted/80 border border-border';

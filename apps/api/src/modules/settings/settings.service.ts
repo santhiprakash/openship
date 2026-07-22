@@ -8,7 +8,7 @@
 
 import { repos } from "@repo/db";
 import { STACKS, type StackId, type StackDefinition } from "@repo/core";
-import type { BuildStrategy } from "@repo/adapters";
+import type { BuildStrategy, TransferMode, TransferCompression } from "@repo/adapters";
 import { env } from "../../config";
 
 export type BuildMode = "auto" | "server" | "local";
@@ -122,4 +122,33 @@ export async function resolveStrategy(
       ? (STACKS[stackId] as StackDefinition)
       : undefined;
   return stackDef?.defaultBuildStrategy ?? "server";
+}
+
+// ── Volume-transfer preference (migrations / server-to-server moves) ─────────
+
+const VALID_TRANSFER_MODES: TransferMode[] = ["auto", "stream", "direct", "rsync"];
+const VALID_TRANSFER_COMPRESSION: TransferCompression[] = ["auto", "zstd", "gzip", "none"];
+
+export function isValidTransferMode(value: unknown): value is TransferMode {
+  return typeof value === "string" && (VALID_TRANSFER_MODES as string[]).includes(value);
+}
+export function isValidTransferCompression(value: unknown): value is TransferCompression {
+  return typeof value === "string" && (VALID_TRANSFER_COMPRESSION as string[]).includes(value);
+}
+
+/**
+ * The user's default volume-transfer preference. Unset/invalid → "auto"
+ * (topology-aware). A per-migration override still wins over this.
+ * @scope user
+ */
+export async function getTransferPrefs(
+  userId: string,
+): Promise<{ transferMode: TransferMode; transferCompression: TransferCompression }> {
+  const settings = await repos.settings.findByUser(userId);
+  return {
+    transferMode: isValidTransferMode(settings?.transferMode) ? settings.transferMode : "auto",
+    transferCompression: isValidTransferCompression(settings?.transferCompression)
+      ? settings.transferCompression
+      : "auto",
+  };
 }

@@ -23,7 +23,7 @@ export interface PreflightResult {
 export interface StartServerResult {
   ok: true;
   projectId: string;
-  appId: string;
+  groupId: string;
   migrationTargetUrl: string;
 }
 

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fires after history rewrites that touch the worktree (`git rebase`, `git pull --rebase`).
+exec "$(dirname "$0")/_dev-stale-warn.sh"

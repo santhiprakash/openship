@@ -337,7 +337,7 @@ export function DomainsTab({
       </div>
 
       {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-600 dark:text-red-400">
+        <div className="rounded-xl border border-danger-border bg-danger-bg px-4 py-3 text-sm text-danger">
           {error}
         </div>
       )}
@@ -645,12 +645,12 @@ function DeleteDomainConfirm({
       disabled={hasDependents && !cascade}
     >
       {hasDependents ? (
-        <label className="flex items-start gap-2.5 cursor-pointer rounded-lg border border-rose-500/30 bg-rose-500/5 px-3 py-2.5">
+        <label className="flex items-start gap-2.5 cursor-pointer rounded-lg border border-danger-border bg-danger-bg px-3 py-2.5">
           <input
             type="checkbox"
             checked={cascade}
             onChange={(e) => setCascade(e.target.checked)}
-            className="mt-0.5 size-4 rounded border-rose-500/40 text-rose-600 focus:ring-rose-500/40"
+            className="mt-0.5 size-4 rounded border-danger-border text-danger focus:ring-danger-border"
           />
           <span className="text-sm leading-snug">
             <span className="font-medium text-foreground">

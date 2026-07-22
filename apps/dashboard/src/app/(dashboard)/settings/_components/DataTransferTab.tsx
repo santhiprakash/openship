@@ -152,7 +152,7 @@ function ExportCard({ onToast }: { onToast: Toast }) {
         </div>
 
         {passphraseMismatch && (
-          <p className="text-xs text-red-500">{t.settings.dataTransfer.export.mismatch}</p>
+          <p className="text-xs text-danger">{t.settings.dataTransfer.export.mismatch}</p>
         )}
 
         <button
@@ -361,15 +361,15 @@ function ImportModal({
           </div>
 
           {mode === "wipe" && (
-            <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] p-3">
-              <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" />
-              <p className="text-xs text-amber-700 dark:text-amber-500">
+            <div className="flex items-start gap-2 rounded-lg border border-warning-border bg-warning-bg p-3">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+              <p className="text-xs text-warning">
                 {t.settings.dataTransfer.import.wipeWarn}
               </p>
             </div>
           )}
 
-          {error && <p className="text-xs text-red-500">{error}</p>}
+          {error && <p className="text-xs text-danger">{error}</p>}
 
           <div className="flex justify-end gap-2 pt-2">
             <button

@@ -33,12 +33,12 @@ interface WarningCalloutProps {
 
 const TONES: Record<CalloutTone, { container: string; iconBox: string }> = {
   warning: {
-    container: "bg-amber-500/[0.06] border-amber-500/25",
-    iconBox: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    container: "bg-warning-bg border-warning-border",
+    iconBox: "bg-warning-bg text-warning",
   },
   danger: {
-    container: "bg-red-500/[0.06] border-red-500/25",
-    iconBox: "bg-red-500/10 text-red-600 dark:text-red-400",
+    container: "bg-danger-bg border-danger-border",
+    iconBox: "bg-danger-bg text-danger",
   },
   info: {
     container: "bg-primary/[0.06] border-primary/25",

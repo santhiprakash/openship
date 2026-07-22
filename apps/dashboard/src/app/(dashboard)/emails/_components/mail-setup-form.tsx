@@ -31,11 +31,22 @@ function generatePassword(): string {
     .replace(/=+$/, "");
 }
 
+/** Optional outbound-relay config collected at install time (SES, all domains).
+ *  Per-domain routing + identities are configured later in the Sending tab. */
+export interface SetupRelay {
+  enabled: boolean;
+  region: string;
+  username: string;
+  password: string;
+}
+
 interface MailSetupFormProps {
   domain: string;
   adminPassword: string;
   running: boolean;
   selectedServerId: string | null;
+  relay: SetupRelay;
+  onRelayChange: (r: SetupRelay) => void;
   onDomainChange: (v: string) => void;
   onPasswordChange: (v: string) => void;
   onServerSelect: (s: ServerOption | null) => void;
@@ -49,6 +60,8 @@ export function MailSetupForm({
   adminPassword,
   running,
   selectedServerId,
+  relay,
+  onRelayChange,
   onDomainChange,
   onPasswordChange,
   onServerSelect,
@@ -57,6 +70,9 @@ export function MailSetupForm({
 }: MailSetupFormProps) {
   const { t } = useI18n();
   const [adoptOpen, setAdoptOpen] = useState(false);
+  const rl = t.emails.setup.relay;
+  // Relay is optional; when toggled on, its fields become required to start.
+  const relayReady = !relay.enabled || (!!relay.region.trim() && !!relay.username.trim() && !!relay.password.trim());
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6">
       {/* Setup form */}
@@ -73,16 +89,12 @@ export function MailSetupForm({
           </div>
         </div>
 
-        {/* Only show the selector when no server has been pre-picked. The
-            page-level effect auto-selects when there's one mail-installed
-            server (or one openship server total) - showing the picker on
-            top of an already-resolved choice is just visual noise. */}
-        {!selectedServerId && (
-          <ServerSelector
-            value={selectedServerId}
-            onSelect={onServerSelect}
-          />
-        )}
+        {/* Always show the server picker. Even when the page auto-selected the
+            sole server, the operator must be able to confirm WHICH server mail
+            installs on, switch to a different one, or add a new server (the
+            selector's built-in "Add server" → /servers/new). Auto-select is a
+            convenient default, not a reason to hide the choice. */}
+        <ServerSelector value={selectedServerId} onSelect={onServerSelect} />
 
         <div className="space-y-4 mb-6">
           <div>
@@ -120,12 +132,38 @@ export function MailSetupForm({
               {t.emails.setup.passwordHint}
             </p>
           </div>
+
+          {/* Optional: relay outbound through Amazon SES from the start. */}
+          <div className="rounded-xl border border-border/50 bg-muted/[0.15] p-4">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                checked={relay.enabled}
+                onChange={(e) => onRelayChange({ ...relay, enabled: e.target.checked })}
+                className="mt-0.5 size-4 accent-primary"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-foreground">{rl.toggle}</span>
+                <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">{rl.hint}</span>
+              </span>
+            </label>
+            {relay.enabled && (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <RelayField label={rl.region} value={relay.region} onChange={(v) => onRelayChange({ ...relay, region: v })} placeholder="us-east-1" />
+                <RelayField label={rl.username} value={relay.username} onChange={(v) => onRelayChange({ ...relay, username: v })} placeholder="AKIA…" />
+                <div className="sm:col-span-2">
+                  <RelayField label={rl.password} value={relay.password} onChange={(v) => onRelayChange({ ...relay, password: v })} placeholder="" type="password" />
+                </div>
+                <p className="sm:col-span-2 text-xs text-muted-foreground/80">{rl.perDomainNote}</p>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <button
             onClick={onStart}
-            disabled={!domain || !adminPassword || !selectedServerId || running}
+            disabled={!domain || !adminPassword || !selectedServerId || !relayReady || running}
             className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground text-sm font-medium rounded-xl hover:bg-primary/90 transition-all hover:shadow-lg hover:shadow-primary/25 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Play className="size-4" />
@@ -176,9 +214,9 @@ export function MailSetupForm({
           </div>
         </div>
 
-        <div className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-5">
+        <div className="bg-warning-bg border border-warning-border rounded-2xl p-5">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="size-4 text-amber-500 mt-0.5 shrink-0" />
+            <AlertTriangle className="size-4 text-warning mt-0.5 shrink-0" />
             <div>
               <p className="text-sm font-medium text-foreground">{t.emails.setup.prerequisites}</p>
               <ul className="text-xs text-muted-foreground mt-1.5 space-y-1 list-disc list-inside">
@@ -190,6 +228,35 @@ export function MailSetupForm({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Simple labeled field (relay setup) ─────────────────────────────────────
+
+function RelayField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  type?: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <label className="block text-xs font-medium text-foreground">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+      />
     </div>
   );
 }

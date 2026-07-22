@@ -10,7 +10,7 @@ import { repos } from "@repo/db";
 import { assertResourceInOrg, isServerInOrg, param } from "../../lib/controller-helpers";
 import { getRequestContext } from "../../lib/request-context";
 import { permission } from "../../lib/permission";
-import { streamSSE } from "../../lib/sse";
+import { streamRunSSE } from "../../lib/run-sse";
 import { triggerManualBackup } from "./triggers/manual";
 import { backupRunBus } from "./backup.sse";
 import { restoreRunBus } from "./restore.sse";
@@ -207,61 +207,19 @@ export async function streamRun(c: Context) {
     return c.json({ error: safeErrorMessage(err) }, 404);
   }
 
-  return streamSSE(c, async (stream) => {
-    // Initial snapshot — clients can render the full row immediately
-    // without waiting for the next event.
-    await stream.writeSSE({
-      event: "snapshot",
-      data: JSON.stringify({ type: "snapshot", run: initial }),
-    });
-
-    // If the run already terminated, close immediately.
-    const TERMINAL = ["succeeded", "failed", "cancelled", "server_error"];
-    if (TERMINAL.includes(initial.status)) {
-      await stream.writeSSE({
-        event: "complete",
-        data: JSON.stringify({ type: "complete", status: initial.status }),
-      });
-      return;
-    }
-
-    // Otherwise wire into the bus.
-    const events: import("./backup.sse").BackupRunEvent[] = [];
-    let resolveWaiter: (() => void) | null = null;
-    const unsubscribe = backupRunBus.subscribe(runId, (ev) => {
-      events.push(ev);
-      resolveWaiter?.();
-    });
-
-    let aborted = false;
-    stream.onAbort(() => {
-      aborted = true;
-      unsubscribe();
-      resolveWaiter?.();
-    });
-
-    try {
-      while (!aborted) {
-        if (events.length === 0) {
-          await new Promise<void>((resolve) => {
-            resolveWaiter = resolve;
-          });
-          resolveWaiter = null;
+  const TERMINAL = ["succeeded", "failed", "cancelled", "server_error"];
+  const finished = TERMINAL.includes(initial.status);
+  return streamRunSSE(c, {
+    bus: backupRunBus,
+    id: runId,
+    snapshot: { type: "snapshot", run: initial },
+    terminalComplete: finished
+      ? {
+          type: "complete",
+          status: initial.status as "succeeded" | "failed" | "cancelled" | "server_error",
         }
-        const drained = events.splice(0, events.length);
-        let terminal = false;
-        for (const ev of drained) {
-          await stream.writeSSE({
-            event: ev.type,
-            data: JSON.stringify(ev),
-          });
-          if (ev.type === "complete") terminal = true;
-        }
-        if (terminal) break;
-      }
-    } finally {
-      unsubscribe();
-    }
+      : null,
+    isFinalEvent: (ev) => ev.type === "complete",
   });
 }
 
@@ -420,54 +378,19 @@ export async function streamRestore(c: Context) {
     return c.json({ error: "Restore not found" }, 404);
   }
 
-  return streamSSE(c, async (stream) => {
-    await stream.writeSSE({
-      event: "snapshot",
-      data: JSON.stringify({ type: "snapshot", restore: initial }),
-    });
-
-    const TERMINAL = ["succeeded", "failed", "cancelled", "server_error"];
-    if (TERMINAL.includes(initial.status)) {
-      await stream.writeSSE({
-        event: "complete",
-        data: JSON.stringify({ type: "complete", status: initial.status }),
-      });
-      return;
-    }
-
-    const events: import("./restore.sse").RestoreRunEvent[] = [];
-    let waiter: (() => void) | null = null;
-    const unsubscribe = restoreRunBus.subscribe(restoreId, (ev) => {
-      events.push(ev);
-      waiter?.();
-    });
-
-    let aborted = false;
-    stream.onAbort(() => {
-      aborted = true;
-      unsubscribe();
-      waiter?.();
-    });
-
-    try {
-      while (!aborted) {
-        if (events.length === 0) {
-          await new Promise<void>((resolve) => {
-            waiter = resolve;
-          });
-          waiter = null;
+  const TERMINAL = ["succeeded", "failed", "cancelled", "server_error"];
+  const finished = TERMINAL.includes(initial.status);
+  return streamRunSSE(c, {
+    bus: restoreRunBus,
+    id: restoreId,
+    snapshot: { type: "snapshot", restore: initial },
+    terminalComplete: finished
+      ? {
+          type: "complete",
+          status: initial.status as "succeeded" | "failed" | "cancelled" | "server_error",
         }
-        const drained = events.splice(0, events.length);
-        let terminal = false;
-        for (const ev of drained) {
-          await stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) });
-          if (ev.type === "complete") terminal = true;
-        }
-        if (terminal) break;
-      }
-    } finally {
-      unsubscribe();
-    }
+      : null,
+    isFinalEvent: (ev) => ev.type === "complete",
   });
 }
 

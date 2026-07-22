@@ -22,6 +22,12 @@ export interface EnvironmentProfile {
   distro: LinuxDistro | null;
   packageManager: SystemPackageManager;
   serviceManager: SystemServiceManager;
+  /** The SSH/login user is uid 0. Component installs run privileged commands
+   *  (apt, systemctl, writes under /etc) that require this — or `canSudo`. */
+  isRoot: boolean;
+  /** Non-root but has passwordless sudo (`sudo -n true` succeeds). Lets the
+   *  installer elevate privileged commands. Meaningless when `isRoot`. */
+  canSudo: boolean;
 }
 
 const profileCache = new WeakMap<CommandExecutor, Promise<EnvironmentProfile>>();
@@ -123,6 +129,24 @@ async function detectServiceManager(
   return "none";
 }
 
+/** Detect privilege: is the login user root, and (if not) does it have
+ *  passwordless sudo? `sudo -n true` is the canonical non-interactive probe —
+ *  it exits 0 only when sudo needs no password. The `|| echo no` keeps the
+ *  command's own exit status 0 so execSafe returns the marker either way. */
+async function detectPrivilege(
+  executor: CommandExecutor,
+): Promise<{ isRoot: boolean; canSudo: boolean }> {
+  const uid = await execSafe(executor, "id -u");
+  const isRoot = uid?.trim() === "0";
+  if (isRoot) return { isRoot: true, canSudo: false };
+
+  const sudo = await execSafe(
+    executor,
+    "sudo -n true 2>/dev/null && echo yes || echo no",
+  );
+  return { isRoot: false, canSudo: sudo?.trim() === "yes" };
+}
+
 async function detectProfile(
   executor: CommandExecutor,
 ): Promise<EnvironmentProfile> {
@@ -137,6 +161,7 @@ async function detectProfile(
   const osRelease = await execSafe(executor, "cat /etc/os-release");
   const packageManager = await detectPackageManager(executor);
   const serviceManager = await detectServiceManager(executor);
+  const { isRoot, canSudo } = await detectPrivilege(executor);
 
   const os = parseOs(unameOs);
 
@@ -146,6 +171,8 @@ async function detectProfile(
     distro: os === "linux" ? parseDistro(osRelease) : null,
     packageManager,
     serviceManager,
+    isRoot,
+    canSudo,
   };
 
   systemDebug(

@@ -1,5 +1,33 @@
-import type { Domain } from "@repo/db";
+import type { Domain, Service } from "@repo/db";
 import { getRoutingBaseDomain } from "./routing-domains";
+import { resolveServicePort } from "./deployable-service";
+
+// OpenResty management port (packages/adapters openresty-lua.ts OPENRESTY_MGMT_PORT).
+// Hardcoded here so this leaf module doesn't pull the adapters barrel or the
+// env module (whose boot guards throw at import time under test).
+const OPENRESTY_MGMT_PORT = 9145;
+
+/**
+ * Ports a tenant route must NEVER proxy at over the host loopback: the
+ * control-plane API, the dashboard, and the UNAUTHENTICATED OpenResty
+ * management port (9145). On a bare/self-hosted edge these live on the host's
+ * 127.0.0.1, so a public route pointed at 127.0.0.1:<one of these> would expose
+ * an internal service (admin API / edge rules-mgmt) to the internet. Only ever
+ * applied to a LOOPBACK upstream — a container's own IP:9145 is the app's port,
+ * not ours. See resolveTargetUrl in project-route.service.ts. Ports read from
+ * process.env directly (raw, no validated `env` import) to keep this leaf light.
+ */
+export function isReservedLoopbackPort(port: number): boolean {
+  const apiPort = Number(process.env.PORT) || 4000;
+  const dashboardPort = Number(process.env.OPENSHIP_DASHBOARD_PORT) || 3001;
+  return port === apiPort || port === dashboardPort || port === OPENRESTY_MGMT_PORT;
+}
+
+/** True for a loopback host (the only place isReservedLoopbackPort applies). */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  return h === "localhost" || h === "::1" || /^127(?:\.\d{1,3}){3}$/.test(h);
+}
 
 export interface StoredPublicEndpoint {
   port?: number;
@@ -347,4 +375,63 @@ export function storedPublicEndpointsNeedCloud(
   endpoints?: Array<Pick<StoredPublicEndpoint, "domainType">> | null,
 ): boolean {
   return (endpoints ?? []).some((endpoint) => endpoint.domainType !== "custom");
+}
+
+/**
+ * A service's public routes as StoredPublicEndpoints (one per routed port).
+ * Prefers the explicit `publicEndpoints` array; falls back to synthesizing the
+ * single primary route from the scalar routing columns (pre-migration rows /
+ * single-route services). Returns [] when the service isn't exposed or has no
+ * routable port. This is the ONE place the service→routes rule lives, so the
+ * deploy loop and the route builder agree.
+ */
+export function resolveServicePublicEndpoints(
+  service: Pick<
+    Service,
+    "exposed" | "exposedPort" | "ports" | "domain" | "customDomain" | "domainType" | "publicEndpoints"
+  >,
+): StoredPublicEndpoint[] {
+  if (!service.exposed) return [];
+
+  if (service.publicEndpoints && service.publicEndpoints.length > 0) {
+    return normalizeStoredPublicEndpoints(
+      service.publicEndpoints.map((endpoint) => ({
+        port: endpoint.port,
+        domain: endpoint.domain,
+        customDomain: endpoint.customDomain,
+        domainType: endpoint.domainType,
+      })),
+    );
+  }
+
+  const port = resolveServicePort(service);
+  if (port === null) return [];
+
+  return normalizeStoredPublicEndpoints([
+    {
+      port,
+      domain: service.domain,
+      customDomain: service.customDomain,
+      domainType: service.domainType === "custom" ? "custom" : "free",
+    },
+  ]);
+}
+
+/**
+ * Map a service's live domain rows → StoredPublicEndpoints. Mirrors
+ * routeRowsToPublicEndpoints but keeps ONLY rows scoped to this serviceId
+ * (the project-level mapper excludes service rows).
+ */
+export function serviceDomainRowsToPublicEndpoints(
+  domains: ProjectDomainRow[] | null | undefined,
+  serviceId: string,
+): StoredPublicEndpoint[] {
+  return (domains ?? [])
+    .filter((domain) => domain.serviceId === serviceId)
+    .sort((left, right) => {
+      if (left.isPrimary !== right.isPrimary) return left.isPrimary ? -1 : 1;
+      return left.hostname.localeCompare(right.hostname);
+    })
+    .map(routeDomainRowToPublicEndpoint)
+    .filter((endpoint): endpoint is StoredPublicEndpoint => endpoint !== null);
 }

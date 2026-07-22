@@ -82,11 +82,16 @@ const DeployRepository: React.FC = () => {
         // Config-edit hydrates from saved data — surface that, not "Fetching from GitHub".
         if (isConfigEdit) {
             const label =
-                d.kind === "local" ? d.path : d.kind === "upload" ? t.deploy.page.uploadedFolder : `${d.owner}/${d.repo}`;
+                d.kind === "local" ? d.path
+                    : d.kind === "upload" ? t.deploy.page.uploadedFolder
+                    : d.kind === "project" ? ""
+                    : `${d.owner}/${d.repo}`;
             return { kind: "settings" as const, label };
         }
         if (d.kind === "local") return { kind: "local" as const, path: d.path };
         if (d.kind === "upload") return { kind: "local" as const, path: t.deploy.page.uploadedFolder };
+        // Repo-less app: hydrated from saved rows, no git fetch — neutral summary.
+        if (d.kind === "project") return { kind: "settings" as const, label: "" };
         return {
             kind: "repo" as const,
             owner: d.owner,
@@ -148,6 +153,21 @@ const DeployRepository: React.FC = () => {
         applyLastPick();
     }, [applyLastPick]);
 
+    // Single-server safety net. The picker's own auto-select (DeployTargetStep)
+    // only runs while that step is MOUNTED — so on the auto-skip path (one
+    // server → picker skipped), config.serverId stays unset and both the summary
+    // ("My Server" fallback) and the deploy lose the target. Mirror the
+    // auto-select here so the lone server's id is always wired, picker or not.
+    useEffect(() => {
+        if (
+            config.deployTarget === "server" &&
+            !config.serverId &&
+            targets.servers.length === 1
+        ) {
+            updateConfig({ serverId: targets.servers[0].id });
+        }
+    }, [config.deployTarget, config.serverId, targets.servers, updateConfig]);
+
     // Track whether the user explicitly came back to step 1 via the edit
     // affordance. If they did, we must NOT auto-skip past it again - they
     // came here to make a change. Reset to true only on initial mount.
@@ -178,6 +198,11 @@ const DeployRepository: React.FC = () => {
                 result = await initializeFromProject(projectId, {
                     branch: branch ?? (decoded.kind === "repo" ? decoded.branch : undefined),
                 });
+            } else if (decoded.kind === "project") {
+                // Repo-less project (one-click app / saved services project): hydrate
+                // straight from its DB rows — services, env, exposed ports — in DEPLOY
+                // mode (no ?mode=config), so the sidebar stays "Deploy", not "Save".
+                result = await initializeFromProject(decoded.projectId, { branch });
             } else if (decoded.kind === "local") {
                 result = await initializeFromLocal(decoded.path, { projectId });
             } else if (decoded.kind === "upload") {
@@ -270,6 +295,26 @@ const DeployRepository: React.FC = () => {
         !isMonorepoFlow &&
         (config.projectType === "app" || (config.projectType === "services" && !isServiceDeployment));
 
+    const deploymentSections = (
+        <>
+            {config.projectType === "app" && (
+                <>
+                    <ProjectSettings />
+                    <BuildSettings />
+                </>
+            )}
+            {config.projectType === "docker" && <DockerSettings />}
+            {config.projectType === "services" && <ComposeServices />}
+            {isMonorepoFlow && <MonorepoApps />}
+            {!isServiceDeployment &&
+                !(isMonorepoFlow && config.serviceDeploymentMode !== "single") && (
+                <EnvironmentVariables collapsible />
+            )}
+            <ProjectName />
+            {(config.projectType === "app" || isMonorepoFlow) && <RoutingSection />}
+        </>
+    );
+
     return (
         <PageContainer>
                 {/* Step 1: Deploy target picker - centered onboarding style (desktop only).
@@ -298,12 +343,17 @@ const DeployRepository: React.FC = () => {
                                     showBuildStrategy={isSingleAppFlow}
                                     cloudResourceTier={config.cloudResourceTier}
                                     hasServer={config.options.hasServer}
-                                    serverName={
-                                      config.serverId
-                                        ? (targets.servers.find((s) => s.id === config.serverId)?.name ??
-                                           targets.servers.find((s) => s.id === config.serverId)?.sshHost ?? null)
-                                        : null
-                                    }
+                                    serverName={(() => {
+                                        // Resolve the selected server by id; if id isn't set yet but
+                                        // there's exactly one server, use it (covers the paint before
+                                        // the single-server auto-select effect wires serverId).
+                                        const s = config.serverId
+                                            ? targets.servers.find((x) => x.id === config.serverId)
+                                            : targets.servers.length === 1
+                                                ? targets.servers[0]
+                                                : undefined;
+                                        return s?.name ?? s?.sshHost ?? null;
+                                    })()}
                                     onEdit={() => {
                                         // User explicitly came back to change something - don't
                                         // auto-skip them past the picker again.
@@ -313,43 +363,7 @@ const DeployRepository: React.FC = () => {
                                 />
                             )}
 
-                            {/* App flow: framework picker + build settings */}
-                            {config.projectType === "app" && (
-                                <>
-                                    <ProjectSettings />
-                                    <BuildSettings />
-                                </>
-                            )}
-
-                            {/* Docker flow: single Dockerfile, just port */}
-                            {config.projectType === "docker" && (
-                                <DockerSettings />
-                            )}
-
-                            {/* Services flow: shared env + compose parsed services */}
-                            {config.projectType === "services" && (
-                                <ComposeServices />
-                            )}
-
-                            {/* Monorepo flow: workspace header + per-sub-app cards */}
-                            {isMonorepoFlow && (
-                                <MonorepoApps />
-                            )}
-
-                            {/* Global env vars - service-stack (compose with mode="services")
-                                and monorepo per-app mode own their own env scoping. In
-                                SINGLE-app mode (either compose-single or monorepo-single)
-                                the project deploys as one container with one env set, so
-                                the global editor renders. */}
-                            {!isServiceDeployment &&
-                                !(isMonorepoFlow && config.serviceDeploymentMode !== "single") && (
-                                <EnvironmentVariables collapsible />
-                            )}
-                            <ProjectName />
-                            {/* Routing (single-domain rewrites/redirects/headers). Kept LAST and
-                                only rendered when rules were actually detected — advanced and
-                                optional, so it stays out of the main config flow. */}
-                            {(config.projectType === "app" || isMonorepoFlow) && <RoutingSection />}
+                            {deploymentSections}
                         </div>
                         <Sidebar />
                     </div>

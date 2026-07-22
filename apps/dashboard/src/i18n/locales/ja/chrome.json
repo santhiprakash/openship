@@ -19,7 +19,8 @@
     "current": "現在",
     "cloudLabel": "クラウド: {email}",
     "linkedToCloud": "{email} として Openship Cloud に連携済み",
-    "backToSetup": "セットアップに戻る"
+    "backToSetup": "セットアップに戻る",
+    "personal": "個人"
   },
   "migration": {
     "inProgressTitle": "移行中",
@@ -43,6 +44,7 @@
     "descGlobal": "お探しのページは存在しないか、移動されました。",
     "descDashboard": "このページは存在しないか、移動された可能性があります。URLを確認するか、ダッシュボードに戻ってください。",
     "backToDashboard": "ダッシュボードに戻る",
-    "viewDeployments": "デプロイを表示"
+    "viewDeployments": "デプロイを表示",
+    "copyId": "IDをコピー"
   }
 }

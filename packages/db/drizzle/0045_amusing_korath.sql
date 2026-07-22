@@ -1,0 +1,1 @@
+ALTER TABLE "service" ADD COLUMN "public_endpoints" jsonb DEFAULT '[]'::jsonb;

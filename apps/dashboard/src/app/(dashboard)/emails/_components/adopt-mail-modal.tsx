@@ -105,8 +105,8 @@ export function AdoptMailModal({
         </button>
 
         {result?.adoptable && (
-          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-foreground space-y-1.5">
-            <div className="flex items-center gap-2 font-medium text-emerald-600 dark:text-emerald-400">
+          <div className="rounded-xl border border-success-border bg-success-bg p-4 text-sm text-foreground space-y-1.5">
+            <div className="flex items-center gap-2 font-medium text-success">
               <CheckCircle2 className="size-4" /> {t.emails.adopt.detected}
             </div>
             <p>

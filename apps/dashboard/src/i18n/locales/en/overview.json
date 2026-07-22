@@ -31,7 +31,49 @@
     "createLabel": "New Project",
     "settingsText": "Set up environment variables and custom domains in project settings.",
     "settingsLabel": "Project Settings",
-    "connected": "Connected"
+    "connected": "Connected",
+    "tips": {
+      "envVars": {
+        "text": "Add encrypted environment variables and secrets to any project.",
+        "label": "Open projects"
+      },
+      "customDomain": {
+        "text": "Point a custom domain at a project — HTTPS is provisioned automatically.",
+        "label": "Open projects"
+      },
+      "autoDeploy": {
+        "text": "Connect GitHub to auto-deploy every push, no CI to wire up.",
+        "label": "Open Git settings"
+      },
+      "rollback": {
+        "text": "Roll back to any previous deployment in one click.",
+        "label": "View deployments"
+      },
+      "apps": {
+        "text": "Install self-hosted apps like Gitea, n8n, and Metabase in one click.",
+        "label": "Browse apps"
+      },
+      "servers": {
+        "text": "Connect your own servers over SSH and deploy to them from here.",
+        "label": "Manage servers"
+      },
+      "jobs": {
+        "text": "Schedule commands with cron jobs — retries, live logs, and history included.",
+        "label": "Open jobs"
+      },
+      "backups": {
+        "text": "Set up automatic backups for your databases and volumes.",
+        "label": "Configure backups"
+      },
+      "mail": {
+        "text": "Run your own mail server and webmail, fully self-hosted.",
+        "label": "Set up mail"
+      },
+      "team": {
+        "text": "Invite teammates and scope their access per project.",
+        "label": "Manage team"
+      }
+    }
   },
   "welcome": {
     "title": "Launch your first project",
@@ -98,5 +140,13 @@
     "title": "Token Usage",
     "lastNDays": "last {period} days",
     "tokensTooltip": "{count} tokens"
+  },
+  "updates": {
+    "title": "Updates available",
+    "updateAction": "Update",
+    "updating": "Updating…",
+    "newVersion": "New version",
+    "started": "Updating {name}…",
+    "failed": "Couldn't start the update. Please try again."
   }
 }

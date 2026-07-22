@@ -11,9 +11,13 @@ import type { Context } from "hono";
 import { env } from "../../../config";
 import { getRequestContext } from "../../../lib/request-context";
 import { listWebmailTargets } from "./webmail.service";
-import { startWebmailDeploy } from "./webmail-project.service";
+import {
+  startWebmailDeploy,
+  startExternalWebmailDeploy,
+} from "./webmail-project.service";
 
 const HOSTNAME_RE = /^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$/;
+const portOk = (n: number) => Number.isInteger(n) && n >= 1 && n <= 65535;
 
 // ─── GET /mail/webmail/targets ───────────────────────────────────────────────
 
@@ -93,6 +97,77 @@ export async function startDeployAsProjectHandler(c: Context) {
       hostname,
       internalPort,
       target,
+    });
+    return c.json({ deploymentId, projectId });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to start deploy";
+    return c.json({ error: message }, 500);
+  }
+}
+
+// ─── POST /mail/webmail/deploy-external ──────────────────────────────────────
+
+/**
+ * Deploy the Zero webmail UI pointed at an EXTERNAL IMAP/SMTP backend — the
+ * "Connect existing" provider path (Amazon SES for send + a read IMAP host, or
+ * a fully custom backend). No mail server / iRedMail install required.
+ *
+ * Body:
+ *   {
+ *     hostname: string,                       // public host for the webmail UI
+ *     backend: {
+ *       provider: "ses" | "custom",
+ *       imapHost, imapPort, smtpHost, smtpPort
+ *     },
+ *     target: { deployTarget: "server"|"cloud"|"local", serverId? },
+ *     internalPort?: number
+ *   }
+ */
+export async function startExternalDeployAsProjectHandler(c: Context) {
+  if (env.CLOUD_MODE) return c.json({ error: "Not available" }, 404);
+
+  const ctx = getRequestContext(c);
+  const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+
+  const hostname = (body.hostname as string | undefined)?.trim().toLowerCase();
+  if (!hostname || !HOSTNAME_RE.test(hostname))
+    return c.json({ error: "Invalid domain" }, 400);
+
+  const backendBody = body.backend as Record<string, unknown> | undefined;
+  const provider = backendBody?.provider;
+  const imapHost = (backendBody?.imapHost as string | undefined)?.trim().toLowerCase();
+  const smtpHost = (backendBody?.smtpHost as string | undefined)?.trim().toLowerCase();
+  const imapPort = Number(backendBody?.imapPort);
+  const smtpPort = Number(backendBody?.smtpPort);
+  if (provider !== "ses" && provider !== "custom")
+    return c.json({ error: "backend.provider must be \"ses\" or \"custom\"" }, 400);
+  if (!imapHost || !HOSTNAME_RE.test(imapHost))
+    return c.json({ error: "Invalid IMAP host" }, 400);
+  if (!smtpHost || !HOSTNAME_RE.test(smtpHost))
+    return c.json({ error: "Invalid SMTP host" }, 400);
+  if (!portOk(imapPort)) return c.json({ error: "Invalid IMAP port" }, 400);
+  if (!portOk(smtpPort)) return c.json({ error: "Invalid SMTP port" }, 400);
+
+  const targetBody = body.target as { deployTarget?: string; serverId?: string } | undefined;
+  const dt = targetBody?.deployTarget;
+  if (dt !== "server" && dt !== "cloud" && dt !== "local")
+    return c.json({ error: "target.deployTarget must be \"server\", \"cloud\", or \"local\"" }, 400);
+  if (dt === "server" && !targetBody?.serverId)
+    return c.json({ error: "target.serverId is required for a server target" }, 400);
+
+  let internalPort: number | undefined;
+  if (body.internalPort !== undefined && body.internalPort !== null) {
+    const p = Number(body.internalPort);
+    if (!portOk(p)) return c.json({ error: "Invalid internal port" }, 400);
+    internalPort = p;
+  }
+
+  try {
+    const { deploymentId, projectId } = await startExternalWebmailDeploy(ctx, {
+      hostname,
+      backend: { provider, imapHost, imapPort, smtpHost, smtpPort },
+      target: { deployTarget: dt, serverId: targetBody?.serverId },
+      internalPort,
     });
     return c.json({ deploymentId, projectId });
   } catch (err) {

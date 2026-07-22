@@ -35,11 +35,16 @@ import { backupCommand } from "./commands/backup";
 // Access & escape hatch
 import { tokenCommand } from "./commands/token";
 import { apiCommand } from "./commands/api";
+import { resetAdminCommand } from "./commands/reset-admin";
 
 // Distribution
 import { installCommand } from "./commands/install";
 import { updateCommand } from "./commands/update";
 import { cacheCommand } from "./commands/cache";
+
+// Interactive setup / control (bare `openship`)
+import { runWizard, runControl } from "./commands/wizard";
+import { serviceStatus } from "./lib/service";
 
 // Injected at build time by tsup (define). Always present in the built binary.
 declare const __CLI_VERSION__: string;
@@ -53,6 +58,12 @@ program
   .option("--json", "Machine-readable JSON output (stdout data only)")
   .hook("preAction", (thisCommand) => {
     if (thisCommand.opts().json) setJsonMode(true);
+  })
+  // Bare `openship` (no subcommand): setup wizard on a fresh box, or the control
+  // panel once a service is already installed (manage instead of starting over).
+  .action(async () => {
+    if (serviceStatus().installed) await runControl();
+    else await runWizard();
   });
 
 // Run the platform / auth / workspace
@@ -87,6 +98,7 @@ program.addCommand(backupCommand);
 // Access + escape hatch
 program.addCommand(tokenCommand);
 program.addCommand(apiCommand);
+program.addCommand(resetAdminCommand);
 
 // `cache` is a maintenance concern of `install`, not a top-level verb.
 installCommand.addCommand(cacheCommand);

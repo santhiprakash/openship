@@ -249,7 +249,7 @@ export default function MachineSettingsModal({
               <span className="text-sm text-black/40">{w.creditsPerMonth}</span>
             </div>
             {hasChanges && creditsDiff !== 0 && (
-              <p className={`text-sm ${creditsDiff > 0 ? 'text-black/50' : 'text-emerald-600'}`}>
+              <p className={`text-sm ${creditsDiff > 0 ? 'text-black/50' : 'text-success'}`}>
                 {creditsDiff > 0 ? `+${formatCredits(creditsDiff)}` : `-${formatCredits(Math.abs(creditsDiff))}`} {w.fromCurrent}
               </p>
             )}

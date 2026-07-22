@@ -1,4 +1,35 @@
 {
+  "github": {
+    "title": "Acceso a GitHub",
+    "desc": "Cómo este servidor se autentica en GitHub para clonar repos privados.",
+    "loadFailed": "No se pudo cargar el estado de GitHub",
+    "connected": "Conectado",
+    "modeToken": "Token",
+    "modeSshKey": "Clave SSH",
+    "modeDeployKey": "Claves de despliegue",
+    "connectDevice": "Conectar con GitHub",
+    "deviceHint": "Abre el enlace e introduce este código:",
+    "open": "Abrir GitHub",
+    "connecting": "Esperando autorización…",
+    "connectFailed": "Error de conexión",
+    "connectedToast": "GitHub conectado para este servidor",
+    "patPlaceholder": "ghp_… (pega un token)",
+    "patHint": "Un token de acceso personal guardado cifrado para este servidor.",
+    "save": "Guardar",
+    "savedToast": "Guardado",
+    "saveFailed": "Error al guardar",
+    "tokenAs": "Autenticado como",
+    "sshGenerate": "Generar clave SSH",
+    "sshAddHint": "Añade esta clave a tu cuenta de GitHub y luego despliega:",
+    "openGithubKeys": "Abrir claves SSH de GitHub",
+    "copy": "Copiar",
+    "deployKeyUse": "Usar claves de despliegue por repo",
+    "deployKeyHint": "Openship registra una clave de despliegue de solo lectura en cada repo la primera vez que despliega.",
+    "deployKeyActive": "Modo clave de despliegue activo — las claves se crean en el primer despliegue.",
+    "deployKeysRegistered": "claves de despliegue registradas",
+    "disconnect": "Desconectar",
+    "disconnectedToast": "GitHub desconectado"
+  },
   "list": {
     "title": "Servidores",
     "subtitle": "Gestiona tus servidores de despliegue e infraestructura",
@@ -19,7 +50,14 @@
     "serverOverview": "Resumen del servidor",
     "totalServers": "Total de servidores",
     "connectedLabel": "Conectados",
-    "errors": "Errores"
+    "errors": "Errores",
+    "checking": "Comprobando",
+    "online": "En línea",
+    "offline": "Desconectado",
+    "authKey": "clave",
+    "authPassword": "contraseña",
+    "projects": "Proyectos",
+    "regions": "Regiones"
   },
   "form": {
     "sshConnection": "Conexión SSH",
@@ -68,6 +106,7 @@
     "tabs": {
       "overview": "Resumen",
       "components": "Componentes",
+      "github": "Git",
       "security": "Seguridad",
       "ports": "Puertos",
       "terminal": "Terminal"
@@ -77,6 +116,7 @@
     "edit": "Editar",
     "removeServer": "Eliminar servidor",
     "serverNotFound": "Servidor no encontrado",
+    "serverNotFoundDesc": "Este servidor no está en tu espacio de trabajo o no tienes acceso a él. Es posible que se haya eliminado.",
     "noServerConfigured": "No hay ningún servidor configurado con el id “{id}”.",
     "editServer": "Editar servidor",
     "editSubtitle": "Actualiza los detalles de conexión de {name}",
@@ -267,6 +307,8 @@
     "autoDesc": "Comprueba los requisitos e instala todo automáticamente. Un clic: Openship se encarga de Docker, OpenResty y Git.",
     "stepTitle": "Configuración paso a paso",
     "stepDesc": "Revisa cada componente y elige qué instalar. Consulta el estado detallado antes de continuar.",
+    "skipTitle": "Omitir por ahora",
+    "skipDesc": "Agrega el servidor sin instalar nada — solo monitorea su estado. Puedes ejecutar la configuración más tarde desde la página del servidor.",
     "connecting": "Conectando al servidor…",
     "runningChecks": "Ejecutando comprobaciones de estado del sistema por SSH",
     "connectionFailed": "Error de conexión",
@@ -318,5 +360,17 @@
     "serverCheck": "Comprobación del servidor",
     "security": "Seguridad",
     "portForwarding": "Reenvío de puertos"
+  },
+  "tabsNav": {
+    "servers": "Servidores",
+    "cluster": "Clúster",
+    "networking": "Red"
+  },
+  "comingSoon": {
+    "badge": "Próximamente",
+    "clusterTitle": "Clústeres",
+    "clusterBody": "Agrupa servidores en un clúster y deja que Openship programe y equilibre los despliegues entre ellos.",
+    "networkingTitle": "Red",
+    "networkingBody": "Enlaces privados, enrutamiento en malla y reglas de firewall entre tus servidores, gestionados en un solo lugar."
   }
 }

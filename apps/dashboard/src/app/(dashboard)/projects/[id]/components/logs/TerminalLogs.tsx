@@ -67,7 +67,7 @@ export const TerminalLogs: React.FC<TerminalLogsProps> = ({
     } = useProjectSettings();
 
     const { resolvedTheme } = useTheme();
-    const isDarkMode = resolvedTheme === "dark";
+    const isDarkMode = resolvedTheme !== "light"; // dim + dark both use the dark terminal
 
     const [searchQuery, setSearchQuery] = useState("");
     const [hasMatches, setHasMatches] = useState(false);
@@ -698,15 +698,15 @@ export const TerminalLogs: React.FC<TerminalLogsProps> = ({
 
                             <div className="flex items-center gap-2 sm:gap-3">
                                 <div className="flex items-center gap-2">
-                                    <div className={`w-2 h-2 rounded-full ${terminalLogsData.isStreaming ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground/30'}`}></div>
+                                    <div className={`w-2 h-2 rounded-full ${terminalLogsData.isStreaming ? 'bg-success-solid animate-pulse' : 'bg-muted-foreground/30'}`}></div>
                                     <span className="text-xs text-muted-foreground font-mono hidden sm:inline">{interpolate(t.projectDetail.logs.terminal.lines, { count: String(terminalLogsData.logs.length) })}</span>
                                 </div>
 
                                 <button
                                     onClick={toggleStreaming}
                                     className={`flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-lg font-medium text-xs transition-all ${terminalLogsData.isStreaming
-                                        ? 'bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30'
-                                        : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30'
+                                        ? 'bg-danger-bg hover:bg-danger-bg text-danger border border-danger-border'
+                                        : 'bg-success-bg hover:bg-success-bg text-success border border-success-border'
                                         }`}
                                 >
                                     {terminalLogsData.isStreaming ? (

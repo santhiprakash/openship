@@ -74,6 +74,10 @@
     "disconnectAppBody": "这会移除 Openship OAuth 账户记录。GitHub App 安装会保留，直到你在 GitHub 上卸载它。",
     "cloudExplainer": "Openship GitHub App 归 openship.io 所有。将你的实例连接到 Openship Cloud，即可使用受限的安装令牌来克隆私有仓库（本地和远程部署均可用）。",
     "connectCloud": "连接 Openship Cloud",
+    "noCloudTitle": "无需云连接克隆私有仓库",
+    "useSshPerServer": "每台服务器的 SSH 密钥",
+    "usePat": "访问令牌",
+    "noCloudHint": "在每台服务器上配置 SSH 密钥（服务器 → GitHub），或添加可用于本地和远程部署的个人访问令牌。",
     "linkExplainer": "关联你的 GitHub 账户以导入代码仓库、启用推送时自动部署，并直接在仪表盘中管理分支。",
     "connecting": "正在连接…",
     "connect": "连接 GitHub",
@@ -282,6 +286,14 @@
       "saveLabel": "保存访问权限"
     },
     "confirmRemove": "将此成员从组织中移除？",
+    "workspace": {
+      "deleteWorkspace": "删除工作区",
+      "leaveWorkspace": "退出工作区",
+      "deleteBody": "永久删除此工作区及其中的所有内容。",
+      "leaveBody": "退出此工作区 —— 需要新的邀请才能重新加入。",
+      "deleteConfirm": "删除此工作区？其项目、成员和设置将对所有人移除。此操作无法撤销。",
+      "leaveConfirm": "退出此工作区？在再次收到邀请之前你将无法访问。"
+    },
     "toast": {
       "teamNameRequired": "团队名称为必填项",
       "teamCreated": "团队 \"{name}\" 已创建 —— 正在切换…",
@@ -291,7 +303,12 @@
       "removeFailed": "移除失败",
       "cancelFailed": "取消失败",
       "accessUpdated": "访问权限已更新",
-      "loadGrantsFailed": "加载授权失败"
+      "loadGrantsFailed": "加载授权失败",
+      "deleteFailed": "无法删除工作区",
+      "deleteBillingActive": "请先取消此工作区的有效订阅，然后再删除它。",
+      "deleted": "工作区已删除",
+      "leaveFailed": "无法退出工作区",
+      "left": "已退出工作区"
     }
   },
   "inviteMember": {
@@ -318,6 +335,7 @@
     "toast": {
       "failedSend": "发送邀请失败",
       "invitationSent": "邀请已发送至 {email}",
+      "personalOrgBlocked": "个人工作区无法邀请成员。请先创建团队组织，然后再发送邀请。",
       "updateMailSourceFailed": "更新邮件来源失败"
     }
   },
@@ -328,7 +346,8 @@
     "currentMode": "当前模式",
     "singleUserLocal": "单用户（本地）",
     "migrate": "迁移",
-    "ownerOnlyTitle": "只有工作区所有者可以迁移"
+    "ownerOnlyTitle": "只有工作区所有者可以迁移",
+    "comingSoon": "直接链接到远程实例即将推出。"
   },
   "cloud": {
     "checking": "正在检查…",

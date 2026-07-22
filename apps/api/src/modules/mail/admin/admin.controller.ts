@@ -53,6 +53,15 @@ import {
   getDomainDnsState,
   listPendingDomainDns,
 } from "./domain-dns.service";
+import {
+  configureOutboundRelay,
+  disableOutboundRelay,
+  getOutboundRelay,
+  type ConfigureRelayInput,
+} from "./outbound-relay.service";
+import { sshManager } from "../../../lib/ssh-manager";
+import { decrypt } from "../../../lib/encryption";
+import { readState } from "../mail-state";
 
 /**
  * Org-scoped guard: confirms the path's :serverId belongs to the caller's
@@ -260,6 +269,126 @@ export async function pendingDomainDnsHandler(c: Context) {
     return c.json({
       pending: pending.map(({ domain, state }) => ({ domain, ...state })),
     });
+  } catch (err) {
+    return errorJson(c, err);
+  }
+}
+
+// ─── Outbound relay (split delivery: self-host inbox + SES/SMTP send) ─────────
+
+/** GET the current outbound relay config (masked — never returns the password). */
+export async function getOutboundRelayHandler(c: Context) {
+  const guard = assertNotCloud(c);
+  if (guard) return guard;
+  const serverId = param(c, "serverId");
+  await permission.assert(getRequestContext(c), { resourceType: "mail_server", resourceId: serverId, action: "read" });
+  const ctx = getRequestContext(c);
+  if (!(await isServerInOrg(ctx, serverId))) {
+    return c.json({ error: "Server not found" }, 404);
+  }
+  try {
+    const relay = await sshManager.withExecutor(serverId, (exec) => getOutboundRelay(exec));
+    return c.json({ relay });
+  } catch (err) {
+    return errorJson(c, err);
+  }
+}
+
+/**
+ * Enable / update the outbound relay. Mutates Postfix on the mail server, so
+ * it's gated at "admin". A blank password on update keeps the stored one
+ * (mirrors the instance-SMTP "leave blank to keep" convention).
+ */
+export async function putOutboundRelayHandler(c: Context) {
+  const guard = assertNotCloud(c);
+  if (guard) return guard;
+  const serverId = param(c, "serverId");
+  await permission.assert(getRequestContext(c), { resourceType: "mail_server", resourceId: serverId, action: "admin" });
+  const ctx = getRequestContext(c);
+  if (!(await isServerInOrg(ctx, serverId))) {
+    return c.json({ error: "Server not found" }, 404);
+  }
+  const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+  const provider = body.provider === "custom" ? "custom" : "ses";
+
+  // Resolve the effective plaintext password: use the submitted one, else fall
+  // back to the stored (encrypted) one so "change region only" doesn't require
+  // re-typing the SMTP password.
+  let password = typeof body.password === "string" ? body.password : "";
+  if (!password) {
+    try {
+      const state = await sshManager.withExecutor(serverId, (exec) => readState(exec));
+      const enc = state?.outboundRelay?.passwordEncrypted;
+      if (enc) password = decrypt(enc);
+    } catch {
+      /* fall through to the required-password error below */
+    }
+    if (!password) {
+      return c.json({ error: "Relay password is required." }, 400);
+    }
+  }
+
+  // Parse a list of {name,value} DKIM CNAME pairs from untrusted JSON.
+  const parseDkim = (v: unknown): { name: string; value: string }[] | undefined =>
+    Array.isArray(v)
+      ? (v as unknown[])
+          .filter((r): r is { name: string; value: string } =>
+            !!r && typeof r === "object" && typeof (r as { name?: unknown }).name === "string" && typeof (r as { value?: unknown }).value === "string")
+          .map((r) => ({ name: r.name, value: r.value }))
+      : undefined;
+
+  // Per-additional-domain SES identities: { "y.com": { mailFromDomain?, sesDkim? } }.
+  let identities: ConfigureRelayInput["identities"];
+  if (body.identities && typeof body.identities === "object" && !Array.isArray(body.identities)) {
+    identities = {};
+    for (const [dom, raw] of Object.entries(body.identities as Record<string, unknown>)) {
+      if (!raw || typeof raw !== "object") continue;
+      const r = raw as { mailFromDomain?: unknown; sesDkim?: unknown };
+      identities[dom] = {
+        mailFromDomain: typeof r.mailFromDomain === "string" && r.mailFromDomain ? r.mailFromDomain : undefined,
+        sesDkim: parseDkim(r.sesDkim),
+      };
+    }
+  }
+
+  const input: ConfigureRelayInput = {
+    provider,
+    scope: body.scope === "selected" ? "selected" : "all",
+    domains: Array.isArray(body.domains)
+      ? (body.domains as unknown[]).filter((d): d is string => typeof d === "string")
+      : undefined,
+    region: typeof body.region === "string" ? body.region : undefined,
+    host: typeof body.host === "string" ? body.host : undefined,
+    port: Number(body.port),
+    username: typeof body.username === "string" ? body.username : "",
+    password,
+    mailFromDomain: typeof body.mailFromDomain === "string" && body.mailFromDomain ? body.mailFromDomain : undefined,
+    sesDkim: parseDkim(body.sesDkim),
+    identities,
+  };
+
+  try {
+    await sshManager.withExecutor(serverId, (exec) => configureOutboundRelay(exec, input));
+    const relay = await sshManager.withExecutor(serverId, (exec) => getOutboundRelay(exec));
+    return c.json({ relay });
+  } catch (err) {
+    return errorJson(c, err);
+  }
+}
+
+/** Disable the outbound relay — revert Postfix to direct-to-MX. */
+export async function deleteOutboundRelayHandler(c: Context) {
+  const guard = assertNotCloud(c);
+  if (guard) return guard;
+  const serverId = param(c, "serverId");
+  await permission.assert(getRequestContext(c), { resourceType: "mail_server", resourceId: serverId, action: "admin" });
+  const ctx = getRequestContext(c);
+  if (!(await isServerInOrg(ctx, serverId))) {
+    return c.json({ error: "Server not found" }, 404);
+  }
+  try {
+    await sshManager.withExecutor(serverId, (exec) => disableOutboundRelay(exec));
+    return c.json({ ok: true });
   } catch (err) {
     return errorJson(c, err);
   }

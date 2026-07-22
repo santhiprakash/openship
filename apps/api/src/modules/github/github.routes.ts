@@ -11,7 +11,6 @@
  */
 
 import { Hono } from "hono";
-import { localOnly } from "../../middleware";
 import { secureRouter } from "../../lib/secure-router";
 import * as ctrl from "./github.controller";
 
@@ -22,8 +21,8 @@ const r = secureRouter(new Hono(), {
 
 /* ─── Status / Connection ──────────────────────────────────────────────── */
 r.get("/status", { tag: "github:read", mcp: { description: "GitHub connection status for the org." } }, ctrl.getStatus);
-r.get("/local-status", { tag: "github:read" }, localOnly, ctrl.getLocalStatus);
-r.get("/connect/poll", { tag: "github:read" }, localOnly, ctrl.pollConnect);
+r.get("/local-status", { tag: "github:read", localOnly: true }, ctrl.getLocalStatus);
+r.get("/connect/poll", { tag: "github:read", localOnly: true }, ctrl.pollConnect);
 r.get("/home", { tag: "github:read", mcp: { description: "GitHub home: connection state, accounts, and repos in one call." } }, ctrl.getHome);
 r.post("/connect", { tag: "github:write" }, ctrl.connect);
 r.public("get", "/connect/redirect", { reason: "GitHub OAuth callback - no session yet during redirect" }, ctrl.connectRedirect);

@@ -43,7 +43,7 @@ export interface MigrateInstanceInput {
 
 export interface MigrateInstanceResult {
   projectId: string;
-  appId: string;
+  groupId: string;
   migrationTargetUrl: string;
 }
 
@@ -91,7 +91,7 @@ export async function migrateInstanceToServer(
       }
 
       // ── 2. Project row + reconciled config ───────────────────────────────
-      const { projectId, appId, project } = await ensureOpenshipProject(
+      const { projectId, groupId, project } = await ensureOpenshipProject(
         ctx.input.organizationId,
       );
 
@@ -132,7 +132,7 @@ export async function migrateInstanceToServer(
           migrationServerId: ctx.input.serverId,
           migratedAt: new Date(),
         },
-        result: { projectId, appId, migrationTargetUrl },
+        result: { projectId, groupId, migrationTargetUrl },
         auditAfter: { serverId: ctx.input.serverId },
       };
     },

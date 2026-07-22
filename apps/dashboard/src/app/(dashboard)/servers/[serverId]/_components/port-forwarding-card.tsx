@@ -213,7 +213,7 @@ export function PortForwardingCard({ serverId }: { serverId: string }) {
                     <div className="flex items-center gap-2">
                       <span
                         className={`size-2 rounded-full shrink-0 ${
-                          t.running ? "bg-emerald-500" : "bg-muted-foreground/40"
+                          t.running ? "bg-success-solid" : "bg-muted-foreground/40"
                         }`}
                         title={t.running ? tr.servers.ports.running : tr.servers.ports.stopped}
                       />
@@ -259,7 +259,7 @@ export function PortForwardingCard({ serverId }: { serverId: string }) {
                         onClick={() => void handleStart(t)}
                         disabled={isBusy}
                         title={tr.servers.ports.start}
-                        className="w-7 h-7 rounded-lg hover:bg-muted flex items-center justify-center text-muted-foreground hover:text-emerald-600 disabled:opacity-50 transition-colors"
+                        className="w-7 h-7 rounded-lg hover:bg-muted flex items-center justify-center text-muted-foreground hover:text-success disabled:opacity-50 transition-colors"
                       >
                         {isBusy ? (
                           <Loader2 className="size-3.5 animate-spin" />
@@ -272,7 +272,7 @@ export function PortForwardingCard({ serverId }: { serverId: string }) {
                       onClick={() => void handleDelete(t)}
                       disabled={isBusy}
                       title={tr.servers.ports.remove}
-                      className="w-7 h-7 rounded-lg hover:bg-red-500/10 flex items-center justify-center text-muted-foreground hover:text-red-600 disabled:opacity-50 transition-colors"
+                      className="w-7 h-7 rounded-lg hover:bg-danger-bg flex items-center justify-center text-muted-foreground hover:text-danger disabled:opacity-50 transition-colors"
                     >
                       <Trash2 className="size-3.5" />
                     </button>

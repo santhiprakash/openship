@@ -33,7 +33,8 @@
     "sourceLocal": "Local",
     "services": "Serviços",
     "static": "Estático",
-    "standalone": "Autónomo"
+    "standalone": "Autónomo",
+    "updateAvailable": "Update"
   },
   "hosting": {
     "cloud": "Cloud",
@@ -108,6 +109,7 @@
     "production": "Produção",
     "lastDeploy": "Última Implementação",
     "tabs": {
+      "appSettings": "Definições",
       "overview": "Visão geral",
       "services": "Serviços",
       "domains": "Domínios",
@@ -185,7 +187,8 @@
     "topPaths": "Principais Caminhos",
     "requestCount": "{count} req",
     "statusActive": "Ativo",
-    "statusOff": "Desligado"
+    "statusOff": "Desligado",
+    "server": "Servidor"
   },
   "stats": {
     "serverRequests": "Pedidos ao Servidor",
@@ -266,6 +269,10 @@
     "newCommitTitle": "Novo commit disponível",
     "newCommitOn": "em",
     "newCommitDeployedOn": "— está implementado em",
+    "newVersionTitle": "Nova versão disponível",
+    "newVersionAvailable": "Uma versão mais recente está disponível:",
+    "newVersionDeployed": "— está implementado em",
+    "deployVersion": "Implementar nova versão",
     "deploying": "A implementar…",
     "redeployLatest": "Reimplementar a mais recente",
     "deployLatestTitle": "Implementar as Alterações Mais Recentes",

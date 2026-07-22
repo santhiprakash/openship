@@ -4,6 +4,26 @@
     "save": "Speichern",
     "cancel": "Abbrechen"
   },
+  "appSettings": {
+    "modeApp": "App-Einstellungen",
+    "modeDeployment": "Deployment",
+    "saveChanges": "Änderungen speichern",
+    "saving": "Wird gespeichert…",
+    "saved": "Einstellungen gespeichert",
+    "saveHint": "Speichern, um diese Änderungen zu sichern — sie werden bei der nächsten Bereitstellung der App wirksam.",
+    "applyNow": "Jetzt anwenden",
+    "applying": "Wird angewendet…",
+    "applied": "Änderungen werden angewendet",
+    "restartNote": "Jetzt anwenden, um die App mit den neuen Einstellungen neu zu starten, andernfalls werden sie bei der nächsten Bereitstellung wirksam.",
+    "redeployNote": "Beim Anwenden dieser Änderungen wird die App neu erstellt — danach müssen Sie sich möglicherweise erneut bei ihrem Dashboard oder ihrer CLI anmelden.",
+    "advancedShow": "Erweitert anzeigen",
+    "advancedHide": "Erweitert ausblenden",
+    "secretSet": "Festgelegt — leer lassen, um den aktuellen Wert beizubehalten",
+    "loadError": "App-Einstellungen konnten nicht geladen werden.",
+    "saveFailed": "Einstellungen konnten nicht gespeichert werden.",
+    "applyFailed": "Änderungen konnten nicht angewendet werden.",
+    "unmanaged": "Diese App hat noch keine konfigurierbaren Einstellungen."
+  },
   "advanced": {
     "projectInfo": {
       "title": "Projektinformationen",

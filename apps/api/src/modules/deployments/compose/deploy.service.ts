@@ -10,7 +10,7 @@
  */
 
 import { repos, type Deployment, type Domain, type Project, type Service } from "@repo/db";
-import { SYSTEM, resolveServiceHostnameLabel, type ComposeAdvanced } from "@repo/core";
+import { SYSTEM, resolveServiceHostnameLabel, resolvePublicUrlPlaceholders, type ComposeAdvanced } from "@repo/core";
 import {
   BuildLogger,
   DEFAULT_RESOURCE_CONFIG,
@@ -31,14 +31,17 @@ import {
 import { decryptEnvMap } from "../../../lib/encryption";
 import { isConnectionLoss } from "../../../lib/remote-state";
 import {
-  buildServiceRouteDomain,
+  buildServiceRouteDomains,
   createTrackedSslProvider,
   ensureRouteDomainRecord,
   toRoutedDomainInputs,
   type PlannedRouteDomain,
 } from "../../../lib/routing-domains";
+import { resolveServicePublicEndpoints } from "../../../lib/public-endpoints";
 import { ensureManagedEdgeProxy } from "../../../lib/managed-edge-proxy";
 import * as sessionManager from "../session-manager";
+import { auditPorts } from "../port-audit.service";
+import type { PortCheckResult } from "../../../lib/deployment-runtime";
 import { resolveServicePort } from "./domain-helpers";
 import { buildCompositeRegistration } from "./composite-route";
 import { serviceKind } from "./project-services";
@@ -69,6 +72,8 @@ export interface ComposeDeployResult {
   warning?: string;
   error?: string;
   publicUrl?: string;
+  /** Advisory per-service port-probe results (exposed services only). */
+  portChecks?: PortCheckResult[];
 }
 
 function topoSort(services: Service[]): Service[] {
@@ -130,6 +135,53 @@ function resolveServicePublicUrl(project: Project, service: Service): string | u
   return publicSlug ? `https://${publicSlug}.${SYSTEM.DOMAINS.CLOUD_DOMAIN}` : undefined;
 }
 
+/** Every public endpoint's assigned URL for a service, keyed by container port.
+ *  Free → https://<slug>.<cloud>, custom → https://<customDomain>. Powers the
+ *  per-(service,port) placeholder map so `{{publicUrl:backend:3211}}` resolves to
+ *  the 3211 route while `{{publicUrl:backend}}` stays the primary. */
+function resolveServiceEndpointUrls(project: Project, service: Service): Array<{ port: number; url: string }> {
+  const urls: Array<{ port: number; url: string }> = [];
+  for (const endpoint of resolveServicePublicEndpoints(service)) {
+    if (endpoint.port === undefined) continue;
+    if (endpoint.domainType === "custom") {
+      if (endpoint.customDomain) urls.push({ port: endpoint.port, url: `https://${endpoint.customDomain}` });
+      continue;
+    }
+    const slug = resolveServiceHostnameLabel(
+      project.slug ?? project.name,
+      service.name,
+      endpoint.domain ?? undefined,
+      serviceKind(service),
+    );
+    if (slug) urls.push({ port: endpoint.port, url: `https://${slug}.${SYSTEM.DOMAINS.CLOUD_DOMAIN}` });
+  }
+  return urls;
+}
+
+/** A service's public endpoints as DeployConfig entries (free slug resolved via
+ *  the hostname-label default, custom hostname passed through). */
+function serviceDeployPublicEndpoints(
+  project: Project,
+  service: Service,
+): Array<{ port: number; domain?: string; customDomain?: string; domainType: "free" | "custom" }> {
+  const out: Array<{ port: number; domain?: string; customDomain?: string; domainType: "free" | "custom" }> = [];
+  for (const endpoint of resolveServicePublicEndpoints(service)) {
+    if (endpoint.port === undefined) continue;
+    if (endpoint.domainType === "custom") {
+      out.push({ port: endpoint.port, customDomain: endpoint.customDomain, domainType: "custom" });
+      continue;
+    }
+    const slug = resolveServiceHostnameLabel(
+      project.slug ?? project.name,
+      service.name,
+      endpoint.domain ?? undefined,
+      serviceKind(service),
+    );
+    out.push({ port: endpoint.port, domain: slug, domainType: "free" });
+  }
+  return out;
+}
+
 function toDeployRestartPolicy(restart?: string): DeployConfig["restartPolicy"] {
   if (restart === "always" || restart === "on-failure" || restart === "no") {
     return restart;
@@ -164,8 +216,10 @@ function createServiceRuntimeConfig(opts: {
   image: string;
   environment: Record<string, string>;
   resources?: ResourceConfig;
+  /** Previous deployment's workspace id (cloud) — reuse to keep the disk. */
+  previousWorkspaceId?: string;
 }): MultiServiceDeployConfig {
-  const { project, dep, service, image, environment, resources } = opts;
+  const { project, dep, service, image, environment, resources, previousWorkspaceId } = opts;
   // Monorepo sub-apps store their long-running process in `startCommand`;
   // compose services in `command`. The DB invariant is that compose rows
   // never have `startCommand` set, so a single `??` chain covers both:
@@ -184,12 +238,17 @@ function createServiceRuntimeConfig(opts: {
     namespaceVolumes: service.namespaceVolumes,
     command: runtimeCommand,
     restart: service.restart ?? "unless-stopped",
+    // "update" trigger → force a fresh pull so a moved mutable tag (:latest/:1)
+    // actually rolls forward. Every other trigger stays pull-if-missing.
+    forcePull: dep.trigger === "update",
     advanced: service.advanced ?? undefined,
     resources,
     expose: service.exposed,
     publicPort: resolveServicePublicPort(service),
     publicSlug: resolveServicePublicSlug(project, service),
     customDomain: resolveServiceCustomDomain(service),
+    previousWorkspaceId,
+    dependsOn: (service.dependsOn as string[]) ?? undefined,
   };
 }
 
@@ -203,9 +262,8 @@ function createServiceDeployConfig(opts: {
   buildSessionId?: string;
 }): DeployConfig {
   const { project, dep, service, image, environment, resources, buildSessionId } = opts;
-  const publicPort = resolveServicePublicPort(service);
   const publicSlug = resolveServicePublicSlug(project, service);
-  const customDomain = resolveServiceCustomDomain(service);
+  const servicePublicEndpoints = service.exposed ? serviceDeployPublicEndpoints(project, service) : [];
 
   // Monorepo sub-apps carry their own framework + startCommand on the row;
   // compose rows have those columns null. A direct `??` chain falls through
@@ -227,14 +285,7 @@ function createServiceDeployConfig(opts: {
     resources: resources ?? DEFAULT_RESOURCE_CONFIG,
     restartPolicy: toDeployRestartPolicy(service.restart ?? undefined),
     runtimeName: publicSlug ?? `${project.slug}-${service.name}`,
-    publicEndpoints: service.exposed && publicPort
-      ? [{
-          port: publicPort,
-          domain: service.domainType === "custom" ? undefined : publicSlug,
-          customDomain: service.domainType === "custom" ? customDomain : undefined,
-          domainType: service.domainType === "custom" ? "custom" : "free",
-        }]
-      : undefined,
+    publicEndpoints: servicePublicEndpoints.length > 0 ? servicePublicEndpoints : undefined,
   };
 }
 
@@ -248,38 +299,44 @@ interface ServiceRouteContext {
   domainByHostname: Map<string, Domain>;
 }
 
-async function prepareServiceRoute(opts: {
+async function prepareServiceRoutes(opts: {
   project: Project;
   service: Service;
   runtimeName: string;
   routeContext?: ServiceRouteContext;
   logger: BuildLogger;
-}): Promise<PlannedRouteDomain | null> {
+}): Promise<PlannedRouteDomain[]> {
   const { project, service, runtimeName, routeContext, logger } = opts;
-  if (!routeContext) return null;
+  if (!routeContext) return [];
 
-  const route = buildServiceRouteDomain({
+  // One route per public endpoint (a multi-port service gets several). Ensure a
+  // domain record for each before it's registered.
+  const routes = buildServiceRouteDomains({
     project,
     service,
     runtimeName,
     usesManagedRouting: routeContext.usesManagedRouting,
-  });
-  if (!route) return null;
-
-  const domainKey = route.hostname.toLowerCase();
-  const beforeRecord = routeContext.domainByHostname.get(domainKey);
-  const domainRecord = await ensureRouteDomainRecord({
-    projectId: project.id,
-    route,
     domainByHostname: routeContext.domainByHostname,
   });
-  if (!beforeRecord && domainRecord) {
-    logger.log(`Created domain record for "${route.hostname}".\n`, "info", {
-      serviceName: service.name,
+
+  const ensured: PlannedRouteDomain[] = [];
+  for (const route of routes) {
+    const domainKey = route.hostname.toLowerCase();
+    const beforeRecord = routeContext.domainByHostname.get(domainKey);
+    const domainRecord = await ensureRouteDomainRecord({
+      projectId: project.id,
+      route,
+      domainByHostname: routeContext.domainByHostname,
     });
+    if (!beforeRecord && domainRecord) {
+      logger.log(`Created domain record for "${route.hostname}".\n`, "info", {
+        serviceName: service.name,
+      });
+    }
+    ensured.push(route);
   }
 
-  return route;
+  return ensured;
 }
 
 /**
@@ -305,6 +362,13 @@ export async function deployComposeServices(
      *  rest running and carry their previous runtime row forward. Undefined
      *  = full deploy (recreate every enabled service). */
     targetServiceIds?: Set<string>;
+    /** Decoupled single-service provision (add/Start one app, reusing the
+     *  ACTIVE deployment id — not a fresh one). Strictly scopes the run to
+     *  `targetServiceIds`: non-targets are never (re)deployed, marked
+     *  unavailable, or reaped, and the target's row is UPSERTed (the reused
+     *  deployment id may already carry a row for it). Never set by the full/
+     *  partial deploy pipeline (which always runs against a fresh deployment). */
+    strictScope?: boolean;
     routeOptions?: RouteRegistrationOptions;
   },
 ): Promise<ComposeDeployResult> {
@@ -342,6 +406,18 @@ export async function deployComposeServices(
   });
   logger.log(`Service group ready for ${project.slug}.\n`);
 
+  // The project's existing domain rows, keyed by hostname. This drives per-host
+  // SSL gating in BOTH the toolchain preflight (below) and the per-service route
+  // reconcile (routeContext), so it MUST be built before the preflight — the
+  // preflight needs to see a verified custom domain to install certbot (a mapless
+  // build would report provisionSsl=false and skip the ssl feature, leaving a
+  // verified custom service domain stuck on HTTP with no recovery path).
+  const needsDomainMap =
+    !!opts?.system || (!!opts?.routing && !!opts.ssl && typeof opts?.usesManagedRouting === "boolean");
+  const domainByHostname: Map<string, Domain> = needsDomainMap
+    ? new Map((await repos.domain.listByProject(project.id)).map((d) => [d.hostname.toLowerCase(), d]))
+    : new Map();
+
   // Ensure the server has the components this deploy needs — ONCE, before the
   // fan-out — mirroring the single-app deploy preflight (build-pipeline.ts
   // buildDeployEnvironment). Compose previously ensured nothing here, so on a
@@ -354,16 +430,15 @@ export async function deployComposeServices(
     const systemLog = (entry: { message: string; level: "info" | "warn" | "error" }) => {
       logger.log(`${entry.message}\n`, entry.level);
     };
-    const plannedRoutes = enabled
-      .map((svc) =>
-        buildServiceRouteDomain({
-          project,
-          service: svc,
-          runtimeName: runtime.name,
-          usesManagedRouting: opts.usesManagedRouting ?? false,
-        }),
-      )
-      .filter((route): route is PlannedRouteDomain => route !== null);
+    const plannedRoutes = enabled.flatMap((svc) =>
+      buildServiceRouteDomains({
+        project,
+        service: svc,
+        runtimeName: runtime.name,
+        usesManagedRouting: opts.usesManagedRouting ?? false,
+        domainByHostname,
+      }),
+    );
 
     await opts.system.ensureFeature("deploy", systemLog);
     if (plannedRoutes.length > 0) {
@@ -417,6 +492,7 @@ export async function deployComposeServices(
       .map((m) => m.serviceId as string),
   );
   const isExternalUnchanged = (svc: Service): boolean => {
+    if (dep.trigger === "update") return false; // update = force re-pull + recreate every image service
     if (opts?.targetServiceIds) return false; // smart subset already carries non-targets forward
     if (!carryAnchor) return false; // never deployed → deploy it
     if (svc.build || !svc.image) return false; // must be image-only (external); buildables always rebuild
@@ -430,10 +506,7 @@ export async function deployComposeServices(
 
   let routeContext: ServiceRouteContext | undefined;
   if (opts?.routing && opts.ssl && typeof opts.usesManagedRouting === "boolean") {
-    const projectDomains = await repos.domain.listByProject(project.id);
-    const domainByHostname = new Map(
-      projectDomains.map((domain) => [domain.hostname.toLowerCase(), domain]),
-    );
+    // Reuses the map built above (needsDomainMap covers this branch).
     routeContext = {
       routing: opts.routing,
       trackedSsl: createTrackedSslProvider(opts.ssl, domainByHostname),
@@ -446,6 +519,7 @@ export async function deployComposeServices(
   }
 
   const results: ComposeDeployResult["services"] = [];
+  const portChecks: PortCheckResult[] = [];
   let successful = 0;
   let firstPublicUrl: string | undefined;
   const seenRouteDomains = new Set<string>();
@@ -454,6 +528,22 @@ export async function deployComposeServices(
   // because the connection dropped mid-deploy. Not counted as failed — the
   // deploy resolves to `reconciling` and reconciliation reads the true state.
   const indeterminateServiceNames = new Set<string>();
+
+  // Each exposed service's assigned public URL, resolved up front so catalog-app
+  // env placeholders like `{{publicUrl:backend}}` can be substituted per service
+  // (Convex origins, dashboard→backend, Ghost/n8n URLs).
+  // Keyed by `name` (the service's PRIMARY route → the no-port token) AND
+  // `name:port` (each endpoint → `{{publicUrl:svc:port}}`), so Convex can wire
+  // CLOUD_ORIGIN→:3210 and SITE_ORIGIN→:3211.
+  const publicUrlByService = new Map<string, string>();
+  for (const s of ordered) {
+    const endpointUrls = resolveServiceEndpointUrls(project, s);
+    if (endpointUrls.length === 0) continue;
+    publicUrlByService.set(s.name, endpointUrls[0].url);
+    for (const { port, url } of endpointUrls) {
+      publicUrlByService.set(`${s.name}:${port}`, url);
+    }
+  }
 
   for (const svc of ordered) {
     // Ownership guard - ensure this service actually belongs to the project
@@ -499,6 +589,19 @@ export async function deployComposeServices(
           hostPort: carriedHostPort,
           ip: carriedIp,
         });
+        // Decoupled single-service add on a mesh runtime (cloud): this peer is
+        // carried (not redeployed), so it's absent from the group's in-memory
+        // mesh state. Seed it so the finalize pass rewrites the FULL mesh and
+        // the newly-added service and this peer can resolve each other by name.
+        // No-op on Docker (live DNS) — registerExistingWorkload is cloud-only.
+        if (opts?.strictScope) {
+          runtime.registerExistingWorkload?.(group, {
+            serviceName: svc.name,
+            workspaceId: carried.containerId,
+            ip: carriedIp ?? undefined,
+            portSpecs: (svc.ports as string[] | null) ?? undefined,
+          });
+        }
         results.push({
           serviceId: svc.id,
           serviceName: svc.name,
@@ -526,6 +629,16 @@ export async function deployComposeServices(
         { serviceName: svc.name },
       );
       // fall through → normal deploy (recreates from the previous image)
+    }
+
+    // Strict per-service scope (decoupled single-service provision): never
+    // deploy, fail, or mark unavailable a service we weren't asked to touch. A
+    // live sibling was already carried forward above; anything else (no prior
+    // row, or a dead container) is left exactly as-is — not redeployed. This
+    // is what keeps adding one app from re-deploying a freshly-added sibling
+    // (→ UNIQUE(deploymentId,serviceId) violation) or bouncing an unrelated one.
+    if (opts?.strictScope && opts.targetServiceIds && !opts.targetServiceIds.has(svc.id)) {
+      continue;
     }
 
     const blockedDependencies = ((svc.dependsOn as string[]) ?? []).filter((dependency) =>
@@ -571,12 +684,16 @@ export async function deployComposeServices(
 
     // Merge: shared project env → current deploy shared env → service env.
     // Service values intentionally win so the compose UI can override globals per service.
-    const mergedEnv: Record<string, string> = {
-      ...decryptedProjectEnv,
-      ...depEnv,
-      ...((svc.environment as Record<string, string>) ?? {}),
-      ...decryptedServiceEnv,
-    };
+    // Then resolve `{{publicUrl:<service>}}` placeholders to the assigned public URLs.
+    const mergedEnv: Record<string, string> = resolvePublicUrlPlaceholders(
+      {
+        ...decryptedProjectEnv,
+        ...depEnv,
+        ...((svc.environment as Record<string, string>) ?? {}),
+        ...decryptedServiceEnv,
+      },
+      (name, port) => publicUrlByService.get(port !== undefined ? `${name}:${port}` : name),
+    );
 
     const buildFailure = opts?.buildFailures?.get(svc.id);
     if (buildFailure) {
@@ -670,6 +787,13 @@ export async function deployComposeServices(
       image,
       environment: mergedEnv,
       resources: opts?.resources,
+      // Cloud stores the workspace id as the service's containerId. Reuse the
+      // previous deployment's workspace so its disk (volume data) survives the
+      // redeploy. Only meaningful on cloud; docker recreates containers.
+      previousWorkspaceId:
+        runtime.name === "cloud"
+          ? previousByServiceId.get(svc.id)?.containerId ?? undefined
+          : undefined,
     });
     const serviceDeployConfig = createServiceDeployConfig({
       project,
@@ -680,14 +804,16 @@ export async function deployComposeServices(
       resources: opts?.resources,
       buildSessionId: opts?.buildSessionId,
     });
-    let route = await prepareServiceRoute({
+    const preparedRoutes = await prepareServiceRoutes({
       project,
       service: svc,
       runtimeName: runtime.name,
       routeContext,
       logger,
     });
-    if (route) {
+    // Drop hostnames already claimed earlier in this deployment (two services
+    // can't share a domain).
+    const routes = preparedRoutes.filter((route) => {
       const routeKey = route.hostname.toLowerCase();
       if (seenRouteDomains.has(routeKey)) {
         logger.log(
@@ -695,16 +821,18 @@ export async function deployComposeServices(
           "warn",
           { serviceName: svc.name },
         );
-        route = null;
-      } else {
-        seenRouteDomains.add(routeKey);
+        return false;
       }
-    }
-    const routePort = resolveServicePublicPort(svc);
-    const proxyRoute = route && runtime.name !== "cloud" && routePort ? route : null;
-    if (route && runtime.name !== "cloud" && !routePort) {
+      seenRouteDomains.add(routeKey);
+      return true;
+    });
+    // Self-hosted proxy routes need a container port (cloud handles exposure via
+    // the runtime config). The pipeline fans out one upstream per distinct port.
+    const proxyRoutes =
+      runtime.name !== "cloud" ? routes.filter((route) => route.targetPort !== undefined) : [];
+    if (runtime.name !== "cloud" && routes.length > 0 && proxyRoutes.length === 0) {
       logger.log(
-        `Skipping route for service "${svc.name}" - no routable port configured.\n`,
+        `Skipping routes for service "${svc.name}" - no routable port configured.\n`,
         "warn",
         { serviceName: svc.name },
       );
@@ -716,7 +844,7 @@ export async function deployComposeServices(
       const previous = previousByServiceId.get(svc.id);
       let serviceResult: MultiServiceDeployResult | undefined;
       const serviceLogger = createServicePipelineLogger(logger, svc.name, svc.id);
-      const routeDomains = proxyRoute ? toRoutedDomainInputs([proxyRoute]) : [];
+      const routeDomains = toRoutedDomainInputs(proxyRoutes);
       const deployEnv: DeployEnvironment = {
         activate: async (_cfg, onLog) => {
           const result = await runtime.deployServiceWorkload(
@@ -734,7 +862,7 @@ export async function deployComposeServices(
         },
         deactivate: (containerId) => runtime.destroy(containerId),
         resolveTargetUrl:
-          proxyRoute && routePort && runtime.supports("containerIp")
+          proxyRoutes.length > 0 && runtime.supports("containerIp")
             ? async (containerId, port) => {
                 const ip =
                   serviceResult?.containerId === containerId
@@ -789,15 +917,32 @@ export async function deployComposeServices(
         status: "running",
       };
 
-      await repos.service.createServiceDeployment({
-        deploymentId: dep.id,
-        serviceId: svc.id,
-        containerId: result.containerId,
-        status: "success",
-        imageRef: image,
-        hostPort: result.hostPort ?? null,
-        ip: result.ip ?? null,
-      });
+      if (opts?.strictScope) {
+        // Reused (active) deployment id → a row for this service may already
+        // exist; upsert instead of INSERT to avoid a UNIQUE violation.
+        await repos.service.upsertServiceDeployment({
+          deploymentId: dep.id,
+          serviceId: svc.id,
+          serviceName: svc.name,
+          containerId: result.containerId,
+          status: "success",
+          imageRef: image,
+          imageDigest: result.imageDigest ?? null,
+          hostPort: result.hostPort ?? null,
+          ip: result.ip ?? null,
+        });
+      } else {
+        await repos.service.createServiceDeployment({
+          deploymentId: dep.id,
+          serviceId: svc.id,
+          containerId: result.containerId,
+          status: "success",
+          imageRef: image,
+          imageDigest: result.imageDigest ?? null,
+          hostPort: result.hostPort ?? null,
+          ip: result.ip ?? null,
+        });
+      }
 
       results.push({
         serviceId: svc.id,
@@ -822,6 +967,15 @@ export async function deployComposeServices(
         serviceName: svc.name,
       });
 
+      // Advisory: confirm an exposed service is actually listening on its public
+      // port, probed from inside its container/workspace. Never throws; only
+      // exposed services with a resolvable public port are probed + recorded.
+      const auditPort = resolveServicePublicPort(svc);
+      if (auditPort !== undefined && result.containerId) {
+        const [pc] = await auditPorts(runtime, result.containerId, [auditPort], logger);
+        if (pc) portChecks.push({ ...pc, serviceId: svc.id, serviceName: svc.name });
+      }
+
       if (previous?.imageRef && previous.imageRef !== image && runtime instanceof DockerRuntime) {
         await runtime.removeImage(previous.imageRef).catch((err) => {
           const message = err instanceof Error ? err.message : "Unknown error";
@@ -835,37 +989,35 @@ export async function deployComposeServices(
         });
       }
 
-      if (
-        proxyRoute &&
-        routeContext?.usesManagedRouting &&
-        proxyRoute.isCloud &&
-        proxyRoute.managedSubdomain
-      ) {
-        logger.log(`Syncing managed edge proxy for ${proxyRoute.hostname}...\n`, "info", {
-          serviceName: svc.name,
-        });
-        // Best-effort: the service container is already running and any
-        // custom domain is routed locally. The managed edge proxy only
-        // wires up the free .opsh.io URL via Openship Cloud — a cloud
-        // failure here (403 owner mismatch, slug taken, unreachable) must
-        // not flip a healthy service to "failed".
-        try {
-          await ensureManagedEdgeProxy(routeContext.organizationId, proxyRoute.managedSubdomain, {
-            serverId: routeContext.serverId,
+      // Sync the managed edge proxy for EACH free .opsh.io route (a multi-port
+      // service has several). Best-effort: the container is already running and
+      // any custom domain is routed locally; the edge proxy only wires up the
+      // free URL via Openship Cloud, so a failure here (403, slug taken,
+      // unreachable) must not flip a healthy service to "failed".
+      const managedRoutes = proxyRoutes.filter((r) => r.isCloud && r.managedSubdomain);
+      if (routeContext?.usesManagedRouting && managedRoutes.length > 0) {
+        for (const managedRoute of managedRoutes) {
+          logger.log(`Syncing managed edge proxy for ${managedRoute.hostname}...\n`, "info", {
+            serviceName: svc.name,
           });
-        } catch (edgeErr) {
-          const edgeMessage = edgeErr instanceof Error ? edgeErr.message : "Unknown error";
-          logger.log(
-            `Warning: could not sync managed edge proxy for ${proxyRoute.hostname}: ${edgeMessage}. ` +
-              `The service is live; this only affects the free ${proxyRoute.hostname} URL.\n`,
-            "warn",
-            { serviceName: svc.name },
-          );
+          try {
+            await ensureManagedEdgeProxy(routeContext.organizationId, managedRoute.managedSubdomain!, {
+              serverId: routeContext.serverId,
+            });
+          } catch (edgeErr) {
+            const edgeMessage = edgeErr instanceof Error ? edgeErr.message : "Unknown error";
+            logger.log(
+              `Warning: could not sync managed edge proxy for ${managedRoute.hostname}: ${edgeMessage}. ` +
+                `The service is live; this only affects the free ${managedRoute.hostname} URL.\n`,
+              "warn",
+              { serviceName: svc.name },
+            );
+          }
         }
       }
 
-      firstPublicUrl ??= proxyRoute
-        ? `https://${proxyRoute.hostname}`
+      firstPublicUrl ??= proxyRoutes[0]
+        ? `https://${proxyRoutes[0].hostname}`
         : runtime.name === "cloud"
           ? resolveServicePublicUrl(project, svc)
           : undefined;
@@ -946,6 +1098,23 @@ export async function deployComposeServices(
     }
   }
 
+  // Final service-mesh convergence pass (cloud only — docker has live DNS and
+  // implements no finalize). Now that every service's workspace exists, this
+  // re-resolves any late-assigned private IP and rewrites the full mesh
+  // (/etc/hosts + private links + ingress) so every peer is reachable by name —
+  // the per-service sync inside the loop only ever saw the IPs known at its
+  // moment, so a slow-to-assign IP would otherwise stay missing from the mesh.
+  if (runtime.finalizeServiceGroup) {
+    try {
+      await runtime.finalizeServiceGroup(group, logger.callback);
+    } catch (err) {
+      logger.log(
+        `Warning: service mesh finalize failed: ${err instanceof Error ? err.message : String(err)}\n`,
+        "warn",
+      );
+    }
+  }
+
   // Vercel-style single-domain composition: when the monorepo is exactly one
   // static frontend + one server backend, serve both on ONE domain (frontend at
   // `/`, backend reverse-proxied at `/api/` or the vercel.json rewrite prefix).
@@ -970,13 +1139,14 @@ export async function deployComposeServices(
         },
         resolveDomain: (serviceId) => {
           const svc = enabled.find((s) => s.id === serviceId);
+          // Composite (vercel-style single-domain) uses the service's PRIMARY route.
           const domain = svc
-            ? buildServiceRouteDomain({
+            ? buildServiceRouteDomains({
                 project,
                 service: svc,
                 runtimeName: runtime.name,
                 usesManagedRouting: routeContext.usesManagedRouting,
-              })
+              })[0] ?? null
             : null;
           return domain ? { hostname: domain.hostname, isCustomDomain: domain.domainType === "custom" } : null;
         },
@@ -1003,14 +1173,18 @@ export async function deployComposeServices(
     }
   }
 
-  for (const previous of previousServiceDeps) {
-    if (!previous.containerId || enabledServiceIds.has(previous.serviceId)) continue;
-    try {
-      await runtime.destroy(previous.containerId);
-      logger.log(`Stopped disabled service container (${previous.containerId.slice(0, 12)}).\n`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      logger.log(`Warning: failed to stop disabled service container: ${message}\n`, "warn");
+  // Skip all reaping under strict scope: adding/starting ONE service must never
+  // destroy another service's (or the main app's) container as a side effect.
+  if (!opts?.strictScope) {
+    for (const previous of previousServiceDeps) {
+      if (!previous.containerId || enabledServiceIds.has(previous.serviceId)) continue;
+      try {
+        await runtime.destroy(previous.containerId);
+        logger.log(`Stopped disabled service container (${previous.containerId.slice(0, 12)}).\n`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        logger.log(`Warning: failed to stop disabled service container: ${message}\n`, "warn");
+      }
     }
   }
 
@@ -1020,9 +1194,19 @@ export async function deployComposeServices(
   // (deployment.containerId) with no owner. Destroy it unless it's the
   // "compose" sentinel or one of the per-service containers already handled
   // (the compose→compose case, where prevDep.containerId IS a service row).
-  if (project.activeDeploymentId) {
+  if (project.activeDeploymentId && !opts?.strictScope) {
     const prevDep = await repos.deployment.findById(project.activeDeploymentId);
     const prevContainerId = prevDep?.containerId;
+    // Only reap when the predecessor was a GENUINE single-app deploy. If that
+    // deployment has any service_deployment rows, it was already a services
+    // deploy — its `containerId` is a SERVICE container (or the "compose"
+    // sentinel), NOT a lone single-app container. Stopping it here would kill a
+    // running service (e.g. a per-service Start/redeploy stopping its own
+    // container). This is what made adding a service to a single-app project
+    // stop the service it had just started.
+    const prevWasServices = prevDep
+      ? (await repos.service.listByDeployment(prevDep.id).catch(() => [])).length > 0
+      : false;
     const handledContainerIds = new Set(
       previousServiceDeps
         .map((row) => row.containerId)
@@ -1031,6 +1215,7 @@ export async function deployComposeServices(
     if (
       prevContainerId &&
       prevContainerId !== "compose" &&
+      !prevWasServices &&
       !handledContainerIds.has(prevContainerId)
     ) {
       try {
@@ -1080,6 +1265,7 @@ export async function deployComposeServices(
       services: results,
       warning: `Connection lost — verifying ${indeterminate.length} service(s): ${names}`,
       publicUrl: firstPublicUrl,
+      portChecks,
     };
   }
 
@@ -1113,5 +1299,6 @@ export async function deployComposeServices(
     warning,
     error: successful > 0 ? undefined : (firstFailure ?? "No services deployed successfully"),
     publicUrl: firstPublicUrl,
+    portChecks,
   };
 }

@@ -131,8 +131,8 @@ const GithubPermissionModal: React.FC<GithubPermissionModalProps> = ({
             </div>
           </button>
 
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4">
-            <p className="text-xs text-blue-900">
+          <div className="bg-info-bg border border-info-border rounded-lg p-4 mt-4">
+            <p className="text-xs text-info">
               <strong>{w.noteLabel}</strong> {w.noteText}
             </p>
           </div>

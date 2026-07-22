@@ -60,6 +60,17 @@ export type DeployableService = ComposeService & MonorepoSubAppFields & {
    * a service row.
    */
   enabled?: boolean;
+  /**
+   * Additional public routes beyond the primary (one per port) — a multi-port
+   * service (e.g. Convex's API 3210 + HTTP actions 3211). Entry[0] mirrors the
+   * scalar exposed/exposedPort/domain fields. Persisted by syncFromCompose.
+   */
+  publicEndpoints?: Array<{
+    port?: number | string | null;
+    domain?: string | null;
+    customDomain?: string | null;
+    domainType?: string | null;
+  }>;
 };
 
 /**

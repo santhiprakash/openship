@@ -28,6 +28,7 @@ import { projectsApi } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/api/client";
 import { Modal } from "@/components/ui/Modal";
 import { RepositoryList } from "../../../library/components/RepositoryList";
+import { AppSource } from "./AppSource";
 
 export const GitSettings = () => {
   const { gitData, refreshGit, id, projectData, updateProjectData } = useProjectSettings();
@@ -202,6 +203,13 @@ export const GitSettings = () => {
     );
   }
 
+  // Release/image apps (self-app, n8n, Convex, webmail…) deploy from a release
+  // or registry tag, not a pushable git repo — show their release source +
+  // version + update instead of the git-link/webhook UI.
+  if (projectData.isApp) {
+    return <AppSource />;
+  }
+
   if (!gitData.repository) {
     const handleLinkRepo = async (ownerLogin: string, repo: GitHubRepo) => {
       setIsLinking(true);
@@ -308,9 +316,9 @@ export const GitSettings = () => {
     <div className="space-y-5">
       {/* Install GitHub App banner - cloud-deployed projects that lack the app */}
       {projectData.deployTarget === "cloud" && !gitData.installationInstalled && (
-        <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 px-5 py-4">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10">
-            <AlertTriangle className="size-4 text-amber-500" />
+        <div className="flex items-start gap-3 rounded-2xl border border-warning-border bg-warning-bg px-5 py-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-warning-bg">
+            <AlertTriangle className="size-4 text-warning" />
           </div>
           <div className="min-w-0 flex-1">
             <h3 className="text-[14px] font-semibold text-foreground">{t.projectSettings.git.appBanner.title}</h3>
@@ -332,9 +340,9 @@ export const GitSettings = () => {
 
       {/* No webhook endpoint banner - local/private instances need a direct endpoint */}
       {gitData.webhookStrategy === "none" && (
-        <div className="flex items-start gap-3 rounded-2xl border border-blue-500/30 bg-blue-500/5 px-5 py-4">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-500/10">
-            <Globe className="size-4 text-blue-500" />
+        <div className="flex items-start gap-3 rounded-2xl border border-info-border bg-info-bg px-5 py-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-info-bg">
+            <Globe className="size-4 text-info" />
           </div>
           <div className="min-w-0 flex-1">
             <h3 className="text-[14px] font-semibold text-foreground">{t.projectSettings.git.webhookBanner.title}</h3>
@@ -352,25 +360,38 @@ export const GitSettings = () => {
           icon={Github}
           iconTone="primary"
         >
-          <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
+          <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3.5">
             <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">{t.projectSettings.git.source.repository}</div>
-            <div className="mt-2 flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <div className="truncate text-[14px] font-semibold text-foreground">{gitData.repository.name}</div>
-                <div className="mt-1 flex items-center gap-2 text-[12px] text-muted-foreground">
-                  <GitBranch className="size-3.5" />
-                  <span>{gitData.branch || "main"}</span>
-                </div>
-              </div>
-              <a
-                href={gitData.repository.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-foreground/[0.06] px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-foreground/[0.1]"
-              >
-                <ExternalLink className="size-3.5" />
-                {t.projectSettings.git.source.open}
-              </a>
+            {/* owner/repo as the prominent, clickable identity (opens on GitHub). */}
+            <a
+              href={gitData.repository.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group mt-1.5 inline-flex max-w-full items-center gap-2 underline-offset-4"
+            >
+              <span className="truncate text-[15px] font-semibold text-foreground transition-colors group-hover:text-primary group-hover:underline">
+                {gitData.repository.full_name || gitData.repository.name}
+              </span>
+              <ExternalLink className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
+            </a>
+            {/* Branch + latest commit at a glance — what's actually connected. */}
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <GitBranch className="size-3.5 shrink-0" />
+                {gitData.branch || "main"}
+              </span>
+              {gitData.recentCommits?.[0] && (
+                <>
+                  <span className="text-muted-foreground/40">·</span>
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <GitCommit className="size-3.5 shrink-0" />
+                    <code className="rounded bg-muted/50 px-1 py-px text-[10px] font-medium">
+                      {gitData.recentCommits[0].id?.slice(0, 7)}
+                    </code>
+                    <span className="truncate">{gitData.recentCommits[0].message?.split("\n")[0]}</span>
+                  </span>
+                </>
+              )}
             </div>
           </div>
 
@@ -418,7 +439,7 @@ export const GitSettings = () => {
                               >
                                 <Globe className="size-3.5 shrink-0" />
                                 {d.hostname}
-                                {d.ssl && <span className="ms-auto text-[11px] text-emerald-500">SSL</span>}
+                                {d.ssl && <span className="ms-auto text-[11px] text-success">SSL</span>}
                               </button>
                             ))}
                             {gitData.webhookDomain && (
@@ -705,7 +726,7 @@ export const GitSettings = () => {
                   type="button"
                   onClick={clearCloneToken}
                   disabled={savingCloneToken}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-1.5 text-[12px] font-medium text-red-600 transition-colors hover:bg-red-500/20 dark:text-red-400 disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-danger-bg px-3 py-1.5 text-[12px] font-medium text-danger transition-colors hover:bg-danger-bg disabled:opacity-50"
                 >
                   <Trash2 className="size-3" />
                   {t.projectSettings.git.cloneToken.clear}
@@ -721,7 +742,7 @@ export const GitSettings = () => {
 
 const ICON_TONES = {
   primary: "bg-primary/10 text-primary",
-  emerald: "bg-emerald-500/10 text-emerald-500",
+  emerald: "bg-success-bg text-success",
   orange: "bg-orange-500/10 text-orange-500",
 } as const;
 
@@ -786,7 +807,7 @@ function InfoCard({
     <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
-          <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${tone === "success" ? "bg-emerald-500/10 text-emerald-500" : "bg-primary/10 text-primary"}`}>
+          <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${tone === "success" ? "bg-success-bg text-success" : "bg-primary/10 text-primary"}`}>
             <Icon className="size-4" />
           </div>
           <div className="min-w-0">

@@ -2,6 +2,37 @@
  * Shared service routing helpers used by both the dashboard and API.
  */
 
+/**
+ * Catalog-app templates can declare env values referencing another service's
+ * assigned public URL — e.g. `CONVEX_CLOUD_ORIGIN: "{{publicUrl:backend}}"`, or a
+ * specific port with `{{publicUrl:backend:3211}}` (Convex serves the API on 3210
+ * and HTTP actions on 3211, each under its own domain). The URL is only known
+ * once routes are assigned at deploy time, so the compose deploy resolves these
+ * placeholders per (service, port) via `resolvePublicUrlPlaceholders`.
+ */
+const PUBLIC_URL_PLACEHOLDER = /\{\{\s*publicUrl:([a-zA-Z0-9_.-]+?)(?::(\d+))?\s*\}\}/g;
+
+/** Replace `{{publicUrl:<service>}}` / `{{publicUrl:<service>:<port>}}` tokens in
+ *  an env map with the resolved public URL for that service (and port, when
+ *  given). A token with no port resolves to the service's primary route.
+ *  Unknown services/ports resolve to an empty string (the value simply blanks
+ *  rather than shipping a literal placeholder). */
+export function resolvePublicUrlPlaceholders(
+  env: Record<string, string>,
+  urlForService: (serviceName: string, port?: number) => string | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    out[key] =
+      typeof value === "string"
+        ? value.replace(PUBLIC_URL_PLACEHOLDER, (_m, name, port) =>
+            urlForService(name, port ? Number(port) : undefined) ?? "",
+          )
+        : value;
+  }
+  return out;
+}
+
 /** Normalize any input into a valid DNS subdomain label. */
 export function normalizeServiceLabel(value: string): string {
   return value
@@ -36,6 +67,39 @@ export function defaultServiceHostnameLabel(
   }
 
   return `${base}-${normalizedService}`;
+}
+
+/**
+ * The first CONTAINER-side port from a compose-style ports list. Handles
+ * "8080", "3000:3000", "127.0.0.1:80:80", "5432/tcp" — always returns the port
+ * the process listens on inside the service, which is what a sibling connects
+ * to. Mirrors `firstContainerPort` in the cloud compose adapter.
+ */
+export function firstServicePort(ports: readonly string[] | undefined): number | undefined {
+  for (const spec of ports ?? []) {
+    const clean = spec.trim();
+    if (!clean) continue;
+    const parts = clean.split(":");
+    const raw = parts.length >= 2 ? parts[parts.length - 1] : parts[0];
+    const match = raw?.match(/^(\d+)(?:\/(?:tcp|udp))?$/i);
+    if (match) return Number(match[1]);
+  }
+  return undefined;
+}
+
+/**
+ * How ANOTHER service reaches this one on the internal network:
+ * `<service-name>:<port>`. The service NAME is the hostname (docker network
+ * alias / cloud `/etc/hosts` entry) — NOT the normalized public subdomain — so
+ * this is the exact string a sibling puts in `DATABASE_URL`, etc. Falls back to
+ * the bare name when no port is known.
+ */
+export function internalServiceAddress(
+  serviceName: string,
+  ports: readonly string[] | undefined,
+): string {
+  const port = firstServicePort(ports);
+  return port ? `${serviceName}:${port}` : serviceName;
 }
 
 /** Build the public hostname label for a service, preferring the explicit saved subdomain when present. */

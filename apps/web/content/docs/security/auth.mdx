@@ -146,12 +146,21 @@ no cookie to manage.
 
 This is safe only because it is gated twice, and both gates must pass:
 
-<Callout title="Both conditions are required" type="warn">
-1. **Opt-in.** The instance's auth mode must be `none`. This is the default for the desktop app; on any
+<Callout title="Every condition is required" type="warn">
+1. **Not CLI-managed or public.** Zero-auth is for the **desktop app only**. An instance started from the
+   CLI (`openship up` sets `OPENSHIP_REQUIRE_AUTH`) or served publicly (`--public-url` /
+   `OPENSHIP_PUBLIC_URL`) refuses zero-auth outright — it always requires a login.
+2. **Opt-in.** The instance's auth mode must be `none`. This is the default for the desktop app; on any
    other deployment it also requires the operator to set `OPENSHIP_ALLOW_ZERO_AUTH=true`.
-2. **Loopback only.** The request must come from a loopback address (`127.0.0.1` / `::1`), read from the
+3. **Loopback only.** The request must come from a loopback address (`127.0.0.1` / `::1`), read from the
    kernel-reported TCP peer — **not** the `Host` header, which a client or a misconfigured reverse proxy
    could forge. A request from anywhere else is rejected with `401`, even in zero-auth mode.
+</Callout>
+
+<Callout title="Why condition 1 exists" type="info">
+With `--public-url`, the dashboard's same-origin proxy runs **on the box**, so it reaches the API from
+loopback — which would otherwise slip past the loopback gate (condition 3). The explicit CLI/public refusal
+closes that hole, so a remote visitor can never land on the zero-auth path.
 </Callout>
 
 On a normal self-hosted install this path is never even reached: the auth mode defaults to `local`, so a
@@ -162,10 +171,17 @@ not loopback, so it is refused.
 
 Openship recognizes three auth modes overall:
 
-- **`none`** — zero-auth loopback, described above. Default for desktop.
+- **`none`** — zero-auth loopback, described above. Default for the desktop app only; never used by a
+  CLI-started or public instance.
 - **`local`** — standard login required (email + password via [Better Auth](https://www.better-auth.com/)).
-  Default for a fresh self-hosted install.
+  Default for a fresh self-hosted install, and always used for CLI (`openship up`) and public instances.
 - **`cloud`** — the desktop app signs in with an Openship Cloud account instead of a local one.
+
+<Callout title="Creating the first admin" type="info">
+A CLI or self-hosted instance has no public sign-up. The first admin (email + password) is created during the
+`openship` guided setup, over an internal-token-gated, one-shot endpoint that a browser can't reach. After
+that, add more users from **Settings → Team** in the dashboard.
+</Callout>
 
 <Callout title="One failure that never falls through" type="error">
 If the session machinery itself errors (a database outage, a decryption failure), the request returns

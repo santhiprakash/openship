@@ -1,5 +1,5 @@
 import type { Project } from "@repo/db";
-import type { SslProvider, SslResult } from "@repo/adapters";
+import type { ManualCert, SslProvider, SslResult } from "@repo/adapters";
 import { ForbiddenError, NotFoundError } from "@repo/core";
 import { repos } from "@repo/db";
 import { platform } from "./controller-helpers";
@@ -152,4 +152,23 @@ export async function manageDomainSsl(
   }
 
   return result;
+}
+
+/**
+ * Install an operator-supplied certificate on the host that serves the domain
+ * (resolved the same way as manageDomainSsl). Infra-only — the caller owns the
+ * domain-row update (manualSsl flag + ssl status). Enforces the same ownership
+ * + verified guards as the other SSL actions.
+ */
+export async function installDomainCert(
+  hostname: string,
+  cert: ManualCert,
+  opts: { projectId?: string } = {},
+): Promise<SslResult> {
+  const { domainRecord, project } = await resolveAuthorizedDomain(hostname, {
+    action: "provision",
+    projectId: opts.projectId,
+  });
+  const ssl = await resolveSslProvider(project);
+  return ssl.installCert(domainRecord.hostname, cert);
 }

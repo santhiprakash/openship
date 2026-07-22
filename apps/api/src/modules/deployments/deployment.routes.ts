@@ -113,6 +113,7 @@ r.post(
 r.post("/:id/pin", { tag: "deployment:write" }, cloudDeploymentProxy, ctrl.pin);
 r.post("/:id/reject", { tag: "deployment:write", mcp: { description: "Reject a partial-failure deployment awaiting a decision (roll back the changed services)." } }, cloudDeploymentProxy, ctrl.reject);
 r.post("/:id/keep", { tag: "deployment:write", mcp: { description: "Keep a partial-failure deployment awaiting a decision (accept the succeeded services)." } }, cloudDeploymentProxy, ctrl.keep);
+r.post("/:id/skip-port-check", { tag: "deployment:write" }, cloudDeploymentProxy, ctrl.skipPortCheck);
 r.post(
   "/:id/cancel",
   { tag: "deployment:write", mcp: { description: "Cancel an in-progress deployment." } },

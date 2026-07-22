@@ -37,7 +37,7 @@ export const MonorepoSubAppFieldsSchema = {
   installCommand: Type.Optional(Type.String({ maxLength: 1000 })),
   buildCommand: Type.Optional(Type.String({ maxLength: 1000 })),
   startCommand: Type.Optional(Type.String({ maxLength: 1000 })),
-  outputDirectory: Type.Optional(Type.String({ maxLength: 200 })),
+  outputDirectory: Type.Optional(Type.String({ maxLength: 200, pattern: "^[A-Za-z0-9._~/-]+$" })),
   framework: Type.Optional(FrameworkEnum),
   packageManager: Type.Optional(PackageManagerEnum),
   buildImage: Type.Optional(Type.String({ maxLength: 200 })),
@@ -156,6 +156,27 @@ const RoutingConfigSchema = Type.Object({
   trailingSlash: Type.Optional(Type.Boolean()),
 });
 
+/**
+ * Release/dist source config (gitProvider === "release"). A prebuilt dist is
+ * deployed with no build, version-tracked. `mode: "github"` pulls a release
+ * asset from a repo; `mode: "url"` pulls an external HTTPS tarball (sha256
+ * REQUIRED). Mirrors the `ReleaseSource` type in @repo/core.
+ */
+const ReleaseSourceSchema = Type.Object({
+  mode: Type.Union([Type.Literal("github"), Type.Literal("url")]),
+  repo: Type.Optional(Type.String({ maxLength: 200 })),
+  assetTemplate: Type.Optional(Type.String({ maxLength: 200 })),
+  os: Type.Optional(Type.String({ maxLength: 32 })),
+  arch: Type.Optional(Type.String({ maxLength: 32 })),
+  distUrl: Type.Optional(Type.String({ maxLength: 2000 })),
+  sha256Url: Type.Optional(Type.String({ maxLength: 2000 })),
+  sha256: Type.Optional(Type.String({ maxLength: 128 })),
+  versionUrl: Type.Optional(Type.String({ maxLength: 2000 })),
+  channel: Type.Optional(Type.String({ maxLength: 64 })),
+  pinnedVersion: Type.Optional(Type.String({ maxLength: 64 })),
+  trackReleases: Type.Optional(Type.Boolean()),
+});
+
 export const CreateProjectBody = Type.Object({
   name: Type.String({ minLength: 1, maxLength: 100 }),
   /** Override the auto-generated slug (used as free subdomain: slug.opsh.io) */
@@ -170,12 +191,14 @@ export const CreateProjectBody = Type.Object({
   gitRepo: Type.Optional(Type.String({ maxLength: 100 })),
   gitBranch: Type.Optional(Type.String({ default: "main" })),
   installationId: Type.Optional(Type.Number()),
+  // Release/dist source (gitProvider === "release")
+  releaseSource: Type.Optional(ReleaseSourceSchema),
   // Build configuration
   framework: Type.Optional(FrameworkEnum),
   packageManager: Type.Optional(PackageManagerEnum),
   installCommand: Type.Optional(Type.String({ maxLength: 500 })),
   buildCommand: Type.Optional(Type.String({ maxLength: 500 })),
-  outputDirectory: Type.Optional(Type.String({ maxLength: 200 })),
+  outputDirectory: Type.Optional(Type.String({ maxLength: 200, pattern: "^[A-Za-z0-9._~/-]+$" })),
   productionPaths: Type.Optional(Type.String({ maxLength: 2000 })),
   rootDirectory: Type.Optional(Type.String({ maxLength: 200 })),
   startCommand: Type.Optional(Type.String({ maxLength: 500 })),
@@ -230,6 +253,14 @@ export const CreateProjectBody = Type.Object({
   defaultRollbackStrategy: Type.Optional(
     Type.Union([Type.Literal("git"), Type.Literal("snapshot")]),
   ),
+  /**
+   * Apps-catalog marker. Set by the Create-App instantiator when a project is
+   * installed from the Apps catalog (Convex, WordPress, webmail, …). Moves the
+   * project to the Apps tab; `appTemplateId` records which catalog entry it came
+   * from. Left at defaults for a normal user project.
+   */
+  isApp: Type.Optional(Type.Boolean()),
+  appTemplateId: Type.Optional(Type.String({ maxLength: 100 })),
 });
 
 export const UpdateProjectBody = Type.Partial(CreateProjectBody);

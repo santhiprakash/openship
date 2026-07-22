@@ -64,6 +64,9 @@ const BuildServiceInput = Type.Object({
   domain: Type.Optional(Type.String()),
   customDomain: Type.Optional(Type.String()),
   domainType: Type.Optional(Type.Union([Type.Literal("free"), Type.Literal("custom")])),
+  // Additional public routes beyond the primary (multi-port service, e.g.
+  // Convex's API 3210 + HTTP actions 3211). Entry[0] mirrors the primary above.
+  publicEndpoints: Type.Optional(Type.Array(PublicEndpointInput)),
   // Source-built (monorepo) sub-app fields — optional, mirror MonorepoSubAppFields.
   kind: Type.Optional(Type.Union([Type.Literal("compose"), Type.Literal("monorepo")])),
   enabled: Type.Optional(Type.Boolean()),

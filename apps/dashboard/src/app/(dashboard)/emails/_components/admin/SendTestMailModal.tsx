@@ -292,7 +292,7 @@ export function SendTestMailModal({ open, onClose, serverId }: Props) {
               </div>
 
               {error && (
-                <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-[13px] text-red-600 dark:text-red-400">
+                <div className="rounded-lg border border-danger-border bg-danger-bg px-3 py-2 text-[13px] text-danger">
                   {error}
                 </div>
               )}
@@ -337,7 +337,7 @@ function SentStage({
     <div>
       <div className="px-7 pt-8 pb-6">
         <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-success-bg text-success">
             <CheckCircle2 className="size-5" strokeWidth={2} />
           </div>
           <div className="flex-1 min-w-0">

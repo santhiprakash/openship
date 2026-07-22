@@ -6,6 +6,7 @@ import {
   Download,
   RotateCcw,
   ChevronDown,
+  ArrowUpCircle,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import type {
@@ -14,6 +15,16 @@ import type {
   SetupLogEvent,
 } from "@/lib/api/system";
 import { useI18n, interpolate } from "@/components/i18n-provider";
+
+/** Component name → i18n key for its human/business role. The technical name
+ *  (component.label, e.g. "OpenResty") stays as a small secondary tag. */
+const ROLE_KEY: Record<string, string> = {
+  docker: "roleDocker",
+  git: "roleGit",
+  openresty: "roleOpenresty",
+  certbot: "roleCertbot",
+  rsync: "roleRsync",
+};
 
 function HealthRow({
   component,
@@ -30,27 +41,49 @@ function HealthRow({
 }) {
   const { t } = useI18n();
   const canRunAction = component.installable;
+  // A newer package is available → the reinstall action upgrades to it, so lead
+  // with "Update" (the same install action, apt-get install pulls the candidate).
+  const isUpdate = Boolean(component.updateAvailable && component.installed);
   const actionLabel = component.healthy || component.installed ? t.servers.components.reinstall : t.servers.components.install;
   const canRemove = component.removable && component.installed;
   const removeDisabled = busy || component.removeSupported === false;
+
+  // Lead with the human role ("Reverse proxy") and keep the technical name
+  // ("OpenResty") as a small secondary tag. Falls back to the raw label for
+  // any component without a mapped role.
+  const techName = component.label || component.name;
+  const roleName =
+    (t.servers.components as Record<string, string>)[ROLE_KEY[component.name] ?? ""] ?? techName;
+  const showTech = roleName !== techName;
 
   return (
     <div className="flex items-center gap-3 py-2.5 px-3 rounded-lg hover:bg-muted/30 transition-colors">
       <div className="shrink-0">
         {component.healthy ? (
-          <CheckCircle2 className="size-5 text-emerald-500" />
+          <CheckCircle2 className="size-5 text-success" />
         ) : (
-          <XCircle className="size-5 text-orange-500" />
+          <XCircle className="size-5 text-warning" />
         )}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <p className="text-sm font-medium text-foreground">
-            {component.label || component.name}
+            {roleName}
           </p>
+          {showTech && (
+            <span className="text-xs font-medium text-muted-foreground/70">
+              {techName}
+            </span>
+          )}
           {component.version && (
             <span className="text-xs text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded">
               v{component.version}
+            </span>
+          )}
+          {component.updateAvailable && component.availableVersion && (
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-warning bg-warning-bg px-1.5 py-0.5 rounded">
+              <ArrowUpCircle className="size-3" />
+              v{component.availableVersion}
             </span>
           )}
         </div>
@@ -61,8 +94,8 @@ function HealthRow({
       <div
         className={`text-xs font-medium px-2.5 py-1 rounded-full ${
           component.healthy
-            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-            : "bg-orange-500/10 text-orange-600 dark:text-orange-400"
+            ? "bg-success-bg text-success"
+            : "bg-warning-bg text-warning"
         }`}
       >
         {component.healthy ? "Healthy" : "Unhealthy"}
@@ -73,16 +106,22 @@ function HealthRow({
             <button
               onClick={() => onRunAction(component)}
               disabled={busy}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border border-border/70 hover:bg-muted transition-colors text-muted-foreground disabled:opacity-50"
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors disabled:opacity-50 ${
+                isUpdate
+                  ? "border-warning-border bg-warning-bg text-warning hover:bg-warning-bg"
+                  : "border-border/70 hover:bg-muted text-muted-foreground"
+              }`}
             >
               {running ? (
                 <Loader2 className="size-3.5 animate-spin" />
+              ) : isUpdate ? (
+                <ArrowUpCircle className="size-3.5" />
               ) : component.healthy || component.installed ? (
                 <RotateCcw className="size-3.5" />
               ) : (
                 <Download className="size-3.5" />
               )}
-              {running ? t.servers.components.running : actionLabel}
+              {running ? t.servers.components.running : isUpdate ? "Update" : actionLabel}
             </button>
           )}
           {canRemove && (
@@ -90,7 +129,7 @@ function HealthRow({
               onClick={() => onRemoveAction(component)}
               disabled={removeDisabled}
               title={component.removeBlockedReason}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border border-red-500/30 hover:bg-red-500/5 transition-colors text-red-600 dark:text-red-400 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border border-danger-border hover:bg-danger-bg transition-colors text-danger disabled:opacity-50"
             >
               {running ? (
                 <Loader2 className="size-3.5 animate-spin" />
@@ -176,8 +215,8 @@ export function ComponentsTab({
       {/* Health checks card */}
       <div className="bg-card rounded-2xl border border-border/50">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-border/50">
-          <div className="w-9 h-9 bg-emerald-500/10 rounded-xl flex items-center justify-center">
-            <Shield className="size-[18px] text-emerald-500" />
+          <div className="w-9 h-9 bg-success-bg rounded-xl flex items-center justify-center">
+            <Shield className="size-[18px] text-success" />
           </div>
           <div className="flex-1">
             <h2 className="font-semibold text-foreground text-[15px]">
@@ -221,8 +260,8 @@ export function ComponentsTab({
 
         <div className="p-5 space-y-0.5">
           {checkError && (
-            <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3 mb-3">
-              <p className="text-xs text-red-600 dark:text-red-400">
+            <div className="rounded-lg border border-danger-border bg-danger-bg p-3 mb-3">
+              <p className="text-xs text-danger">
                 {checkError}
               </p>
             </div>
@@ -287,16 +326,16 @@ export function ComponentsTab({
               className={`w-9 h-9 rounded-xl flex items-center justify-center ${
                 installDone
                   ? installFinalStatus === "completed"
-                    ? "bg-emerald-500/10"
-                    : "bg-red-500/10"
+                    ? "bg-success-bg"
+                    : "bg-danger-bg"
                   : "bg-primary/10"
               }`}
             >
               {installDone ? (
                 installFinalStatus === "completed" ? (
-                  <CheckCircle2 className="size-[18px] text-emerald-500" />
+                  <CheckCircle2 className="size-[18px] text-success" />
                 ) : (
-                  <XCircle className="size-[18px] text-red-500" />
+                  <XCircle className="size-[18px] text-danger" />
                 )
               ) : (
                 <Download className="size-[18px] text-primary" />
@@ -330,7 +369,7 @@ export function ComponentsTab({
                 <div
                   className={`h-full rounded-full transition-all duration-500 ${
                     installDone && installFinalStatus === "failed"
-                      ? "bg-red-500"
+                      ? "bg-danger-solid"
                       : "bg-primary"
                   }`}
                   style={{
@@ -356,9 +395,9 @@ export function ComponentsTab({
                   {comp.status === "installing" || comp.status === "removing" ? (
                     <Loader2 className="size-3.5 text-primary animate-spin" />
                   ) : comp.status === "installed" || comp.status === "removed" ? (
-                    <CheckCircle2 className="size-3.5 text-emerald-500" />
+                    <CheckCircle2 className="size-3.5 text-success" />
                   ) : comp.status === "failed" ? (
-                    <XCircle className="size-3.5 text-red-500" />
+                    <XCircle className="size-3.5 text-danger" />
                   ) : (
                     <div className="size-3.5 rounded-full border-2 border-border/50" />
                   )}
@@ -371,9 +410,9 @@ export function ComponentsTab({
                     comp.status === "installing" || comp.status === "removing"
                       ? "text-primary"
                       : comp.status === "installed" || comp.status === "removed"
-                        ? "text-emerald-500"
+                        ? "text-success"
                         : comp.status === "failed"
-                          ? "text-red-500"
+                          ? "text-danger"
                           : "text-muted-foreground"
                   }`}
                 >
@@ -419,9 +458,9 @@ export function ComponentsTab({
                         <span
                           className={`shrink-0 w-[38px] text-center text-[10px] font-semibold uppercase rounded px-1 py-px ${
                             entry.level === "error"
-                              ? "text-red-500 bg-red-500/10"
+                              ? "text-danger bg-danger-bg"
                               : entry.level === "warn"
-                                ? "text-yellow-500 bg-yellow-500/10"
+                                ? "text-warning bg-warning-bg"
                                 : "text-muted-foreground/50 bg-muted/50"
                           }`}
                         >
@@ -430,9 +469,9 @@ export function ComponentsTab({
                         <span
                           className={`flex-1 min-w-0 break-all ${
                             entry.level === "error"
-                              ? "text-red-500"
+                              ? "text-danger"
                               : entry.level === "warn"
-                                ? "text-yellow-500"
+                                ? "text-warning"
                                 : "text-foreground/70"
                           }`}
                         >

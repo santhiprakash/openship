@@ -14,6 +14,8 @@ import type { CommandExecutor } from "../types";
 import type { ComponentStatus } from "./types";
 import { OPENRESTY_LUA_DIR } from "../infra/openresty-lua";
 import { systemCatalog } from "./catalog";
+import { resolveEnvironment } from "./environment";
+import { enrichAvailableVersions } from "./available-version";
 import { getSystemComponentDefinition, SYSTEM_COMPONENTS } from "./components";
 import { formatDuration, systemDebug } from "./debug";
 import { isRemoteConnectionError } from "./errors";
@@ -270,8 +272,22 @@ export async function checkAll(
   const results = await mapWithConcurrency(entries, CHECK_CONCURRENCY, ([, fn]) =>
     fn(executor),
   );
+  await enrichAvailable(executor, results);
   systemDebug("checks", `checkAll:done (${formatDuration(startedAt)})`);
   return results;
+}
+
+/** Best-effort "newer version available?" enrichment; never throws. */
+async function enrichAvailable(
+  executor: CommandExecutor,
+  results: ComponentStatus[],
+): Promise<void> {
+  try {
+    const profile = await resolveEnvironment(executor);
+    await enrichAvailableVersions(executor, profile, results);
+  } catch {
+    /* leave components without an available version */
+  }
 }
 
 /** Run checks for a specific set of components with bounded concurrency. */
@@ -287,6 +303,7 @@ export async function checkComponents(
   const results = await mapWithConcurrency(fns, CHECK_CONCURRENCY, (fn) =>
     fn(executor),
   );
+  await enrichAvailable(executor, results);
   systemDebug(
     "checks",
     `checkComponents:done [${names.join(", ")}] (${formatDuration(startedAt)})`,

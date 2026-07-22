@@ -6,7 +6,7 @@
  */
 
 import { Oblien } from "oblien";
-import type { RouteConfig, SslResult } from "../types";
+import type { ManualCert, RouteConfig, SslResult } from "../types";
 import type { RoutingProvider, SslProvider } from "./types";
 
 export class CloudInfraProvider implements RoutingProvider, SslProvider {
@@ -43,5 +43,10 @@ export class CloudInfraProvider implements RoutingProvider, SslProvider {
   async verifyCert(domain: string): Promise<SslResult> {
     // TODO: GET /ssl/status - Oblien is the source of truth for managed certs.
     return { domain, expiresAt: "", issuer: "oblien", verified: false };
+  }
+
+  async installCert(_domain: string, _cert: ManualCert): Promise<SslResult> {
+    // Oblien manages TLS at its own edge — no operator-supplied certs.
+    throw new Error("Manual certificates are not supported on Openship Cloud");
   }
 }

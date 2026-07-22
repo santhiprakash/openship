@@ -46,17 +46,17 @@ const DropdownMenu: React.FC<DropdownMenuProps> = ({
     switch (variant) {
       case "danger":
         return {
-          color: "#ef4444",
+          color: "var(--color-danger)",
           hoverBg: "rgba(239, 68, 68, 0.08)",
         };
       case "success":
         return {
-          color: "#10b981",
+          color: "var(--color-success)",
           hoverBg: "rgba(16, 185, 129, 0.08)",
         };
       case "warning":
         return {
-          color: "#f59e0b",
+          color: "var(--color-warning)",
           hoverBg: "rgba(245, 158, 11, 0.08)",
         };
       default:

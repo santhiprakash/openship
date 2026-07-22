@@ -1,6 +1,6 @@
 {
   "wizard": {
-    "title": "Migrate a Docker deployment",
+    "title": "Migrate apps",
     "intro": "Inspect this server's Docker and adopt its containers as an Openship project. Inspection is read-only — nothing changes on the server until you deploy.",
     "selectServer": "Select a server",
     "scan": "Inspect Docker",
@@ -12,9 +12,55 @@
     "projectNamePlaceholder": "my-app",
     "create": "Create project",
     "creating": "Creating…",
-    "createdToast": "Project created from {count} service(s)"
+    "createdToast": "Project created from {count} service(s)",
+    "migrate": "Migrate",
+    "migrateN": "Migrate {n} projects",
+    "migrating": "Migrating…",
+    "addProject": "Add project",
+    "removeProject": "Remove project",
+    "targetLabel": "Target server",
+    "sameServer": "Same server (reuse volumes in place)",
+    "crossServerBuiltSoon": "Locally-built images can't move across servers yet (coming soon). Migrate those in place — pick the same server as the target. Registry images cross fine.",
+    "killOriginals": "Stop & remove old containers once the new deployment is verified",
+    "transfer": {
+      "label": "Transfer",
+      "default": "Default (settings)",
+      "auto": "Auto",
+      "stream": "Streaming",
+      "direct": "Direct",
+      "rsync": "rsync"
+    }
+  },
+  "run": {
+    "title": "Migrating your stack",
+    "queued": "Queued…",
+    "adopting": "Creating the Openship project…",
+    "moving_data": "Moving volume data to the target…",
+    "deploying": "Deploying on the target server…",
+    "verifying": "Verifying the new deployment…",
+    "awaiting_cutover": "The new deployment is live — verify it, then finish",
+    "cutover": "Removing the original containers…",
+    "succeeded": "Migration complete",
+    "allSucceeded": "{n} projects migrated",
+    "queueHeader": "Project {index} of {total} · {name}",
+    "failed": "Migration failed",
+    "rolled_back": "Rolled back — your original containers were restarted",
+    "openProject": "Open project",
+    "addDomains": "Add domains",
+    "routeHint": "Your services are imported but not public yet. Add a domain per service on the Domains tab — Openship deploys automatically to install its edge (OpenResty) and, if your old proxy still holds 80/443, offers to take it over.",
+    "downtimeNote": "Original containers are stopped during the move; expect brief downtime until the new deployment is live."
+  },
+  "cutover": {
+    "title": "Finish migration",
+    "warning": "The new deployment is live on the target server. You can stop & remove the original containers now, or keep them (stopped) as a safety net and remove them later.",
+    "stopRemove": "Stop & remove originals",
+    "keep": "Keep originals",
+    "working": "Working…"
   },
   "discover": {
+    "buildBlocked": "Built from source — can't migrate yet (publish an image first)",
+    "proxyExcluded": "Reverse proxy ({ports}) — not imported; Openship’s edge replaces it.",
+    "edgePortReserved": "Ports {ports} reserved for Openship’s edge; not published.",
     "nothing": "No adoptable Docker containers were found on this server.",
     "servicesTitle": "Services",
     "volumesTitle": "Volumes",
@@ -26,6 +72,9 @@
     "standalone": "standalone",
     "selectAll": "Select all",
     "selectedCount": "{n} of {total} selected",
+    "claimedIn": "in {project}",
+    "otherComposeHint": "Part of {group} — add a separate project to import it",
+    "emptyProject": "No services selected yet — pick from the left.",
     "running": "running",
     "stopped": "stopped",
     "image": "Image",
@@ -36,6 +85,9 @@
     "dependsOn": "Depends on",
     "inUseBy": "used by",
     "reused": "reused in place",
+    "volumeReuse": "Take over",
+    "volumeCopy": "Copy",
+    "volumeCopyHint": "Take over reuses the existing volume in place. Copy duplicates it into a new Openship volume and leaves the original untouched (uses extra disk).",
     "bind": "host path",
     "nVolumes": "{n} volumes",
     "nEnv": "{n} env vars",
@@ -46,7 +98,7 @@
   "entry": {
     "cardTitle": "Existing Docker server",
     "cardDesc": "Migrate a running Docker or Compose deployment into Openship.",
-    "action": "Migrate Docker",
+    "action": "Migrate apps",
     "tab": "Existing server",
     "comingSoon": "Docker migration is coming soon"
   }

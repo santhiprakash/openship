@@ -38,28 +38,46 @@ info "Installing the Openship CLI (${PKG})…"
 bun add -g "$PKG"
 
 BUN_BIN="${BUN_INSTALL:-$HOME/.bun}/bin"
+CLI_JS="${BUN_INSTALL:-$HOME/.bun}/install/global/node_modules/openship/dist/index.js"
 
-# 3. Bun-only fallback. The published CLI carries a Node shebang
+# 3. Heal installs broken by the pre-fix installer (issue #21). That version
+#    wrote the Bun launcher THROUGH the bin symlink, clobbering the compiled
+#    entry (dist/index.js) with a /bin/sh script that execs itself. `bun add`
+#    above can no-op on a cache hit and leave the clobbered file, so detect the
+#    tell-tale shell shebang and force a clean reinstall to restore the bundle.
+if [ -f "$CLI_JS" ] && IFS= read -r _first_line < "$CLI_JS" && [ "$_first_line" = "#!/bin/sh" ]; then
+  info "Repairing a previously broken install…"
+  bun remove -g openship >/dev/null 2>&1 || true
+  bun add -g "$PKG"
+fi
+
+# 4. Bun-only fallback. The published CLI carries a Node shebang
 #    (#!/usr/bin/env node), so on a box with no Node the global shim can't
 #    launch. Point it at a launcher that runs the CLI under Bun instead (Bun
 #    executes the Node-target bundle fine) — so `openship` works Node-free.
 if ! command -v node >/dev/null 2>&1; then
   BUN_PATH="$(command -v bun)"
-  CLI_JS="${BUN_INSTALL:-$HOME/.bun}/install/global/node_modules/openship/dist/index.js"
   if [ -n "$BUN_PATH" ] && [ -f "$CLI_JS" ]; then
     info "Node not found — wiring 'openship' to run under Bun."
+    # `bun add -g` links $BUN_BIN/openship as a SYMLINK to dist/index.js. A
+    # plain `>` redirect follows that symlink and writes the wrapper THROUGH it
+    # — clobbering the compiled entry with a script that then execs itself (the
+    # #21 self-referential loop / "Expected ;" syntax error). Unlink first so
+    # the redirect creates a standalone launcher and dist/index.js is untouched.
+    rm -f "$BUN_BIN/openship"
     printf '#!/bin/sh\nexec "%s" "%s" "$@"\n' "$BUN_PATH" "$CLI_JS" > "$BUN_BIN/openship"
     chmod +x "$BUN_BIN/openship"
   fi
 fi
 
-# 4. Next steps.
+# 5. Next steps.
 cat <<EOF
 
 $(printf '\033[32m✔\033[0m') Openship installed.
 
-  openship up         # run Openship locally (API + dashboard)
-  openship install    # or install the desktop app
+  $(printf '\033[1mopenship\033[0m')            # set up + deploy Openship (interactive)
+
+  openship up         # or launch directly with defaults
   openship --help     # all commands
 
 If 'openship' isn't found, add Bun's global bin to your PATH:

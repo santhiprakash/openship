@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { FolderUp, Github, Link2, Sparkles } from "lucide-react";
+import { FolderUp, Github, Link2, Sparkles, Boxes } from "lucide-react";
 import { useGitHub } from "@/context/GitHubContext";
 import { usePlatform } from "@/context/PlatformContext";
 import { useCloud } from "@/context/CloudContext";
@@ -14,9 +14,11 @@ import { LibrarySidebar } from "./components/LibrarySidebar";
 import { UrlImport } from "./components/UrlImport";
 import { TemplateGrid } from "./components/TemplateGrid";
 import { PageContainer } from "@/components/ui/PageContainer";
+import { ServerMigrationWizard } from "@/components/migration/ServerMigrationWizard";
 import { useI18n } from "@/components/i18n-provider";
+import { useToast } from "@/context/ToastContext";
 
-type Tab = "folder" | "repositories" | "url" | "template";
+type Tab = "folder" | "repositories" | "url" | "template" | "server";
 
 interface TabItem {
   key: Tab;
@@ -26,6 +28,7 @@ interface TabItem {
 
 export default function LibraryPage() {
   const { t } = useI18n();
+  const { showToast } = useToast();
   const {
     state,
     connected,
@@ -51,6 +54,7 @@ export default function LibraryPage() {
   // the connect prompt (a fine call-to-action); the Folder/URL/Template tabs
   // are one click away for local/self-hosted deploys.
   const [activeTab, setActiveTab] = useState<Tab>("repositories");
+  const [showMigrate, setShowMigrate] = useState(false);
 
   // One "Folder" tab, environment-dependent behavior:
   //   - self-hosted / desktop → deploy straight from a path on the box (native
@@ -62,6 +66,9 @@ export default function LibraryPage() {
     { key: "repositories", label: t.library.page.tabs.github, icon: Github },
     { key: "url", label: t.library.page.tabs.url, icon: Link2 },
     { key: "template", label: t.library.page.tabs.template, icon: Sparkles },
+    // Adopting a running Docker deployment needs SSH into the user's own box —
+    // self-hosted / desktop only (cloud mode has no server inventory).
+    ...(selfHosted ? [{ key: "server" as const, label: t.migration.entry.tab, icon: Boxes }] : []),
   ];
 
   return (
@@ -103,7 +110,25 @@ export default function LibraryPage() {
 
           {/* ── LEFT COLUMN ────────────────────────────────────────── */}
           <div className="space-y-6 min-w-0">
-            {activeTab === "folder" ? (
+            {activeTab === "server" ? (
+              <div className="rounded-2xl border border-border/60 p-6 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Boxes className="size-5 text-info" />
+                  <h2 className="text-base font-medium text-foreground">
+                    {t.migration.entry.cardTitle}
+                  </h2>
+                </div>
+                <p className="text-sm text-muted-foreground">{t.migration.entry.cardDesc}</p>
+                <button
+                  type="button"
+                  onClick={() => setShowMigrate(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-foreground text-background text-sm font-medium hover:opacity-90 transition-opacity"
+                >
+                  <Boxes className="size-4" />
+                  {t.migration.entry.action}
+                </button>
+              </div>
+            ) : activeTab === "folder" ? (
               // Desktop reads the folder off disk (native picker, no upload/
               // stack). SaaS AND remote self-hosted browsers upload it instead
               // (they can't see the user's filesystem).
@@ -146,6 +171,8 @@ export default function LibraryPage() {
             cloudConnected={cloudConnected}
           />
         </div>
+
+        <ServerMigrationWizard isOpen={showMigrate} onClose={() => setShowMigrate(false)} />
     </PageContainer>
   );
 }

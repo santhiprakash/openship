@@ -256,7 +256,7 @@ export function RowIconButton({
 }: RowIconButtonProps) {
   const variantCls =
     variant === "danger"
-      ? "hover:text-red-500 hover:bg-red-500/10"
+      ? "hover:text-danger hover:bg-danger-bg"
       : "hover:text-foreground hover:bg-muted/50";
   return (
     <button

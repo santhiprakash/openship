@@ -61,6 +61,8 @@ docker compose up -d
 
 Or grab the desktop app (`openship install`, or download from [openship.io](https://openship.io)).
 
+**Which setup?** Working solo → use the **desktop app**: the control plane runs on your machine and drives your servers over SSH, with nothing of Openship exposed publicly. Running for a team, need always-on / remote access / push-to-deploy → **self-host on a server** (`openship up --public-url …`). Full guide, server install, and the CLI command reference: **[docs/installation.md](docs/installation.md)**.
+
 ---
 
 ## What It Does
@@ -126,6 +128,43 @@ Production-ready core, actively developed.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## Releasing
+
+Cut a release with the version script — it syncs every package's version,
+commits the bump, tags `vX.Y.Z`, and pushes:
+
+```bash
+bun scripts/release.ts 0.2.0        # explicit version
+# or a bump keyword: patch | minor | major | rc   (minor from 0.1.x → 0.2.0)
+```
+
+Pushing the tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
+
+- builds the **macOS / Windows / Linux installers** and the server tarballs (with SHA-256 sidecars),
+- **publishes the `openship` CLI to npm** — via npm [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers) (no token), and
+- creates the **GitHub Release** with the built assets (notes come from the tag).
+
+To flag a release as **critical** (or add recommended/info advisories) in the
+in-app updater, add an entry to [`release-advisories.json`](release-advisories.json)
+**before** tagging — clients pull it pinned to the release tag. High-level notes
+live in [`CHANGELOG.md`](CHANGELOG.md).
+
+---
+
+## Security
+
+Found a vulnerability? We welcome your report — please disclose it **privately**,
+never in a public issue, PR, or discussion.
+
+- **Report it here (preferred):** [Report a vulnerability](https://github.com/oblien/openship/security/advisories/new) — a private GitHub advisory, visible only to you and the maintainers.
+- Scope, what to include, and our response/disclosure process: [SECURITY.md](SECURITY.md).
+
+Good-faith security research is **authorized** under our
+[safe-harbor policy](SECURITY.md#safe-harbor), and we're happy to credit valid
+first reports.
 
 ---
 

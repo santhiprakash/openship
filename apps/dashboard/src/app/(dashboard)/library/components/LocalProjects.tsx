@@ -168,7 +168,7 @@ export function LocalProjects() {
                     e.stopPropagation();
                     handleDelete(project.id);
                   }}
-                  className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-red-500 hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100"
+                  className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-danger hover:bg-danger-bg transition-colors opacity-0 group-hover:opacity-100"
                 >
                   <Trash2 className="size-3.5" />
                 </button>
@@ -484,14 +484,14 @@ function ImportForm({ onClose, onImported }: ImportFormProps) {
         return (
           <div className={`flex items-center gap-2 px-3 py-2 rounded-lg mb-3 ${
             isPathHint
-              ? "bg-amber-500/10 border border-amber-500/20"
-              : "bg-red-500/10 border border-red-500/20"
+              ? "bg-warning-bg border border-warning-border"
+              : "bg-danger-bg border border-danger-border"
           }`}>
             <AlertCircle className={`size-4 shrink-0 ${
-              isPathHint ? "text-amber-500" : "text-red-500"
+              isPathHint ? "text-warning" : "text-danger"
             }`} />
             <p className={`text-xs ${
-              isPathHint ? "text-amber-600 dark:text-amber-400" : "text-red-500"
+              isPathHint ? "text-warning" : "text-danger"
             }`}>{scanError}</p>
           </div>
         );
@@ -500,9 +500,9 @@ function ImportForm({ onClose, onImported }: ImportFormProps) {
       {/* Scan result */}
       {scanResult && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-500/10 border border-green-500/20">
-            <CheckCircle2 className="size-4 text-green-500 shrink-0" />
-            <p className="text-xs text-green-600 dark:text-green-400">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-success-bg border border-success-border">
+            <CheckCircle2 className="size-4 text-success shrink-0" />
+            <p className="text-xs text-success">
               {t.library.localProjects.form.detected}{" "}<span className="font-medium capitalize">{scanResult.stack}</span>
               {scanResult.stack !== "unknown" && (
                 <> · {scanResult.packageManager} · {scanResult.category}</>

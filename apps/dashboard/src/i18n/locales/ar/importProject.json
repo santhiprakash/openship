@@ -136,7 +136,9 @@
       "domainLabel": "النطاق",
       "free": "مجاني",
       "custom": "مخصص",
-      "routingTrafficPrefix": "توجيه حركة المرور إلى المنفذ"
+      "routingTrafficPrefix": "توجيه حركة المرور إلى المنفذ",
+      "duplicateTitle": "نطاق مكرر",
+      "duplicateDescription": "مساران يشيران إلى النطاق نفسه — غيّر أحدهما ليكون لكل مسار نطاقه الخاص:"
     },
     "shared": {
       "title": "البيئة المشتركة",

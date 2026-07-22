@@ -60,8 +60,23 @@ function LoginPageInner() {
     try {
       const result = await signIn.email({ email, password });
       if (result.error) {
-        toast("error", result.error.message ?? t.auth.errors.invalidCredentials);
-      } else if (postLoginUrl) {
+        // Sign-in is blocked until the email is verified (SaaS requires it).
+        // Route to the verify page (resend + status) instead of a dead-end toast.
+        const err = result.error;
+        if (err.code === "EMAIL_NOT_VERIFIED" || err.message?.toLowerCase().includes("verify")) {
+          router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+          return; // navigating away — keep the spinner until this page unmounts
+        }
+        // Stayed on the login page → stop the spinner so they can retry.
+        toast("error", err.message ?? t.auth.errors.invalidCredentials);
+        setLoading(false);
+        return;
+      }
+      // Success → navigate. Deliberately DO NOT clear loading: router.push only
+      // *starts* the client transition, and the dashboard takes a moment to
+      // render. Keeping the button in its loading state until this page unmounts
+      // avoids the dead "idle button, no navigation yet" gap.
+      if (postLoginUrl) {
         window.location.href = postLoginUrl;
       } else {
         router.push("/");
@@ -70,8 +85,7 @@ function LoginPageInner() {
       toast("error", isNetworkError(err)
         ? t.auth.errors.serverUnreachable
         : t.auth.errors.generic);
-    } finally {
-      setLoading(false);
+      setLoading(false); // stayed on the page — re-enable the form
     }
   }
 
@@ -231,15 +245,21 @@ function LoginPageInner() {
       {/* OAuth only for SaaS (cloud-hosted) - hidden on self-hosted */}
       {!selfHosted && <OAuthButtons callbackURL={postLoginUrl ?? "/"} />}
 
-      <p className="mt-8 text-center text-sm text-muted-foreground">
-        {t.auth.login.noAccount}{" "}
-        <Link
-          href={buildAuthPageHref("/register", searchParams)}
-          className="font-medium text-foreground transition-colors hover:underline"
-        >
-          {t.auth.login.createOne}
-        </Link>
-      </p>
+      {/* Public sign-up is a SaaS-only front door. On a self-hosted instance the
+          only account is the CLI-created admin; everyone else joins via an
+          invitation link (server also enforces invite-only signup), so there's
+          no public "create account" entry here. */}
+      {!selfHosted && (
+        <p className="mt-8 text-center text-sm text-muted-foreground">
+          {t.auth.login.noAccount}{" "}
+          <Link
+            href={buildAuthPageHref("/register", searchParams)}
+            className="font-medium text-foreground transition-colors hover:underline"
+          >
+            {t.auth.login.createOne}
+          </Link>
+        </p>
+      )}
     </AuthShell>
   );
 }

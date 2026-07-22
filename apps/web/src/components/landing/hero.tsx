@@ -83,7 +83,7 @@ export function Hero() {
               href="/login"
               className="th-btn group rounded-full px-7 py-3 text-[15px] font-medium"
             >
-              Start Free
+              Get started
               <svg
                 className="ml-1.5 -mr-1.5 h-4 w-4 transition-transform group-hover:translate-x-0.5"
                 fill="none"

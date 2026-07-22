@@ -4,7 +4,7 @@ import { useTheme } from "@/components/theme-provider";
 import { useI18n } from "@/components/i18n-provider";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Moon, Sun } from "lucide-react";
+import { ArrowLeft, Moon, Sun, SunMoon } from "lucide-react";
 
 /**
  * Shared wrapper for auth pages (login, register, forgot-password, etc.).
@@ -54,7 +54,7 @@ export function AuthShell({
             onClick={toggle}
             aria-label={t.auth.toggleTheme}
           >
-            {resolvedTheme === "dark" ? <Sun /> : <Moon />}
+            {resolvedTheme === "light" ? <Sun /> : resolvedTheme === "dim" ? <SunMoon /> : <Moon />}
           </Button>
         </div>
       </div>

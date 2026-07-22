@@ -11,9 +11,10 @@
  * `billing-oblien-quota` helper.
  */
 
-import { eq, db, schema } from "@repo/db";
+import { eq, db, schema, repos } from "@repo/db";
 import {
   generateId,
+  safeErrorMessage,
   CREDIT_PACKS,
   PLANS,
   type PlanTierId,
@@ -46,6 +47,17 @@ export interface BillingState {
   };
   /** Tier's monthly allowance in milli-credits, or null when Oblien doesn't surface one. */
   monthlyCreditLimit: number | null;
+  /**
+   * Display-only: the org is out of credits (quota_used ≥ limit). Derived live
+   * from the balance — NOT a locally-managed state. Oblien owns the actual
+   * enforcement (stops workspaces at overdraft); this just drives the UI badge.
+   */
+  overQuota: boolean;
+  /**
+   * Total build time this period, in minutes. Openship-derived (sum of
+   * build-session durations) — Oblien does not meter build separately.
+   */
+  buildTimeMinutes: number;
 }
 
 export interface BillingCustomer {
@@ -102,35 +114,50 @@ export async function getBillingState(orgId: string): Promise<BillingState> {
   // and is the source of truth for current entitlement).
   const monthlyCreditLimit = PLANS[tier]?.monthlyCredits ?? null;
 
-  const quota = await getQuotaState(orgId);
-
-  // Namespace not provisioned yet, or no `compute` row on Oblien — return a
-  // zeroed snapshot so the dashboard renders cleanly instead of forwarding
-  // nulls. Oblien's `null` quotaLimit means "unlimited", which we surface
-  // as the tier baseline (or 0 for enterprise where monthly is admin-granted).
-  if (!quota) {
-    return {
-      tier,
-      status: org.subscriptionStatus,
-      currentPeriod: {
-        start: org.currentPeriodStart ?? null,
-        end: org.currentPeriodEnd ?? null,
-      },
-      balance: {
-        total: 0,
-        quotaLimit: monthlyCreditLimit ?? 0,
-        quotaUsed: 0,
-        quotaRemaining: 0,
-      },
-      monthlyCreditLimit,
-    };
+  // Live Oblien quota is authoritative. It can throw (Oblien unreachable) or
+  // return null (namespace not provisioned / no `compute` row) — in both cases
+  // fall back to the last `credits.usage` snapshot so the dashboard degrades
+  // gracefully instead of 500ing. All three sources speak milli-credits.
+  let quota: Awaited<ReturnType<typeof getQuotaState>> = null;
+  try {
+    quota = await getQuotaState(orgId);
+  } catch (err) {
+    console.warn(
+      `[billing] live quota read failed for org ${orgId}; falling back to usage snapshot: ${safeErrorMessage(err)}`,
+    );
   }
 
-  // `quotaLimit === null` on Oblien means "unlimited". We don't have a
-  // numeric sentinel for that on the dashboard contract, so fall back to
-  // the tier baseline (or 0) — callers treat 0 as "no ceiling enforced
-  // locally" and rely on the tier display instead.
-  const liveQuotaLimit = quota.quotaLimit ?? monthlyCreditLimit ?? 0;
+  const snapshot = await repos.billingUsageSnapshot.findByOrg(orgId).catch(() => null);
+
+  const quotaUsed = quota?.quotaUsed ?? snapshot?.creditsUsed ?? 0;
+  // `quotaLimit === null` (Oblien "unlimited") falls through to the derived
+  // snapshot limit (balance + used), then the tier baseline, then 0.
+  const quotaLimit =
+    quota?.quotaLimit ??
+    (snapshot?.balance != null
+      ? snapshot.balance + (snapshot.creditsUsed ?? 0)
+      : null) ??
+    monthlyCreditLimit ??
+    0;
+  const rawRemaining =
+    quota?.quotaRemaining ??
+    (snapshot?.balance != null ? Math.max(0, snapshot.balance) : Math.max(0, quotaLimit - quotaUsed));
+  // Oblien reports Infinity for an unlimited quota — clamp to the numeric
+  // limit so the dashboard contract stays finite/serializable.
+  const quotaRemaining = Number.isFinite(rawRemaining) ? rawRemaining : quotaLimit;
+
+  // Display-only over-quota flag (Oblien is the real enforcer).
+  const overQuota = quotaLimit > 0 && quotaRemaining <= 0;
+
+  // Build time this period (openship-derived). Window = the org's billing
+  // period, or the last 30 days when no period is set (fresh free org).
+  const periodEnd = org.currentPeriodEnd ?? new Date();
+  const periodStart =
+    org.currentPeriodStart ?? new Date(periodEnd.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const buildMillis = await repos.deployment
+    .sumBuildMillisForOrg(orgId, periodStart, periodEnd)
+    .catch(() => 0);
+  const buildTimeMinutes = Math.round(buildMillis / 60_000);
 
   return {
     tier,
@@ -140,12 +167,14 @@ export async function getBillingState(orgId: string): Promise<BillingState> {
       end: org.currentPeriodEnd ?? null,
     },
     balance: {
-      total: quota.quotaRemaining,
-      quotaLimit: liveQuotaLimit,
-      quotaUsed: quota.quotaUsed,
-      quotaRemaining: quota.quotaRemaining,
+      total: quotaRemaining,
+      quotaLimit,
+      quotaUsed,
+      quotaRemaining,
     },
     monthlyCreditLimit,
+    overQuota,
+    buildTimeMinutes,
   };
 }
 

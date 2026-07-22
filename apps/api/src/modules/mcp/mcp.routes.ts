@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import { repos } from "@repo/db";
 import { secureRouter } from "../../lib/secure-router";
 import { parseBearerToken } from "../../lib/bearer";
+import { requestPublicOrigin } from "../../lib/public-url";
 import { resolveActiveOrganizationId } from "../../middleware/active-organization";
 import { resolveBearerIdentity } from "../../middleware/auth";
 import { handleMcpMessage, jsonRpcError } from "./mcp-server";
@@ -62,7 +63,9 @@ r.public("post", "/", { reason: PUBLIC_REASON, rateLimit: "mcp" }, async (c) => 
   // OAuth-2.1 MCP clients discover the authorization server and start the flow.
   const unauthorized = () =>
     c.json(jsonRpcError(null, -32001, "Missing or invalid access token"), 401, {
-      "WWW-Authenticate": `Bearer resource_metadata="${new URL(c.req.url).origin}/.well-known/oauth-protected-resource"`,
+      // Advertise the PUBLIC discovery URL (from the forwarded host) so a remote
+      // OAuth client can actually reach it — not the loopback origin the API binds.
+      "WWW-Authenticate": `Bearer resource_metadata="${requestPublicOrigin(c.req.raw)}/.well-known/oauth-protected-resource"`,
     });
 
   if (!token) return unauthorized();

@@ -1,12 +1,14 @@
-import { Zap, ListChecks, ChevronRight } from "lucide-react";
+import { Zap, ListChecks, Activity, ChevronRight } from "lucide-react";
 import type { SetupMode } from "./types";
 import { useI18n } from "@/components/i18n-provider";
 
 export function ChooseMode({
   onSelect,
+  onSkip,
   disabled,
 }: {
   onSelect: (mode: SetupMode) => void;
+  onSkip: () => void;
   disabled?: boolean;
 }) {
   const { t } = useI18n();
@@ -44,6 +46,25 @@ export function ChooseMode({
             <p className="text-[15px] font-semibold text-foreground">{t.servers.setup.stepTitle}</p>
             <p className="text-sm text-muted-foreground mt-0.5">
               {t.servers.setup.stepDesc}
+            </p>
+          </div>
+          <ChevronRight className="size-5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity rtl:rotate-180" />
+        </div>
+      </button>
+
+      <button
+        onClick={onSkip}
+        disabled={disabled}
+        className="w-full text-start bg-card rounded-2xl border border-border/50 p-6 hover:border-primary/30 hover:bg-primary/[0.02] transition-all group"
+      >
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center shrink-0">
+            <Activity className="size-6 text-muted-foreground" />
+          </div>
+          <div className="flex-1">
+            <p className="text-[15px] font-semibold text-foreground">{t.servers.setup.skipTitle}</p>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {t.servers.setup.skipDesc}
             </p>
           </div>
           <ChevronRight className="size-5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity rtl:rotate-180" />

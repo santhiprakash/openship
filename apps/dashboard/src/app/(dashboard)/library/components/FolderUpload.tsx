@@ -221,9 +221,9 @@ export function FolderUpload() {
         )}
 
         {error && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg mt-3 bg-red-500/10 border border-red-500/20">
-            <AlertCircle className="size-4 shrink-0 text-red-500" />
-            <p className="text-xs text-red-500">{error}</p>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg mt-3 bg-danger-bg border border-danger-border">
+            <AlertCircle className="size-4 shrink-0 text-danger" />
+            <p className="text-xs text-danger">{error}</p>
           </div>
         )}
       </div>

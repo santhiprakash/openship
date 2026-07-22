@@ -81,8 +81,8 @@ export function BillingUnavailable({ reason }: Props) {
   if (reason === "cloud-session-expired") {
     return (
       <div className="rounded-2xl border border-border/50 bg-card p-8 text-center">
-        <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-amber-500/10">
-          <CircleAlert className="size-6 text-amber-500" />
+        <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-warning-bg">
+          <CircleAlert className="size-6 text-warning" />
         </div>
         <h2 className="text-base font-semibold text-foreground">
           {t.billing.unavailable.sessionExpired.title}

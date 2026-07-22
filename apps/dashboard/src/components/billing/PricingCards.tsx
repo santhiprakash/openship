@@ -75,6 +75,9 @@ export const PricingCards: React.FC<PricingCardsProps> = ({
         const isCurrent = currentPlan === plan.id;
         const isPopular = plan.popular;
         const isEnterprise = plan.id === "enterprise";
+        // Paid tier with no finalized price → "coming soon" (not enterprise,
+        // which is genuinely "contact sales"). Free stays $0.
+        const isComingSoon = plan.price.monthly === null && !isEnterprise;
         const isSubscribing = subscribingPlan === plan.id;
         const icon = PLAN_ICON[plan.id] ?? <Sparkles className="size-5" />;
 
@@ -109,10 +112,10 @@ export const PricingCards: React.FC<PricingCardsProps> = ({
 
             {/* Price */}
             <div className="mb-1 flex items-baseline gap-1">
-              <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
-                {dollars ?? t.billing.pricing.custom}
+              <span className={`font-bold tracking-tight tabular-nums text-foreground ${isComingSoon ? "text-2xl" : "text-4xl"}`}>
+                {isComingSoon ? t.billing.pricing.comingSoon : (dollars ?? t.billing.pricing.custom)}
               </span>
-              {suffix && (
+              {suffix && !isComingSoon && (
                 <span className="text-sm font-medium text-muted-foreground">
                   {suffix}
                 </span>
@@ -136,6 +139,10 @@ export const PricingCards: React.FC<PricingCardsProps> = ({
                   {t.billing.pricing.contactSales}
                   <ArrowRight className="size-3.5 rtl:rotate-180" />
                 </a>
+              ) : isComingSoon ? (
+                <div className="flex h-10 w-full items-center justify-center rounded-lg border border-dashed border-border/50 bg-muted/20 text-sm font-medium text-muted-foreground">
+                  {t.billing.pricing.comingSoon}
+                </div>
               ) : plan.price.monthly === 0 ? (
                 <div className="flex h-10 w-full items-center justify-center rounded-lg border border-border/50 bg-muted/40 text-sm font-medium text-muted-foreground">
                   {t.billing.pricing.freeForever}

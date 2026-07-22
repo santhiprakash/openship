@@ -13,6 +13,8 @@
  *     otherwise require interactive input (ACME email, domain, etc.)
  */
 
+import type { PromptUserFn } from "../runtime/deploy-pipeline";
+
 // ─── Log streaming ───────────────────────────────────────────────────────────
 
 /** Log entry from system operations - matches LogEntry shape for uniformity. */
@@ -46,6 +48,10 @@ export interface ComponentStatus {
   removeBlockedReason?: string;
   installed: boolean;
   version?: string;
+  /** Newer version available from the package manager (candidate), if any. */
+  availableVersion?: string;
+  /** True when `availableVersion` is newer than the installed `version`. */
+  updateAvailable?: boolean;
   /** Whether the daemon is actively running (Docker, Nginx) */
   running?: boolean;
   /** installed AND running (when applicable) */
@@ -114,6 +120,95 @@ export interface InstallerConfig {
   acmeEmail?: string;
   /** Primary domain for the platform */
   domain?: string;
+  /**
+   * Pre-accepted authorization to take over ports 80/443 from an existing
+   * owner (persisted decision / non-interactive re-ensure). Skips the prompt.
+   */
+  edgePolicy?: EdgePolicy;
+  /**
+   * Interactive hold: when the edge ports are held by a foreign proxy and no
+   * edgePolicy is set, the installer pauses and asks via this callback — the
+   * SAME mechanism as the deploy "a service is already running" prompt. Returns
+   * the chosen action id ("override" | "cancel" | "migrate"). Absent + no
+   * policy → the installer throws EdgeConflictError rather than guessing.
+   */
+  promptUser?: PromptUserFn;
+}
+
+// ─── Edge (port 80/443) ownership ──────────────────────────────────────────────
+
+/** Recognized reverse proxies that may already own the edge ports. */
+export type ProxyKind = "nginx" | "caddy" | "apache" | "traefik" | "haproxy" | "openresty";
+
+/**
+ * free    → nothing on 80/443
+ * ours    → the edge is our own OpenResty
+ * known   → a recognized foreign proxy (migratable)
+ * unknown → something holds the port we can't identify (takeover-only)
+ */
+export type EdgeClassification = "free" | "ours" | "known" | "unknown";
+
+export interface EdgeOccupant {
+  port: number;
+  pid?: number;
+  command?: string;
+  rawCommand?: string;
+  systemdUnit?: string;
+  systemdDescription?: string;
+  isDocker?: boolean;
+  containerName?: string;
+  proxy?: ProxyKind;
+  /** true when this is our own OpenResty (never counted as a conflict) */
+  managedByOpenship: boolean;
+}
+
+export interface EdgeStatus {
+  classification: EdgeClassification;
+  /** Foreign owners that must be resolved before we can bind 80/443. */
+  occupants: EdgeOccupant[];
+  /** true for free | ours */
+  canProceedClean: boolean;
+}
+
+/** A single thing to stop when taking over a port. */
+export interface EdgeStopTarget {
+  port?: number;
+  unit?: string;
+  pid?: number;
+  container?: string;
+  label?: string;
+}
+
+/** Explicit, user-accepted authorization to reclaim the edge ports. */
+export interface EdgePolicy {
+  mode: "takeover";
+  stopTargets: EdgeStopTarget[];
+}
+
+// ─── Proxy config import (migrate) ──────────────────────────────────────────────
+
+/** A site parsed from an existing proxy's config, normalized for import. */
+export interface ImportedSite {
+  /** Hostnames this site answers to (server_name / ServerName+Alias / Caddy address). */
+  serverNames: string[];
+  /** Whether the source served this site over TLS. */
+  ssl: boolean;
+  /** Where requests go: a reverse-proxy upstream, or a static docroot. */
+  target:
+    | { kind: "proxy"; url: string }
+    | { kind: "static"; root: string };
+  /** Existing certificate paths, if the source terminated TLS itself (reusable). */
+  tls?: { certPath: string; keyPath: string };
+  /** Source config file, for traceability. */
+  source?: string;
+}
+
+/** Result of scanning one proxy's configuration. */
+export interface ProxyScanResult {
+  proxy: ProxyKind;
+  sites: ImportedSite[];
+  /** Anything we couldn't parse/import — surfaced to the user, never silently dropped. */
+  warnings: string[];
 }
 
 // ─── Runtime mode ────────────────────────────────────────────────────────────

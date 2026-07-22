@@ -200,12 +200,16 @@ export function createNotificationSubscriptionRepo(db: Database) {
       return row;
     },
 
-    async delete(id: string, organizationId: string): Promise<void> {
+    async delete(id: string, userId: string, organizationId: string): Promise<void> {
+      // Scope by owning userId too: a subscription belongs to one user, and the
+      // org-singleton `notifications:write` tag only checks org membership — so
+      // without this filter any member could delete another member's row.
       await db
         .delete(notificationSubscription)
         .where(
           and(
             eq(notificationSubscription.id, id),
+            eq(notificationSubscription.userId, userId),
             eq(notificationSubscription.organizationId, organizationId),
           ),
         );

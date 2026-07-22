@@ -17,7 +17,20 @@ import type { ToolchainCheckEntry, ToolchainInstallPlan } from "./types";
 function nodeInstallPlan(profile: EnvironmentProfile): ToolchainInstallPlan {
   if (profile.os === "linux" && ["apt", "dnf", "yum"].includes(profile.packageManager)) {
     const installCommands: Record<string, string> = {
-      apt: "curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && apt-get install -y nodejs",
+      // NodeSource's `setup_lts.x` pins the apt repo to $(lsb_release -sc), so it
+      // breaks on a new/unpublished Ubuntu codename exactly like the OpenResty
+      // #86 bug (and can leave a poisoned nodesource.list that fails later apt
+      // runs). Their node_XX.x repos use the distro-agnostic `nodistro` suite, so
+      // add it directly (no codename, no `curl | bash` of a remote script) and
+      // heal a stale list first. Pinned to the current LTS major (bump on new LTS).
+      apt: [
+        "set -e",
+        "rm -f /etc/apt/sources.list.d/nodesource.list",
+        "apt-get update -qq && apt-get install -y -qq curl gnupg ca-certificates",
+        "curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor --yes -o /usr/share/keyrings/nodesource.gpg",
+        'echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list',
+        "apt-get update -qq && apt-get install -y -qq nodejs",
+      ].join("\n"),
       dnf: "curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash - && dnf install -y nodejs",
       yum: "curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash - && yum install -y nodejs",
     };

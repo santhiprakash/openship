@@ -106,6 +106,32 @@ export async function ghFetchSoft<T = unknown>(token: string, req: GhRequest): P
   }
 }
 
+/**
+ * UNAUTHENTICATED GET against the public github.com REST API — deliberately no
+ * Authorization header (unlike ghFetch, which forces one). Returns the parsed
+ * body on 2xx, or null on any failure (network, non-2xx, parse). A private or
+ * missing repo 404s to anonymous callers (GitHub hides private repos), so null
+ * means "needs a credential". This lets a public repo be read/deployed with no
+ * GitHub connection at all.
+ */
+export async function ghFetchPublic<T = unknown>(req: GhRequest): Promise<T | null> {
+  try {
+    const res = await timedFetch(withQuery(req.url, "GET", req.params), {
+      method: "GET",
+      headers: {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        ...(req.headers ?? {}),
+      },
+    });
+    if (res.status === 204) return { success: true } as T;
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 // Cache POSITIVE verdicts only — a repo confirmed public stays cached for the
 // TTL (public→private is rare). Negatives are never cached, so a transient
 // failure re-probes next time rather than trapping a public repo behind a stale

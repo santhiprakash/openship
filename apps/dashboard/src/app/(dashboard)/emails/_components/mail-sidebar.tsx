@@ -69,11 +69,11 @@ export function MailSidebar({
     <div className="space-y-4">
       {/* Port conflict resolution */}
       {portConflicts && (
-        <div className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-5">
+        <div className="bg-warning-bg border border-warning-border rounded-2xl p-5">
           <div className="flex items-center gap-3 mb-4">
-            <Unplug className="size-5 text-amber-500" />
+            <Unplug className="size-5 text-warning" />
             <div>
-              <h3 className="text-sm font-semibold text-amber-600 dark:text-amber-400">
+              <h3 className="text-sm font-semibold text-warning">
                 {t.emails.sidebar.portConflict.title}
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -101,10 +101,10 @@ export function MailSidebar({
                     <span
                       className={`text-xs px-2 py-0.5 rounded-full ${
                         conflict.type === "traefik"
-                          ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                          ? "bg-info-bg text-info"
                           : conflict.type === "known"
                             ? "bg-violet-500/10 text-violet-600 dark:text-violet-400"
-                            : "bg-red-500/10 text-red-600 dark:text-red-400"
+                            : "bg-danger-bg text-danger"
                       }`}
                     >
                       {conflict.type === "traefik"
@@ -135,24 +135,24 @@ export function MailSidebar({
                         disabled={resolving}
                         className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-start transition-colors disabled:opacity-50 ${
                           resolution.destructive
-                            ? "border-red-500/30 hover:bg-red-500/5"
+                            ? "border-danger-border hover:bg-danger-bg"
                             : "border-border/50 hover:bg-muted/50"
                         }`}
                       >
                         {resolution.destructive ? (
                           resolution.id === "kill_process" ? (
-                            <Skull className="size-4 text-red-500 shrink-0" />
+                            <Skull className="size-4 text-danger shrink-0" />
                           ) : (
-                            <OctagonX className="size-4 text-red-500 shrink-0" />
+                            <OctagonX className="size-4 text-danger shrink-0" />
                           )
                         ) : (
-                          <ArrowRightLeft className="size-4 text-blue-500 shrink-0" />
+                          <ArrowRightLeft className="size-4 text-info shrink-0" />
                         )}
                         <div className="flex-1 min-w-0">
                           <p
                             className={`text-sm font-medium ${
                               resolution.destructive
-                                ? "text-red-600 dark:text-red-400"
+                                ? "text-danger"
                                 : "text-foreground"
                             }`}
                           >
@@ -170,9 +170,9 @@ export function MailSidebar({
                   </div>
 
                   {conflict.type === "unknown" && (
-                    <div className="mt-3 flex items-start gap-2 p-2.5 rounded-lg bg-red-500/5">
-                      <AlertTriangle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
-                      <p className="text-xs text-red-600 dark:text-red-400">
+                    <div className="mt-3 flex items-start gap-2 p-2.5 rounded-lg bg-danger-bg">
+                      <AlertTriangle className="size-3.5 text-danger mt-0.5 shrink-0" />
+                      <p className="text-xs text-danger">
                         {t.emails.sidebar.portConflict.killWarning}
                       </p>
                     </div>
@@ -181,8 +181,8 @@ export function MailSidebar({
               ))}
             </div>
           ) : (
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-              <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+            <div className="rounded-xl border border-success-border bg-success-bg p-4">
+              <p className="text-sm font-medium text-success">
                 {t.emails.sidebar.portConflict.allResolved}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
@@ -203,10 +203,10 @@ export function MailSidebar({
 
       {/* Completion card */}
       {isCompleted && completionData && (
-        <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-2xl p-5">
+        <div className="bg-success-bg border border-success-border rounded-2xl p-5">
           <div className="flex items-center gap-3 mb-4">
-            <CheckCircle2 className="size-5 text-emerald-500" />
-            <h3 className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="size-5 text-success" />
+            <h3 className="text-sm font-semibold text-success">
               {t.emails.sidebar.completion.ready}
             </h3>
           </div>
@@ -360,13 +360,13 @@ function AllStepsCard({
       </div>
 
       {isStalled && firstPendingId !== undefined && (
-        <div className="px-5 py-3 border-b border-amber-500/20 bg-amber-500/5 flex items-center justify-between gap-3">
-          <p className="text-xs text-amber-700 dark:text-amber-400 min-w-0">
+        <div className="px-5 py-3 border-b border-warning-border bg-warning-bg flex items-center justify-between gap-3">
+          <p className="text-xs text-warning min-w-0">
             {interpolate(t.emails.sidebar.steps.interrupted, { step: String(firstPendingId) })}
           </p>
           <button
             onClick={() => onResume(firstPendingId)}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-amber-500 text-white hover:bg-amber-500/90 transition-colors shrink-0"
+            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-warning-solid text-white hover:bg-warning-solid/90 transition-colors shrink-0"
           >
             <RotateCcw className="size-3" />
             {t.emails.sidebar.steps.resume}
@@ -390,9 +390,9 @@ function AllStepsCard({
               ref={isActive ? activeRowRef : null}
               className={`flex items-center gap-3 px-4 py-2.5 ${
                 isCurrent
-                  ? "bg-blue-500/5"
+                  ? "bg-info-bg"
                   : isFailed
-                    ? "bg-red-500/5"
+                    ? "bg-danger-bg"
                     : ""
               }`}
             >
@@ -413,25 +413,25 @@ function AllStepsCard({
                   <span
                     className={`text-[13px] truncate ${
                       isCurrent
-                        ? "text-blue-600 dark:text-blue-400 font-medium"
+                        ? "text-info font-medium"
                         : s.status === "completed"
                           ? "text-foreground"
                           : isFailed
-                            ? "text-red-600 dark:text-red-400 font-medium"
+                            ? "text-danger font-medium"
                             : "text-muted-foreground/70"
                     }`}
                   >
                     {s.label}
                   </span>
                   {s.warning && (
-                    <AlertTriangle className="size-3 text-amber-500 shrink-0" />
+                    <AlertTriangle className="size-3 text-warning shrink-0" />
                   )}
                 </div>
                 {(isCurrent || isFailed) && s.message && (
                   <p
                     className={`text-sm mt-0.5 truncate ${
                       isFailed
-                        ? "text-red-500/80"
+                        ? "text-danger"
                         : "text-muted-foreground"
                     }`}
                   >

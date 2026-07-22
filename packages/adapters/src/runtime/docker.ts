@@ -39,6 +39,7 @@ import type {
   ShellSession,
   ProvisionLock,
 } from "../types";
+import type { PortProbeExecutor } from "../system/port-listen";
 import { PassThrough, Writable } from "node:stream";
 
 /**
@@ -75,8 +76,14 @@ import type {
   DeploymentRef,
   RollbackInput,
   MakeActiveResult,
+  DockerContainerSummary,
+  DockerContainerDetail,
+  DockerMount,
+  DockerPortBinding,
+  DockerVolumeInfo,
+  DockerNetworkInfo,
 } from "./types";
-import { BuildLogger, parseLogLevel, sq, injectGitToken } from "./build-pipeline";
+import { BuildLogger, parseLogLevel, sq, assembleGitClone } from "./build-pipeline";
 import { githubTarballUrl, downloadTarballOnRemote } from "./source-tarball";
 import { scopeVolumeBinds, isHostPathSource } from "./volume-namespace";
 import { createDockerBuildContext, prepareSourceTree, resolveServiceDockerfile } from "./docker-build-context";
@@ -110,6 +117,102 @@ const DOCKER_BUILD_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 function resolveRestartPolicy(policy?: string) {
   return RESTART_POLICIES[policy ?? "always"] ?? RESTART_POLICIES.always;
+}
+
+// ── Docker discovery normalizers (label-agnostic inspection) ─────────────────
+
+/** dockerode list/inspect Mount → normalized DockerMount. Both shapes share the
+ *  Type/Name/Source/Destination/RW fields this reads. */
+function normalizeDockerMount(m: {
+  Type?: string;
+  Name?: string;
+  Source?: string;
+  Destination?: string;
+  RW?: boolean;
+}): DockerMount {
+  return {
+    type: m.Type ?? "volume",
+    ...(m.Name ? { name: m.Name } : {}),
+    ...(m.Source ? { source: m.Source } : {}),
+    destination: m.Destination ?? "",
+    rw: m.RW !== false,
+  };
+}
+
+/** Coerce dockerode Cmd/Entrypoint (string | string[] | null) → string[] | undefined. */
+function toStringArray(v: string | string[] | null | undefined): string[] | undefined {
+  if (v == null) return undefined;
+  const arr = Array.isArray(v) ? v : [v];
+  return arr.length > 0 ? arr : undefined;
+}
+
+/** Normalized port list from a container inspect: published ports (with host
+ *  bindings) from NetworkSettings.Ports, plus exposed-only ports from
+ *  Config.ExposedPorts that were never published. */
+function normalizeInspectPorts(data: Dockerode.ContainerInspectInfo): DockerPortBinding[] {
+  const out: DockerPortBinding[] = [];
+  const seen = new Set<string>();
+  const parseKey = (key: string): { port: number; proto: string } | null => {
+    const [portStr, proto] = key.split("/");
+    const port = Number(portStr);
+    return Number.isFinite(port) ? { port, proto: proto || "tcp" } : null;
+  };
+
+  const nsPorts = (data.NetworkSettings?.Ports ?? {}) as Record<
+    string,
+    Array<{ HostIp?: string; HostPort?: string }> | null
+  >;
+  for (const [key, bindings] of Object.entries(nsPorts)) {
+    const parsed = parseKey(key);
+    if (!parsed) continue;
+    seen.add(key);
+    if (bindings && bindings.length > 0) {
+      for (const b of bindings) {
+        out.push({
+          privatePort: parsed.port,
+          ...(b.HostPort ? { publicPort: Number(b.HostPort) } : {}),
+          type: parsed.proto,
+          ...(b.HostIp ? { ip: b.HostIp } : {}),
+        });
+      }
+    } else {
+      out.push({ privatePort: parsed.port, type: parsed.proto });
+    }
+  }
+
+  // NetworkSettings.Ports is only populated while the container RUNS; a stopped
+  // container reports its published ports in HostConfig.PortBindings instead.
+  // Read that as a fallback so a stopped service's port mapping isn't lost.
+  const hostBindings = (data.HostConfig?.PortBindings ?? {}) as Record<
+    string,
+    Array<{ HostIp?: string; HostPort?: string }> | null
+  >;
+  for (const [key, bindings] of Object.entries(hostBindings)) {
+    if (seen.has(key)) continue;
+    const parsed = parseKey(key);
+    if (!parsed) continue;
+    seen.add(key);
+    if (bindings && bindings.length > 0) {
+      for (const b of bindings) {
+        out.push({
+          privatePort: parsed.port,
+          ...(b.HostPort ? { publicPort: Number(b.HostPort) } : {}),
+          type: parsed.proto,
+          ...(b.HostIp ? { ip: b.HostIp } : {}),
+        });
+      }
+    } else {
+      out.push({ privatePort: parsed.port, type: parsed.proto });
+    }
+  }
+
+  const exposed = (data.Config?.ExposedPorts ?? {}) as Record<string, object>;
+  for (const key of Object.keys(exposed)) {
+    if (seen.has(key)) continue;
+    const parsed = parseKey(key);
+    if (parsed) out.push({ privatePort: parsed.port, type: parsed.proto });
+  }
+  return out;
 }
 
 /** Parse port specs ("8080:3000", "3000", "127.0.0.1:8080:80") into Docker
@@ -686,10 +789,10 @@ export class DockerRuntime implements RuntimeAdapter {
     const useHelper = !!config.gitCredentialHelperPath;
 
     // Prefer a direct GitHub tarball download on the server (no git, no history,
-    // no context transfer) when we can authenticate without the relay. Falls
-    // through to git clone on ANY failure (relay-only desktop, non-github / ssh
-    // remote, private-without-token, curl/tar/network error).
-    if (!useHelper) {
+    // no context transfer) when we can authenticate without the relay. HTTPS-
+    // only — skipped for the relay AND for SSH key auth. Falls through to git
+    // clone on ANY failure.
+    if (!useHelper && !config.gitSsh) {
       const ref = config.commitSha || config.branch;
       const tarUrl = githubTarballUrl(config.repoUrl, ref);
       if (tarUrl) {
@@ -713,17 +816,35 @@ export class DockerRuntime implements RuntimeAdapter {
       }
     }
 
-    const cloneUrl = useHelper ? config.repoUrl : injectGitToken(config.repoUrl, config.gitToken);
-    const GIT_ENV = useHelper
-      ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=${sq(config.gitCredentialHelperPath!)} GIT_CONFIG_KEY_1=credential.useHttpPath GIT_CONFIG_VALUE_1=true`
-      : "GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/echo";
-    // Token mode disables host helpers; relay mode keeps the helper (it IS the auth).
-    const CRED = useHelper ? "" : "-c credential.helper=";
+    // SSH mode (per-server key / deploy key): write the 0600 key + known_hosts
+    // on the remote out of band (executor.writeFile — never echoed) and clone
+    // over git@github.com. Cleaned up in the finally below.
+    let sshFiles: { keyFile: string; knownHostsFile: string } | undefined;
+    let sshCleanup: string | null = null;
+    if (config.gitSsh) {
+      const sshDir = `${remoteContextDir}.gitssh`;
+      const keyFile = `${sshDir}/id`;
+      const knownHostsFile = `${sshDir}/known_hosts`;
+      await executor.exec(`mkdir -p ${sq(sshDir)} && chmod 700 ${sq(sshDir)}`);
+      await executor.writeFile(keyFile, config.gitSsh.privateKey);
+      await executor.writeFile(knownHostsFile, config.gitSsh.knownHosts);
+      await executor.exec(`chmod 600 ${sq(keyFile)}`);
+      sshFiles = { keyFile, knownHostsFile };
+      sshCleanup = `rm -rf ${sq(sshDir)}`;
+    }
+
+    // Centralized clone assembly (token / relay / ssh) — see git-clone.ts.
+    const { cloneUrl, gitEnv: GIT_ENV, credFlag: CRED } = assembleGitClone({
+      repoUrl: config.repoUrl,
+      gitToken: config.gitToken,
+      gitCredentialHelperPath: config.gitCredentialHelperPath,
+      ssh: sshFiles,
+    });
     const dir = sq(remoteContextDir);
 
     log.log(
       `Cloning ${config.repoUrl} on the server → ${remoteContextDir} ` +
-        `(${useHelper ? "forwarded credentials" : "token"})...\n`,
+        `(${config.gitSsh ? "ssh key" : useHelper ? "forwarded credentials" : "token"})...\n`,
     );
     await executor.exec(`rm -rf ${dir} && mkdir -p ${dir}`);
 
@@ -734,27 +855,30 @@ export class DockerRuntime implements RuntimeAdapter {
       if (code !== 0) throw new Error(`git clone on server exited with code ${code}`);
     };
 
-    if (config.commitSha) {
-      try {
+    try {
+      if (config.commitSha) {
+        try {
+          await run(
+            `${GIT_ENV} git ${CRED} clone --progress --depth 50 --branch ${sq(config.branch)} ${sq(cloneUrl)} ${dir} && ` +
+              `cd ${dir} && git ${CRED} -c advice.detachedHead=false checkout ${sq(config.commitSha)}`,
+          );
+        } catch {
+          log.log(`Commit ${config.commitSha} not in the shallow clone; unshallowing and retrying.\n`, "warn");
+          await run(
+            `cd ${dir} && ${GIT_ENV} git ${CRED} fetch --progress --unshallow && ` +
+              `git ${CRED} -c advice.detachedHead=false checkout ${sq(config.commitSha)}`,
+          );
+        }
+      } else {
         await run(
-          `${GIT_ENV} git ${CRED} clone --progress --depth 50 --branch ${sq(config.branch)} ${sq(cloneUrl)} ${dir} && ` +
-            `cd ${dir} && git ${CRED} -c advice.detachedHead=false checkout ${sq(config.commitSha)}`,
-        );
-      } catch {
-        log.log(`Commit ${config.commitSha} not in the shallow clone; unshallowing and retrying.\n`, "warn");
-        await run(
-          `cd ${dir} && ${GIT_ENV} git ${CRED} fetch --progress --unshallow && ` +
-            `git ${CRED} -c advice.detachedHead=false checkout ${sq(config.commitSha)}`,
+          `${GIT_ENV} git ${CRED} clone --progress --depth 1 --branch ${sq(config.branch)} ${sq(cloneUrl)} ${dir}`,
         );
       }
-    } else {
-      await run(
-        `${GIT_ENV} git ${CRED} clone --progress --depth 1 --branch ${sq(config.branch)} ${sq(cloneUrl)} ${dir}`,
-      );
+      // Never ship .git into the build image.
+      await executor.exec(`rm -rf ${sq(`${remoteContextDir}/.git`)}`).catch(() => {});
+    } finally {
+      if (sshCleanup) await executor.exec(sshCleanup).catch(() => {});
     }
-
-    // Never ship .git into the build image.
-    await executor.exec(`rm -rf ${sq(`${remoteContextDir}/.git`)}`).catch(() => {});
   }
 
   /**
@@ -1543,6 +1667,169 @@ export class DockerRuntime implements RuntimeAdapter {
     }
   }
 
+  // ── Docker discovery (label-agnostic) ────────────────────────────────────
+  //
+  // Enumerate the ENTIRE daemon, not just openship-labeled resources. Powers
+  // "migrate an existing Docker deployment": read whatever already runs on a
+  // server (a compose stack or hand-run containers) so it can be adopted as an
+  // Openship project. Strictly read-only.
+
+  /** Every container on the host (running or stopped), summarized. */
+  async listAllContainers(): Promise<DockerContainerSummary[]> {
+    const containers = await this.docker.listContainers({ all: true });
+    return containers.map((c) => {
+      const labels = c.Labels ?? {};
+      return {
+        id: c.Id,
+        names: (c.Names ?? []).map((n) => n.replace(/^\//, "")),
+        image: c.Image,
+        imageId: c.ImageID,
+        state: c.State,
+        status: c.Status,
+        labels,
+        ports: (c.Ports ?? []).map((p) => ({
+          privatePort: p.PrivatePort,
+          ...(p.PublicPort ? { publicPort: p.PublicPort } : {}),
+          type: (p.Type as string) ?? "tcp",
+          ...(p.IP ? { ip: p.IP } : {}),
+        })),
+        mounts: (c.Mounts ?? []).map(normalizeDockerMount),
+        composeProject: labels["com.docker.compose.project"] || undefined,
+        composeService: labels["com.docker.compose.service"] || undefined,
+      };
+    });
+  }
+
+  /** Full inspect of one container, normalized. Null if the container is gone. */
+  async inspectContainer(id: string): Promise<DockerContainerDetail | null> {
+    let data: Dockerode.ContainerInspectInfo;
+    try {
+      data = await this.docker.getContainer(id).inspect();
+    } catch (err) {
+      if (isDockerNotFoundError(err)) return null;
+      throw err;
+    }
+    const labels = data.Config?.Labels ?? {};
+    const hc = data.Config?.Healthcheck;
+    const rp = data.HostConfig?.RestartPolicy;
+    const configFiles = labels["com.docker.compose.project.config_files"];
+    return {
+      id: data.Id,
+      name: (data.Name ?? "").replace(/^\//, ""),
+      image: data.Config?.Image ?? data.Image,
+      imageId: data.Image,
+      state: data.State?.Status ?? "unknown",
+      command: toStringArray(data.Config?.Cmd),
+      entrypoint: toStringArray(data.Config?.Entrypoint),
+      env: data.Config?.Env ?? [],
+      workingDir: data.Config?.WorkingDir || undefined,
+      labels,
+      restart: rp?.Name ? { name: rp.Name, maximumRetryCount: rp.MaximumRetryCount } : undefined,
+      networks: Object.keys(data.NetworkSettings?.Networks ?? {}),
+      mounts: (data.Mounts ?? []).map(normalizeDockerMount),
+      ports: normalizeInspectPorts(data),
+      healthcheck: hc
+        ? {
+            test: hc.Test,
+            interval: hc.Interval,
+            timeout: hc.Timeout,
+            retries: hc.Retries,
+            startPeriod: hc.StartPeriod,
+          }
+        : undefined,
+      composeProject: labels["com.docker.compose.project"] || undefined,
+      composeService: labels["com.docker.compose.service"] || undefined,
+      composeConfigFiles: configFiles
+        ? configFiles.split(",").map((s) => s.trim()).filter(Boolean)
+        : undefined,
+      composeWorkingDir: labels["com.docker.compose.project.working_dir"] || undefined,
+    };
+  }
+
+  /** The image's baked-in default env (Config.Env). Discovery subtracts these
+   *  from a container's env so only user-set vars are imported, not the dozen
+   *  defaults a base image (postgres, node, …) ships with. [] if unavailable. */
+  async inspectImageEnv(ref: string): Promise<string[]> {
+    try {
+      const data = await this.docker.getImage(ref).inspect();
+      return data.Config?.Env ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** The image's baked-in default CMD (exec-form tokens). Used by migration to
+   *  drop a container's `command` when it merely restates the image default —
+   *  re-specifying it (and wrapping in `sh -c`) defeats entrypoints that drop
+   *  privileges by argv (postgres refuses to run as root otherwise). */
+  async inspectImageCmd(ref: string): Promise<string[]> {
+    try {
+      const data = await this.docker.getImage(ref).inspect();
+      return data.Config?.Cmd ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Ensure an image is present, pulling it if missing. THE single image-pull
+   * path — reused by the deploy pipeline and the backup/migration executor so
+   * connectivity lives in one place.
+   *
+   * Over an SSH transport the pull runs as a blocking `docker pull` through the
+   * command executor, NOT dockerode's `pull` + `modem.followProgress`: the
+   * progress stream tunneled over the SSH docker socket never emits `end`, so
+   * followProgress hangs forever (this was the cross-server migration stall).
+   * A local socket has no such issue, so it keeps the native dockerode pull.
+   */
+  async pullImage(ref: string, opts?: { force?: boolean }): Promise<void> {
+    if (!opts?.force) {
+      try {
+        await this.docker.getImage(ref).inspect();
+        return; // already present
+      } catch {
+        /* missing → pull below */
+      }
+    }
+    // force → skip the present-check and always pull the tag, so a moved
+    // mutable tag (:latest/:1) rolls forward on an "update" deploy.
+    const executor = this.connectionOptions?.executor;
+    if (executor) {
+      // 10 min ceiling — large images over a slow link; still bounded so a
+      // genuinely stuck pull surfaces instead of hanging the whole migration.
+      await executor.exec(`docker pull ${sq(ref)}`, { timeout: 10 * 60_000 });
+      return;
+    }
+    const stream = await this.docker.pull(ref);
+    await new Promise<void>((resolve, reject) => {
+      this.docker.modem.followProgress(stream, (err) => (err ? reject(err) : resolve()));
+    });
+  }
+
+  /** Every named volume on the host. */
+  async listAllVolumes(): Promise<DockerVolumeInfo[]> {
+    const res = await this.docker.listVolumes();
+    return (res?.Volumes ?? []).map((v) => ({
+      name: v.Name,
+      driver: v.Driver,
+      mountpoint: v.Mountpoint,
+      labels: v.Labels ?? {},
+      composeProject: v.Labels?.["com.docker.compose.project"] || undefined,
+    }));
+  }
+
+  /** Every network on the host. */
+  async listAllNetworks(): Promise<DockerNetworkInfo[]> {
+    const nets = await this.docker.listNetworks();
+    return nets.map((n) => ({
+      id: n.Id,
+      name: n.Name,
+      driver: n.Driver,
+      labels: n.Labels ?? {},
+      composeProject: n.Labels?.["com.docker.compose.project"] || undefined,
+    }));
+  }
+
   // ── Observability ──────────────────────────────────────────────────────
 
   async getContainerInfo(containerId: string): Promise<ContainerInfo> {
@@ -1844,6 +2131,74 @@ export class DockerRuntime implements RuntimeAdapter {
     };
   }
 
+  /**
+   * Non-interactive one-shot exec INSIDE a container (Tty:false ⇒ dockerode
+   * multiplexes stdout/stderr, so demux the frames). Sibling of
+   * `openServiceShell` for the advisory port probe — reads stdout + the exit
+   * code. Runs in the CONTAINER, not on the daemon host (never use
+   * `this.executor` here).
+   */
+  private async execInContainer(
+    containerId: string,
+    command: string,
+  ): Promise<{ exitCode: number | null; stdout: string }> {
+    const container = this.docker.getContainer(containerId);
+    const inspect = await container.inspect().catch(() => null);
+    if (!inspect?.State.Running) {
+      throw new Error(
+        `Container ${containerId} is not running (status: ${inspect?.State.Status ?? "unknown"})`,
+      );
+    }
+
+    const exec = await container.exec({
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: false,
+      Cmd: ["sh", "-c", command],
+    });
+
+    const stream = await exec.start({ hijack: true, stdin: false });
+
+    const stdoutChunks: Buffer[] = [];
+    const stdoutSink = new Writable({
+      write(chunk: Buffer, _enc, cb) {
+        stdoutChunks.push(Buffer.from(chunk));
+        cb();
+      },
+    });
+    const stderrSink = new Writable({
+      write(_chunk, _enc, cb) {
+        cb();
+      },
+    });
+    this.docker.modem.demuxStream(stream, stdoutSink, stderrSink);
+
+    await new Promise<void>((resolve, reject) => {
+      stream.on("end", resolve);
+      stream.on("close", resolve);
+      stream.on("error", reject);
+    });
+
+    const info = await exec.inspect().catch(() => null);
+    return {
+      exitCode: info?.ExitCode ?? null,
+      stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+    };
+  }
+
+  /** Command runner scoped to the inside of the container (advisory port probe). */
+  async inContainerExecutor(containerId: string): Promise<PortProbeExecutor> {
+    return {
+      exec: async (command: string) => {
+        const { exitCode, stdout } = await this.execInContainer(containerId, command);
+        if (exitCode && exitCode !== 0) {
+          throw new Error(stdout || `exec exited with code ${exitCode}`);
+        }
+        return stdout;
+      },
+    };
+  }
+
   // ── Compose / multi-service ────────────────────────────────────────────
 
   /**
@@ -2081,13 +2436,10 @@ export class DockerRuntime implements RuntimeAdapter {
           message: `Pulling image ${config.image}...\n`,
           level: "info",
         });
-        const stream = await this.docker.pull(config.image);
-        await new Promise<void>((resolve, reject) => {
-          this.docker.modem.followProgress(stream, (err: Error | null) => {
-            if (err) reject(err);
-            else resolve();
-          });
-        });
+        // Shared pull path — blocking `docker pull` over SSH so a first-time
+        // pull on a fresh remote server can't hang (followProgress-over-SSH).
+        // force-pull on the "update" trigger to roll a moved mutable tag forward.
+        await this.pullImage(config.image, { force: config.forcePull });
       } catch (err) {
         log({
           timestamp: new Date().toISOString(),
@@ -2146,6 +2498,11 @@ export class DockerRuntime implements RuntimeAdapter {
     const data = await container.inspect();
     const { ip, hostPort } = extractNetworkInfo(data);
 
+    // Record the content-addressable digest actually running so the update
+    // scanner can later detect a moved mutable tag. Best-effort: a locally-built
+    // image has no RepoDigests, and any inspect failure must not fail the deploy.
+    const imageDigest = await this.resolveImageDigest(config.image).catch(() => undefined);
+
     log({
       timestamp: new Date().toISOString(),
       message: `Service ${config.serviceName} started (${container.id.slice(0, 12)})${ip ? ` at ${ip}` : ""}.\n`,
@@ -2157,7 +2514,27 @@ export class DockerRuntime implements RuntimeAdapter {
       status: "running",
       ip,
       hostPort,
+      imageDigest,
     };
+  }
+
+  /**
+   * Resolve the `repo@sha256:…` digest of a pulled image from its RepoDigests,
+   * preferring the entry whose repo matches `ref` (an image may carry digests
+   * for several repos). Returns undefined for a locally-built image (no
+   * RepoDigests) or any inspect error. Works local + SSH (plain inspect, no
+   * followProgress). Never throws.
+   */
+  private async resolveImageDigest(ref: string): Promise<string | undefined> {
+    const info = await this.docker.getImage(ref).inspect();
+    const repoDigests: string[] = (info as { RepoDigests?: string[] })?.RepoDigests ?? [];
+    if (repoDigests.length === 0) return undefined;
+    // repo = ref without tag/digest (a colon after the last slash is the tag).
+    const noDigest = ref.split("@")[0];
+    const lastColon = noDigest.lastIndexOf(":");
+    const lastSlash = noDigest.lastIndexOf("/");
+    const repo = lastColon > lastSlash ? noDigest.slice(0, lastColon) : noDigest;
+    return repoDigests.find((d) => d.startsWith(`${repo}@`)) ?? repoDigests[0];
   }
 
   async deployService(

@@ -1,8 +1,18 @@
 import { eq, and, asc, inArray } from "drizzle-orm";
-import { generateId, type ComposeAdvanced } from "@repo/core";
+import { generateId, normalizeCustomHostname, type ComposeAdvanced } from "@repo/core";
 import type { Database } from "../client";
 import { service, serviceDeployment } from "../schema";
-import type { ComposeServiceSpec } from "../schema/service";
+import type { ComposeServiceSpec, ServicePublicEndpoint } from "../schema/service";
+
+/** A public route as it arrives on the wire (port may be a string) before
+ *  normalization into a {@link ServicePublicEndpoint}. */
+export type PublicEndpointInputLike = {
+  port?: number | string | null;
+  domain?: string | null;
+  customDomain?: string | null;
+  domainType?: string | null;
+  targetPath?: string | null;
+};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -109,6 +119,8 @@ export type ParsedComposeService = {
   domain?: string;
   customDomain?: string;
   domainType?: string;
+  /** Additional public routes (one per port). Entry[0] mirrors the scalars. */
+  publicEndpoints?: PublicEndpointInputLike[];
 };
 
 // ─── Routing normalization ───────────────────────────────────────────────────
@@ -122,37 +134,86 @@ export type ParsedComposeService = {
  * implementations were drifting (one trimmed differently than the
  * other) - collapsing to a single source of truth here.
  */
+function normalizeRoutePort(port?: number | string | null): number | null {
+  const numeric = typeof port === "string" ? Number(port) : port;
+  if (!Number.isFinite(numeric) || numeric == null) return null;
+  if (numeric < 1 || numeric > 65535) return null;
+  return Math.trunc(numeric);
+}
+
+/** Normalize a wire/UI public-endpoint array into stored {@link ServicePublicEndpoint}s:
+ *  drop entries missing a valid port or their domain value, dedupe by port. */
+export function normalizeServicePublicEndpoints(
+  endpoints?: PublicEndpointInputLike[] | null,
+): ServicePublicEndpoint[] {
+  const out: ServicePublicEndpoint[] = [];
+  const seenPorts = new Set<number>();
+  for (const endpoint of endpoints ?? []) {
+    const port = normalizeRoutePort(endpoint.port);
+    if (port === null || seenPorts.has(port)) continue;
+    const domainType = endpoint.domainType === "custom" ? "custom" : "free";
+    const domain = domainType === "free" ? endpoint.domain?.trim() || undefined : undefined;
+    const customDomain = domainType === "custom" ? normalizeCustomHostname(endpoint.customDomain ?? "") || undefined : undefined;
+    if (domainType === "free" && !domain) continue;
+    if (domainType === "custom" && !customDomain) continue;
+    seenPorts.add(port);
+    out.push({ port, domainType, ...(domain ? { domain } : {}), ...(customDomain ? { customDomain } : {}) });
+  }
+  return out;
+}
+
 export function normalizeRoutingFields(input: {
   exposed?: boolean | null;
   exposedPort?: string | null;
   domain?: string | null;
   customDomain?: string | null;
   domainType?: string | null;
+  /** Multi-route array. When present + non-empty it WINS: entry[0] mirrors the
+   *  scalar columns below, and the full set is stored on `publicEndpoints`. */
+  publicEndpoints?: PublicEndpointInputLike[] | null;
 }): {
   exposed: boolean;
   exposedPort: string | null;
   domain: string | null;
   customDomain: string | null;
   domainType: string;
+  publicEndpoints: ServicePublicEndpoint[];
 } {
-  const exposed = input.exposed ?? false;
-
-  if (!exposed) {
-    return { exposed: false, exposedPort: null, domain: null, customDomain: null, domainType: "free" };
-  }
-
-  const domainType = input.domainType === "custom" ? "custom" : "free";
   const trimOrNull = (v?: string | null) => {
     const t = v?.trim();
     return t || null;
   };
 
+  // Multi-route wins. The primary (first) endpoint mirrors the scalar columns
+  // so every single-route reader keeps working against the primary.
+  const endpoints = normalizeServicePublicEndpoints(input.publicEndpoints);
+  if (endpoints.length > 0) {
+    const primary = endpoints[0];
+    return {
+      exposed: true,
+      exposedPort: String(primary.port),
+      domain: primary.domainType === "free" ? primary.domain ?? null : null,
+      customDomain: primary.domainType === "custom" ? primary.customDomain ?? null : null,
+      domainType: primary.domainType,
+      publicEndpoints: endpoints,
+    };
+  }
+
+  const exposed = input.exposed ?? false;
+  if (!exposed) {
+    return { exposed: false, exposedPort: null, domain: null, customDomain: null, domainType: "free", publicEndpoints: [] };
+  }
+
+  const domainType = input.domainType === "custom" ? "custom" : "free";
+  // Single-route (scalar) path — publicEndpoints stays [] and the primary route
+  // is synthesized from these columns at read time (resolveServicePublicEndpoints).
   return {
     exposed: true,
     exposedPort: trimOrNull(input.exposedPort),
     domain: domainType === "free" ? trimOrNull(input.domain) : null,
-    customDomain: domainType === "custom" ? trimOrNull(input.customDomain) : null,
+    customDomain: domainType === "custom" ? normalizeCustomHostname(input.customDomain ?? "") || null : null,
     domainType,
+    publicEndpoints: [],
   };
 }
 
@@ -370,6 +431,7 @@ export function createServiceRepo(db: Database) {
           domain: p.domain ?? ex?.domain,
           customDomain: p.customDomain ?? ex?.customDomain,
           domainType: p.domainType ?? ex?.domainType,
+          publicEndpoints: p.publicEndpoints ?? ex?.publicEndpoints,
         });
 
         if (ex) {
@@ -569,6 +631,7 @@ export function createServiceRepo(db: Database) {
             containerId: data.containerId ?? null,
             status: data.status,
             imageRef: data.imageRef ?? null,
+            imageDigest: data.imageDigest ?? null,
             hostPort: data.hostPort ?? null,
             ip: data.ip ?? null,
             reason: data.reason ?? null,

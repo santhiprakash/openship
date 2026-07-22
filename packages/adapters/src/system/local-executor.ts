@@ -114,7 +114,9 @@ export class LocalExecutor implements CommandExecutor {
     localPath: string,
     remotePath: string,
     onLog?: (log: LogEntry) => void,
-    options?: { excludes?: string[]; includes?: string[] },
+    // alsoInclude is a no-op here: the `cp -a .` fallback already copies the
+    // whole built tree (build output included) with no git/exclude filtering.
+    options?: { excludes?: string[]; includes?: string[]; alsoInclude?: string[] },
   ): Promise<void> {
     const log = onLog ?? (() => {});
 

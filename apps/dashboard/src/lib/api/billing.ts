@@ -29,6 +29,10 @@ export interface BillingState {
   };
   /** Tier's monthly allowance in milli-credits, or `null` for enterprise. */
   monthlyCreditLimit: number | null;
+  /** Display-only: out of credits (Oblien is the real enforcer). */
+  overQuota: boolean;
+  /** Build time this period in minutes (openship-derived; Oblien has no build meter). */
+  buildTimeMinutes: number;
 }
 
 /**

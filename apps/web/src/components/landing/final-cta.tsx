@@ -9,12 +9,12 @@ export function FinalCta() {
             Ready to ship?
           </h2>
           <p className="fcta-sub">
-            Start in our cloud or on a server you own.<br />
-            No credit card, no lock-in, no configuration files.
+            Cloud or a server you own.<br />
+            No lock-in, no configuration files.
           </p>
           <div className="fcta-row">
             <a href="/login" className="fcta-btn fcta-btn--primary">
-              Start free
+              Get started
             </a>
             <a
               href="https://github.com/oblien/openship"
@@ -28,7 +28,7 @@ export function FinalCta() {
           <ul className="fcta-trust">
             <li>CLI, web &amp; desktop</li>
             <li>Cloud or self-hosted</li>
-            <li>No credit card</li>
+            <li>No lock-in</li>
             <li>Open source</li>
           </ul>
         </div>

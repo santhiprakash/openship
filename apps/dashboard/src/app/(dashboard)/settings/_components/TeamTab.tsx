@@ -14,7 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Mail, Plus, Trash2, UserPlus, Building2 } from "lucide-react";
+import { Loader2, Mail, Plus, Trash2, UserPlus, Building2, LogOut, Settings2 } from "lucide-react";
 import { authClient, useSession } from "@/lib/auth-client";
 import { useToast } from "@/context/ToastContext";
 import {
@@ -31,7 +31,10 @@ import { useModal } from "@/context/ModalContext";
 import { GrantPickerModal } from "./GrantPickerModal";
 import { InviteMemberModal } from "./InviteMemberModal";
 import { usePlatform } from "@/context/PlatformContext";
+import { useCloud } from "@/context/CloudContext";
 import { TeamWorkspaceCard } from "./TeamWorkspaceCard";
+import { TeamReachabilityCard, type TeamReachability } from "./TeamReachabilityCard";
+import { WorkspaceManageModal } from "./WorkspaceManageModal";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 
 type MemberRole = "owner" | "admin" | "member" | "restricted";
@@ -77,6 +80,9 @@ const orgClient = (authClient as unknown as {
     removeMember: (opts: { memberIdOrEmail: string }) => Promise<{ error?: { message?: string } }>;
     updateMemberRole: (opts: { memberId: string; role: MemberRole }) => Promise<{ error?: { message?: string } }>;
     cancelInvitation: (opts: { invitationId: string }) => Promise<{ error?: { message?: string } }>;
+    leave: (opts: { organizationId: string }) => Promise<{ error?: { message?: string } }>;
+    setActive: (opts: { organizationId: string }) => Promise<unknown>;
+    getFullOrganization: () => Promise<{ data?: { id: string; name: string } | null }>;
   };
 }).organization;
 
@@ -94,10 +100,13 @@ export function TeamTab() {
   type InvitationMailSource = "platform" | "cloud";
   const [invitationMailSource, setInvitationMailSource] =
     useState<InvitationMailSource>("platform");
-  const [teamMode, setTeamMode] = useState<
-    "single_user" | "self_hosted_remote" | "cloud_hosted" | "tunneled"
-  >("single_user");
+  // Source-of-truth for "is this instance reachable + where" — drives the smart
+  // invite gate + inline guidance (loaded from /system/settings).
+  const [reachability, setReachability] = useState<TeamReachability | null>(null);
   const { selfHosted } = usePlatform();
+  // Read here (inside CloudProvider) and passed into the invite modal, which is
+  // rendered by the root-level modal host outside the dashboard providers.
+  const { connected: cloudConnected, startConnect: connectCloud } = useCloud();
 
   // Mode-aware grantable types: servers + mail servers are self-hosted-only;
   // billing exists only in cloud (SaaS). The picker collapses the two GitHub
@@ -109,10 +118,12 @@ export function TeamTab() {
   // Org-meta: drives personal-vs-team UX. Personal workspaces (auto-
   // created on signup) hide the invite UI; clicking "Create team org"
   // spawns a brand-new is_team=true org with the same owner.
-  const [orgMeta, setOrgMeta] = useState<{ isTeam: boolean; memberCount: number } | null>(null);
+  const [orgMeta, setOrgMeta] = useState<{ isTeam: boolean; memberCount: number; organizationId?: string } | null>(null);
   const [createTeamOpen, setCreateTeamOpen] = useState(false);
   const [newTeamName, setNewTeamName] = useState("");
   const [creatingTeam, setCreatingTeam] = useState(false);
+  const [activeOrgName, setActiveOrgName] = useState("");
+  const [manageOpen, setManageOpen] = useState(false);
 
   // In-flight guard. React Strict Mode mounts every component twice in
   // dev to surface non-idempotent effects — without this ref the refresh
@@ -126,24 +137,27 @@ export function TeamTab() {
     refreshingRef.current = true;
     setLoading(true);
     try {
-      const [mRes, iRes, metaRes, settingsRes] = await Promise.all([
+      const [mRes, iRes, metaRes, settingsRes, fullRes] = await Promise.all([
         orgClient.listMembers(),
         orgClient.listInvitations(),
         // org-meta drives the personal-vs-team UX. The backend ensures
         // a row exists for every org, so this always resolves.
-        api.get<{ data: { isTeam: boolean; memberCount: number } }>(
+        api.get<{ data: { isTeam: boolean; memberCount: number; organizationId?: string } }>(
           "permissions/org-meta",
         ).catch(() => ({ data: { isTeam: false, memberCount: 0 } })),
         api
           .get<{
             invitationMailSource?: InvitationMailSource;
-            teamMode?: "single_user" | "self_hosted_remote" | "cloud_hosted" | "tunneled";
+            teamReachability?: TeamReachability;
           }>("system/settings")
           .catch(() => ({ invitationMailSource: "platform" as InvitationMailSource })),
+        // Active org name for the manage-workspace modal (rename default + confirm).
+        orgClient.getFullOrganization().catch(() => ({ data: null })),
       ]);
       setMembers(mRes.data?.members ?? []);
       setInvitations(iRes.data ?? []);
       setOrgMeta(metaRes.data);
+      setActiveOrgName((fullRes.data as { name?: string } | null)?.name ?? "");
       // SaaS has no self-hosted mail server — invites always go via cloud and
       // the "Send via" chooser is hidden, so only honor a stored source when
       // self-hosted.
@@ -153,8 +167,7 @@ export function TeamTab() {
       } else if (src === "platform" || src === "cloud") {
         setInvitationMailSource(src);
       }
-      const tm = (settingsRes as { teamMode?: typeof teamMode })?.teamMode;
-      if (tm) setTeamMode(tm);
+      setReachability((settingsRes as { teamReachability?: TeamReachability })?.teamReachability ?? null);
     } catch (err) {
       // Network/abort errors are handled by the global NetworkErrorHandler;
       // only surface real API errors here so we don't double-toast.
@@ -227,6 +240,8 @@ export function TeamTab() {
           availableTypes={availableTypes}
           selfHosted={selfHosted}
           initialMailSource={invitationMailSource}
+          cloudConnected={cloudConnected}
+          onConnectCloud={connectCloud}
           onInvited={() => void refresh()}
           onClose={() => hideModal(id)}
         />
@@ -260,6 +275,31 @@ export function TeamTab() {
       return;
     }
     await refresh();
+  };
+
+  // Delete/leave switch back to the personal workspace first — you can't sit on
+  // an org that no longer exists (or that you just left).
+  const switchToPersonalAndReload = async () => {
+    const personalOrgId = session?.user?.id ? `org_${session.user.id}` : null;
+    try {
+      if (personalOrgId) await orgClient.setActive({ organizationId: personalOrgId });
+    } catch {
+      /* the reload resolves whatever org remains */
+    }
+    if (typeof window !== "undefined") window.location.reload();
+  };
+
+  const handleLeaveWorkspace = async () => {
+    const orgId = orgMeta?.organizationId;
+    if (!orgId) return;
+    if (!confirm(t.settings.team.workspace.leaveConfirm)) return;
+    const res = await orgClient.leave({ organizationId: orgId });
+    if (res.error) {
+      showToast(res.error.message ?? t.settings.team.toast.leaveFailed, "error", t.settings.common.toast.team);
+      return;
+    }
+    showToast(t.settings.team.toast.left, "success", t.settings.common.toast.team);
+    await switchToPersonalAndReload();
   };
 
   // Open the resource-access editor for a member: load their current grants,
@@ -316,10 +356,28 @@ export function TeamTab() {
     orgMeta === null ? "loading" : orgMeta.isTeam ? "team" : "personal";
   const isPersonalOrg = orgKind === "personal";
 
-  // Team-workspace migration card: surfaced ONLY to the owner on
-  // single_user self-hosted instances. After migration the dashboard
-  // renders the MigratedLauncher in place of this whole page anyway.
-  const showWorkspaceMigration = selfHosted && teamMode === "single_user";
+  // Offer "Invite member" whenever it can actually succeed. The backend now
+  // allows inviting to a personal OR team org (is_team only labels the
+  // workspace — see auth.ts beforeCreateInvitation), so the only real block is
+  // a self-hosted single-user instance: no shared location, no multi-user auth,
+  // so a teammate couldn't reach it. There we hide the button and show the
+  // "shared location" hint (TeamWorkspaceCard) instead of a dead action.
+  // Smart gate: invites are allowed once the instance is actually REACHABLE
+  // (a real public URL — env `--public-url` or the Openship app's verified
+  // domain), not gated on the migration-wizard flag. So adding a domain to the
+  // Openship app turns invites on directly.
+  const canInvite = isAdminOrOwner && (!selfHosted || !!reachability?.configured);
+
+  // Not reachable yet (self-hosted, no public URL) → show inline guidance
+  // (add a domain to Openship / install it) + the migrate-elsewhere option,
+  // instead of a dead-ended invite button.
+  const showWorkspaceMigration = selfHosted && !reachability?.configured;
+
+  // Delete/leave apply to a TEAM workspace only — never the personal workspace
+  // (org_<userId>), which is the account base. Owner deletes; a member leaves.
+  const isTeamOrg = orgMeta?.isTeam === true;
+  const canManageWorkspace = isOwner && isTeamOrg && !!orgMeta?.organizationId;
+  const canLeaveWorkspace = !isOwner && isTeamOrg && !!orgMeta?.organizationId;
 
   return (
     <div className="space-y-6">
@@ -337,7 +395,7 @@ export function TeamTab() {
               : t.settings.team.descTeam}
           </p>
         </div>
-        {isAdminOrOwner && (
+        {canInvite && (
           <button
             type="button"
             onClick={openInvite}
@@ -349,9 +407,10 @@ export function TeamTab() {
         )}
       </div>
 
-      {/* Secondary option for personal workspaces: spin up a separate team org.
-          Inviting directly is the primary path (the button up top), so this
-          stays a quiet, non-highlighted alternative — owner only. */}
+      {/* Personal workspaces can't invite directly (the invite button is hidden
+          for them — the server rejects personal-org invites). Spinning up a
+          separate team org is the path to collaborating, so this card carries
+          it — owner only. */}
       {isPersonalOrg && isOwner && (
         <div className="rounded-xl border border-border/50 bg-transparent p-4 flex items-center gap-3">
           <div className="size-9 rounded-lg bg-muted flex items-center justify-center shrink-0">
@@ -381,7 +440,7 @@ export function TeamTab() {
       ) : (
         <>
           {/* Active members */}
-          <div className="rounded-2xl border border-border/50 bg-card overflow-hidden">
+          <div className="rounded-2xl border border-border/50 bg-card sadwq">
             <div className="px-5 py-3 border-b border-border/50 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-foreground">
                 {interpolate(t.settings.team.activeMembers, { count: String(members.length) })}
@@ -460,7 +519,7 @@ export function TeamTab() {
 
           {/* Pending invitations */}
           {invitations.length > 0 && (
-            <div className="rounded-2xl border border-border/50 bg-card overflow-hidden">
+            <div className="rounded-2xl border border-border/50 bg-card sadwq">
               <div className="px-5 py-3 border-b border-border/50">
                 <h2 className="text-sm font-semibold text-foreground">
                   {interpolate(t.settings.team.pendingInvitations, { count: String(invitations.filter((i) => i.status === "pending").length) })}
@@ -494,13 +553,72 @@ export function TeamTab() {
               </div>
             </div>
           )}
+
+          {/* Workspace actions on a TEAM workspace — the owner opens the
+              manage modal (rename / pause / delete); a member can leave.
+              Hidden for the personal workspace (the account base). */}
+          {(canManageWorkspace || canLeaveWorkspace) && (
+            <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/50 bg-card p-5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground">
+                  {canManageWorkspace
+                    ? t.settings.team.workspace.manage.title
+                    : t.settings.team.workspace.leaveWorkspace}
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {canManageWorkspace
+                    ? t.settings.team.workspace.manage.sectionBody
+                    : t.settings.team.workspace.leaveBody}
+                </p>
+              </div>
+              {canManageWorkspace ? (
+                <button
+                  type="button"
+                  onClick={() => setManageOpen(true)}
+                  className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-border/60 bg-transparent px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted/50"
+                >
+                  <Settings2 className="size-4" />
+                  {t.settings.team.workspace.manage.title}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void handleLeaveWorkspace()}
+                  className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
+                >
+                  <LogOut className="size-4" />
+                  {t.settings.team.workspace.leaveWorkspace}
+                </button>
+              )}
+            </div>
+          )}
         </>
       )}
 
-      {/* Team workspace / migration card — last in the team tab so the
-          primary "people" UI (members + invitations) is what operators
-          see first. Owner-only, self-hosted single_user only. */}
-      {showWorkspaceMigration && <TeamWorkspaceCard canMigrate={!!isOwner} />}
+      {/* Not reachable yet: inline guidance (add a domain to Openship / install
+          it) is the primary path; the migrate-elsewhere card is the alternative.
+          Last in the tab so the members UI leads. */}
+      {showWorkspaceMigration && (
+        <>
+          <TeamReachabilityCard reachability={reachability} />
+          <TeamWorkspaceCard canMigrate={!!isOwner} />
+        </>
+      )}
+
+      {/* Owner-only manage modal: rename, pause all projects, or delete the
+          workspace (tears each project down before removing the org). */}
+      {manageOpen && orgMeta?.organizationId && (
+        <WorkspaceManageModal
+          organizationId={orgMeta.organizationId}
+          organizationName={activeOrgName}
+          onClose={() => setManageOpen(false)}
+          onRenamed={(n) => {
+            setActiveOrgName(n);
+            void refresh();
+          }}
+          onDeleted={() => void switchToPersonalAndReload()}
+        />
+      )}
 
       {/* Create Team org modal — Cloudflare-style separate account
           creation. Spawns a fresh org with is_team=true; user becomes

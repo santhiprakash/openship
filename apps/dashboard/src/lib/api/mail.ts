@@ -152,6 +152,11 @@ export interface DnsRecords {
   spf: DnsRecord;
   dkim: DnsRecord;
   dmarc: DnsRecord;
+  /**
+   * Extra records beyond the fixed set — e.g. the outbound-relay send-hop
+   * records (SES DKIM CNAMEs + MAIL FROM). Rendered after the standard records.
+   */
+  extraRecords?: DnsRecord[];
 }
 
 // ─── Port conflict types ─────────────────────────────────────────────────────
@@ -543,6 +548,28 @@ export const mailApi = {
     }) =>
       api.post<{ deploymentId: string; projectId: string }>(
         endpoints.mail.webmail.deployProject,
+        input,
+      ),
+
+    /**
+     * Deploy the Zero webmail UI pointed at an EXTERNAL IMAP/SMTP backend —
+     * the "Connect existing" provider path (Amazon SES for send + a read IMAP
+     * host, or a fully custom backend). No mail server / iRedMail required.
+     */
+    deployExternal: (input: {
+      hostname: string;
+      backend: {
+        provider: "ses" | "custom";
+        imapHost: string;
+        imapPort: number;
+        smtpHost: string;
+        smtpPort: number;
+      };
+      target: { deployTarget: "server" | "cloud" | "local"; serverId?: string };
+      internalPort?: number;
+    }) =>
+      api.post<{ deploymentId: string; projectId: string }>(
+        endpoints.mail.webmail.deployExternal,
         input,
       ),
   },

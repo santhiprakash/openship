@@ -28,10 +28,10 @@
  *      period_end is in the future, the org is skipped on subsequent
  *      ticks until the next rollover.
  *
- *   4. If the org was in 'credit_exhausted' state, call
- *      namespaces.activate(...) to lift the suspension and flip the
- *      local status to 'active'. The new quota window gives the org
- *      headroom to run again.
+ *   4. If the org carried a stale 'credit_exhausted' display status, flip
+ *      it back to 'active' in the same UPDATE. We do NOT call Oblien to
+ *      activate anything — Oblien's overdraft gate lifts itself once the
+ *      fresh (zeroed) usage sits under the re-armed ceiling.
  *
  *   5. Emit a `billing.anniversary_reset` audit event with a
  *      before/after diff so operators can trace which orgs the cron
@@ -57,7 +57,7 @@ import { PLANS, type PlanTierId, safeErrorMessage } from "@repo/core";
 import { and, db, eq, lt, notInArray, repos, schema } from "@repo/db";
 import { env } from "../../config/env";
 import { getJobRunner } from "../../lib/job-runner";
-import { getOblienClient } from "../../lib/openship-cloud";
+import { resetAndRegrant } from "./billing-oblien-quota";
 
 const BILLING_ANNIVERSARY_JOB_ID = "billing:anniversary-reset";
 // Hourly at minute 7 — keeps the legacy schedule so booted instances
@@ -68,89 +68,13 @@ const BILLING_ANNIVERSARY_CRON = "7 * * * *";
 const SKIP_STATUSES = ["canceled"] as const;
 
 /**
- * Oblien service key the quota applies to. Today every metered
- * resource (compute + edge + storage) rolls up under the single
- * "compute" service. If pricing later splits services, this becomes a
- * loop over per-tier service definitions — the wrapper signature
- * doesn't have to change.
+ * Oblien service key the quota applies to — surfaced only in the audit row
+ * now; the actual reset+re-arm goes through the shared quota wrapper
+ * (`billing-oblien-quota.resetAndRegrant`), which owns the milli→Oblien-credit
+ * unit boundary + resource-limit re-apply. This cron no longer duplicates that
+ * logic (and no longer suspends/activates — Oblien's overdraft action owns it).
  */
 const QUOTA_SERVICE = "compute";
-
-/**
- * Action Oblien takes when an org busts `quotaLimit + overdraft`. We
- * choose `stop_workspaces` (not `block`) so a busted org sees its
- * running workloads halted — matching the credit_exhausted semantics
- * the suspend-side of the hard-cap handler enforces. Block would let
- * existing workspaces keep running until they tried to provision new
- * resources, which is not the contract on the openship side.
- */
-const ON_OVERDRAFT_ACTION = "stop_workspaces" as const;
-
-/**
- * Reset + re-arm an org's Oblien quota for a fresh period.
- *
- * Two SDK calls, idempotent server-side, in order:
- *   1. resetQuota → quota_used := 0 (and the period_start/end Oblien
- *      tracks for the quota row is rolled forward).
- *   2. setQuota   → quotaLimit := monthlyCredits, period := monthly,
- *      onOverdraftAction := stop_workspaces. Upsert shape: if the
- *      quota row didn't exist (first ever rollover for this org), this
- *      creates it; if it did, it's a no-op when the values match and
- *      an update when the tier changed under us.
- *
- * Exported as `quotaWrapper.resetAndRegrant` so the Stripe webhook
- * handler can call the same routine when it advances period_end —
- * keeping the two writers' semantics aligned.
- */
-export const quotaWrapper = {
-  async resetAndRegrant(
-    organizationId: string,
-    namespace: string,
-    quotaLimit: number,
-  ): Promise<void> {
-    const client = getOblienClient();
-
-    // Reset first — zeroing the counter before we re-arm the limit
-    // means a brief window where the org has the new limit and zero
-    // usage. The reverse order (set first, then reset) leaves an even
-    // briefer window of "old limit, zero usage" which is harmless but
-    // semantically weirder.
-    await client.namespaces.resetQuota({
-      namespace,
-      service: QUOTA_SERVICE,
-    });
-
-    // Note: the SDK no longer accepts `period` on setQuota — the
-    // quota's reset cadence is now driven by resetQuota calls (the
-    // openship side owns the period boundary, not Oblien's clock).
-    await client.namespaces.setQuota({
-      namespace,
-      service: QUOTA_SERVICE,
-      quotaLimit,
-      onOverdraftAction: ON_OVERDRAFT_ACTION,
-    });
-
-    void organizationId; // reserved for future per-org metrics
-  },
-};
-
-/**
- * Lift the credit-exhausted throttle on an org's Oblien namespace.
- *
- * The namespace was previously `suspend`-ed by the hard-cap handler
- * when quota_used crossed the limit. Activating it here re-enables
- * workspace power transitions in Oblien. The local subscription_status
- * flip from `credit_exhausted` → `active` happens in the caller in the
- * same DB write that advances the period.
- *
- * Failures here are surfaced — we'd rather retry the whole rollover
- * next tick than leave a misaligned namespace+org row pair (Oblien
- * suspended, local status active).
- */
-async function activateExhaustedNamespace(namespace: string): Promise<void> {
-  const client = getOblienClient();
-  await client.namespaces.activate(namespace);
-}
 
 /**
  * Advance a Date by one calendar month. Handles month-end edge cases
@@ -275,40 +199,20 @@ export async function runAnniversaryReset(): Promise<ResetStats> {
         continue;
       }
 
-      // 1. Push the quota reset + re-arm to Oblien.
-      await quotaWrapper.resetAndRegrant(
-        org.id,
-        org.oblienNamespace,
-        tier.monthlyCredits,
-      );
+      // 1. Reset + re-arm the org's Oblien quota via the shared wrapper
+      //    (resetQuota → setQuota with the unit boundary + resource limits).
+      //    Oblien's overdraft gate clears itself once usage is back under the
+      //    fresh ceiling — we do NOT activate the namespace ourselves.
+      await resetAndRegrant(org.id, tierId);
 
-      // 2. Activate the namespace if the org had been suspended for
-      //    credit exhaustion. Sequencing matters — re-arming the
-      //    quota first means the workspaces don't briefly come up
-      //    against the old (busted) limit.
+      // 2. Local display cleanup only: a legacy `credit_exhausted` row is
+      //    stale once credits are refreshed. Flip it back to active in the
+      //    same UPDATE (no Oblien call — Oblien owns the real gate).
       const wasExhausted = org.subscriptionStatus === "credit_exhausted";
-      if (wasExhausted) {
-        try {
-          await activateExhaustedNamespace(org.oblienNamespace);
-          stats.restored += 1;
-        } catch (err) {
-          // Don't fail the whole rollover if activate races with a
-          // manual operator flip — log and keep going. The local
-          // status flip below stays gated on a successful activate
-          // call by short-circuiting on the catch.
-          console.warn(
-            `[billing-anniversary] activate failed for ns=${org.oblienNamespace}: ${safeErrorMessage(err)}`,
-          );
-          // Re-throw so the outer catch tracks it as an error and
-          // skips the local subscription_status flip — we don't want
-          // to claim active when Oblien still has us suspended.
-          throw err;
-        }
-      }
+      if (wasExhausted) stats.restored += 1;
 
-      // 3. Single UPDATE that advances the period and (when relevant)
-      //    flips subscription_status back to active. Atomic — either
-      //    both land or neither.
+      // 3. Single UPDATE that advances the period and (when relevant) clears
+      //    the stale credit_exhausted display status. Atomic.
       const newSubscriptionStatus = wasExhausted ? "active" : org.subscriptionStatus;
       await db
         .update(schema.organization)

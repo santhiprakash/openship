@@ -26,6 +26,11 @@ type ProjectStatusSource = {
   /** True while an atomic teardown is in flight (the real in-progress flag;
    *  teardown hard-deletes on success, so `deletedAt` is rarely set). */
   deletionInProgress?: boolean | null;
+  /** Marks the Openship control-plane self-app. It IS the running host service and
+   *  has no deployment behind it, so it must never fall through to "draft". */
+  appTemplateId?: string | null;
+  isApp?: boolean | null;
+  hasServer?: boolean | null;
 };
 
 // CSS-only presentation. The human-readable label is resolved from the
@@ -35,40 +40,41 @@ export const PROJECT_STATUS_META: Record<
   { badge: string; dot: string }
 > = {
   live: {
-    badge: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-    dot: "bg-emerald-500",
+    badge: "bg-success-bg text-success",
+    dot: "bg-success-solid",
   },
   attention: {
-    badge: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-    dot: "bg-amber-500",
+    badge: "bg-warning-bg text-warning",
+    dot: "bg-warning-solid",
   },
   queued: {
-    badge: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
-    dot: "bg-sky-500",
+    badge: "bg-info-bg text-info",
+    dot: "bg-info-solid",
   },
   building: {
-    badge: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
-    dot: "bg-sky-500",
+    badge: "bg-info-bg text-info",
+    dot: "bg-info-solid",
   },
   deploying: {
+    // primary = brand accent, intentionally not a status token.
     badge: "bg-primary/10 text-primary",
     dot: "bg-primary",
   },
   failed: {
-    badge: "bg-red-500/10 text-red-600 dark:text-red-400",
-    dot: "bg-red-500",
+    badge: "bg-danger-bg text-danger",
+    dot: "bg-danger-solid",
   },
   cancelled: {
     badge: "bg-muted text-muted-foreground",
     dot: "bg-muted-foreground",
   },
   deleting: {
-    badge: "bg-red-500/10 text-red-600 dark:text-red-400",
-    dot: "bg-red-500 animate-pulse",
+    badge: "bg-danger-bg text-danger",
+    dot: "bg-danger-solid animate-pulse",
   },
   draft: {
-    badge: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-    dot: "bg-amber-500",
+    badge: "bg-warning-bg text-warning",
+    dot: "bg-warning-solid",
   },
 };
 
@@ -80,6 +86,13 @@ export function projectStatusLabel(status: ProjectStatus, t: Dictionary): string
 export function getProjectStatus(project: ProjectStatusSource): ProjectStatus {
   if (project.deletedAt || project.deletionInProgress) {
     return "deleting";
+  }
+
+  // The Openship control-plane self-app IS the running host process; it has no
+  // deployment record, so it must never render as "draft" with a "Deploy now"
+  // CTA. If you can see the dashboard, it's live.
+  if (project.appTemplateId === "openship") {
+    return "live";
   }
 
   switch (project.latestDeploymentStatus) {

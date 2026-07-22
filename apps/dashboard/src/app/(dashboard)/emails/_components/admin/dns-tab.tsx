@@ -226,7 +226,7 @@ export function DnsTab({
         }
       >
         {scanErr && (
-          <div className="px-5 py-3 text-sm text-red-600 dark:text-red-400 border-b border-border/40 bg-red-500/5">
+          <div className="px-5 py-3 text-sm text-danger border-b border-border/40 bg-danger-bg">
             {scanErr}
           </div>
         )}
@@ -358,25 +358,25 @@ function presentation(status: DnsCheckStatus) {
     case "pass":
       return {
         Icon: Check,
-        iconBg: "bg-emerald-500/10",
-        iconColor: "text-emerald-600 dark:text-emerald-400",
-        pill: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+        iconBg: "bg-success-bg",
+        iconColor: "text-success",
+        pill: "bg-success-bg text-success",
         label: "Pass",
       };
     case "warn":
       return {
         Icon: AlertTriangle,
-        iconBg: "bg-amber-500/10",
-        iconColor: "text-amber-600 dark:text-amber-400",
-        pill: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+        iconBg: "bg-warning-bg",
+        iconColor: "text-warning",
+        pill: "bg-warning-bg text-warning",
         label: "Warning",
       };
     case "fail":
       return {
         Icon: CircleX,
-        iconBg: "bg-red-500/10",
-        iconColor: "text-red-600 dark:text-red-400",
-        pill: "bg-red-500/10 text-red-600 dark:text-red-400",
+        iconBg: "bg-danger-bg",
+        iconColor: "text-danger",
+        pill: "bg-danger-bg text-danger",
         label: "Fail",
       };
     default:

@@ -102,14 +102,14 @@ const OTPInput: React.FC<OTPInputProps> = ({
           onBlur={() => setFocusedIndex(null)}
           disabled={disabled}
           autoFocus={autoFocus && index === 0}
-          className={`w-12 h-14 text-center text-2xl font-mono font-semibold bg-white border-2 rounded-xl transition-all
-            ${focusedIndex === index 
-              ? 'border-indigo-500 ring-2 ring-indigo-500/20 scale-105' 
-              : digits[index] 
-                ? 'border-indigo-300' 
-                : 'border-black/10'
+          className={`h-14 w-12 rounded-xl border bg-background text-center font-mono text-2xl font-semibold text-foreground transition-all
+            ${focusedIndex === index
+              ? 'border-ring ring-2 ring-ring/30'
+              : digits[index]
+                ? 'border-foreground/40'
+                : 'border-input'
             }
-            ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:border-black/20'}
+            ${disabled ? 'cursor-not-allowed opacity-50' : 'hover:border-foreground/30'}
             focus:outline-none
           `}
         />

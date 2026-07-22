@@ -48,12 +48,26 @@ export function parseManifest(raw: unknown): AdvisoryManifest {
     if (
       action &&
       typeof action.label === "string" &&
-      (action.kind === "update" || action.kind === "open-url")
+      (action.kind === "update" || action.kind === "open-url" || action.kind === "update-entity")
     ) {
       advisory.action = {
         label: action.label,
         kind: action.kind,
         ...(typeof action.url === "string" ? { url: action.url } : {}),
+        ...(typeof action.entityId === "string" ? { entityId: action.entityId } : {}),
+      };
+    }
+    const target = a.target;
+    if (
+      target &&
+      (target.type === "platform" ||
+        target.type === "app" ||
+        target.type === "project" ||
+        target.type === "mail")
+    ) {
+      advisory.target = {
+        type: target.type,
+        ...(typeof target.id === "string" ? { id: target.id } : {}),
       };
     }
     advisories.push(advisory);

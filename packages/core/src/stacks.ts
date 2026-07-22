@@ -964,6 +964,29 @@ export const TRANSFER_EXCLUDES: readonly string[] = [
 ];
 
 /**
+ * Excludes for transferring a LOCALLY-BUILT project's OUTPUT to the target
+ * (buildStrategy=local: build on the API host, ship the result).
+ *
+ * Unlike TRANSFER_EXCLUDES — which ships source ONLY, for a build-on-target
+ * flow — this KEEPS the stack's own build-output directory (e.g. Next.js
+ * `.next`, Nuxt `.output`, Vite `dist`), because that compiled output IS the
+ * thing we're shipping. Without this the target receives source with no build
+ * and `next start` (etc.) fails with "Could not find a production build".
+ *
+ * Everything else stays excluded: dependencies (reinstalled on the target),
+ * VCS, caches (incl. the stack's own `cacheDirs`, e.g. `.next/cache`), and
+ * OTHER frameworks' output dirs (harmless — they don't exist for this stack).
+ */
+export function buildOutputTransferExcludes(
+  stackDef?: { outputDirectory?: string; cacheDirs?: readonly string[] },
+): string[] {
+  const outDir = stackDef?.outputDirectory;
+  return [...TRANSFER_EXCLUDES, ...(stackDef?.cacheDirs ?? [])].filter(
+    (entry) => entry !== outDir,
+  );
+}
+
+/**
  * The subset of TRANSFER_EXCLUDES whose names are ALSO ordinary source-folder
  * names — a Next.js `app/.../build` route, a `src/data` content dir, a `dist`
  * source package. Matching these by name at any depth silently deletes real
@@ -1029,6 +1052,20 @@ export function getBuildImage(stackId: StackId, packageManager?: string): string
   return stack.buildImage ?? LANGUAGES[stack.language].buildImage;
 }
 
+/**
+ * Command that ensures the detected JS package manager is on PATH before the
+ * install step runs. npm/pnpm/yarn all ship through Node's `corepack` — enabling
+ * it installs the pnpm/yarn shims and lets each project's
+ * `package.json#packageManager` field select the exact version. Falls back to a
+ * global npm install when corepack is unavailable (old Node / no perms), and is
+ * fully swallowed so it never fails the build. Returns "" for `npm` (already
+ * present), `bun` (its own image), and every non-node PM (in-image).
+ */
+export function packageManagerEnsureCommand(packageManager?: string): string {
+  if (packageManager !== "pnpm" && packageManager !== "yarn") return "";
+  return `(corepack enable ${packageManager} || corepack enable || npm i -g ${packageManager}) >/dev/null 2>&1 || true`;
+}
+
 /** Get the resolved Docker runtime image for a stack */
 export function getRuntimeImage(stackId: StackId, packageManager?: string): string {
   const stack = STACKS[stackId] as StackDefinition;
@@ -1055,6 +1092,22 @@ export function getProjectType(stackId: StackId): ProjectType {
   if (cat === "docker") return "docker";
   if (cat === "services") return "services";
   return "app";
+}
+
+/**
+ * Is a project SERVICE-FIRST — i.e. the project itself IS a set of services
+ * (a docker-compose / "services" stack), NOT a single/static app that merely
+ * had sidecar services added to it? Keyed on the project's own framework, so
+ * adding a service to a real app never makes it service-first. Safe for
+ * unknown/undefined frameworks (mirrors the API's `isMultiServiceProject`).
+ */
+export function isServicesFramework(framework?: string | null): boolean {
+  if (!framework) return false;
+  try {
+    return getProjectType(framework as StackId) === "services";
+  } catch {
+    return framework === "docker-compose";
+  }
 }
 
 /**

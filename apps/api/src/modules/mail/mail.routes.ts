@@ -151,6 +151,23 @@ r.get(
   admin.getDnsScanHandler,
 );
 
+/* ── Admin panel - outbound relay (split delivery) ────────────────── */
+r.get(
+  "/admin/:serverId/relay",
+  { tag: "mail_server:read" },
+  admin.getOutboundRelayHandler,
+);
+r.post(
+  "/admin/:serverId/relay",
+  { tag: "mail_server:admin" },
+  admin.putOutboundRelayHandler,
+);
+r.delete(
+  "/admin/:serverId/relay",
+  { tag: "mail_server:admin" },
+  admin.deleteOutboundRelayHandler,
+);
+
 /* ── Admin panel - welcome test email ─────────────────────────────── */
 r.post(
   "/admin/:serverId/test-email",
@@ -185,6 +202,12 @@ r.post(
   "/webmail/deploy-project",
   { tag: "mail_server:write" },
   webmail.startDeployAsProjectHandler,
+);
+// External-backend webmail (BYO IMAP/SMTP — SES / custom). No mail server.
+r.post(
+  "/webmail/deploy-external",
+  { tag: "mail_server:write" },
+  webmail.startExternalDeployAsProjectHandler,
 );
 
 export const mailRoutes = r.hono;

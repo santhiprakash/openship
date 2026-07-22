@@ -33,6 +33,8 @@ function clampWindow(value: number | undefined, fallback: number, min: number, m
 export class SshExecutor implements CommandExecutor {
   private client: SshClient | null = null;
   private connecting: Promise<SshClient> | null = null;
+  /** One shared SFTP subsystem channel per client — see sftp(). */
+  private sftpChannel: Promise<SFTPWrapper> | null = null;
   private readonly config: SshConfig;
   /** Subscribers notified when the transport drops (see onDisconnect). */
   private readonly disconnectListeners = new Set<(err: Error) => void>();
@@ -61,6 +63,7 @@ export class SshExecutor implements CommandExecutor {
       const onTransportDown = (cause?: Error) => {
         if (this.client !== client) return; // superseded / already handled
         this.client = null;
+        this.sftpChannel = null; // channel died with the client
         this.handleDisconnect(cause);
       };
 
@@ -106,20 +109,65 @@ export class SshExecutor implements CommandExecutor {
     }
   }
 
+  /**
+   * One SFTP subsystem channel per client, opened lazily and shared by every
+   * file op. ssh2's SFTPWrapper pipelines many concurrent requests over a
+   * single channel, so file operations cost exactly ONE session against the
+   * server's MaxSessions — not one channel per op, which leaks and exhausts
+   * the quota, then takes down the whole connection (incl. a live build) on
+   * the next channel-open failure (#34). Self-clears on the channel's own
+   * close/error and on resetConnection/dispose so the next op reopens clean.
+   */
   private async sftp(): Promise<SFTPWrapper> {
     const client = await this.connect();
-    return openSftp(client);
+    if (this.sftpChannel) return this.sftpChannel;
+
+    const opening = openSftp(client).then((wrapper) => {
+      const drop = () => {
+        if (this.sftpChannel === opening) this.sftpChannel = null;
+      };
+      wrapper.once("close", drop);
+      wrapper.once("error", drop);
+      return wrapper;
+    });
+    opening.catch(() => {
+      if (this.sftpChannel === opening) this.sftpChannel = null;
+    });
+    this.sftpChannel = opening;
+    return opening;
+  }
+
+  /** Close + forget the shared SFTP channel (frees its session) without
+   *  touching the SSH client, so file ops can reopen on the same connection. */
+  private dropSftp(): void {
+    const ch = this.sftpChannel;
+    this.sftpChannel = null;
+    if (ch) ch.then((w) => { try { w.end(); } catch {} }).catch(() => {});
   }
 
   /**
    * Force-close the current connection so the next call reconnects.
    */
   private resetConnection(): void {
+    this.dropSftp();
     if (this.client) {
       try { this.client.end(); } catch {}
       this.client = null;
     }
     this.connecting = null;
+  }
+
+  /**
+   * Recover from a channel-open failure without killing live work. If other
+   * ops are still streaming on this connection (a docker build, an exec), the
+   * failure is session pressure — NOT a dead socket — so ending the client
+   * would abort that in-flight command (#34). Free the SFTP channel and keep
+   * the connection. With nothing in flight the cached socket is stale (idle
+   * drop), so reset it fully.
+   */
+  private recoverFromChannelError(): void {
+    if (this.inflight.size > 0) this.dropSftp();
+    else this.resetConnection();
   }
 
   /** Returns true if the error is an SSH channel-open failure. */
@@ -142,7 +190,7 @@ export class SshExecutor implements CommandExecutor {
       return await fn();
     } catch (err) {
       if (SshExecutor.isChannelError(err)) {
-        this.resetConnection();
+        this.recoverFromChannelError();
         return fn();
       }
       throw err;
@@ -212,7 +260,7 @@ export class SshExecutor implements CommandExecutor {
   ): Promise<{ code: number; output: string }> {
     return this._streamExec(command, onLog).catch((err) => {
       if (SshExecutor.isChannelError(err)) {
-        this.resetConnection();
+        this.recoverFromChannelError();
         return this._streamExec(command, onLog);
       }
       throw err;
@@ -258,8 +306,25 @@ export class SshExecutor implements CommandExecutor {
         stream.on("data", (data: Buffer) => onChunk(data, "info"));
         stream.stderr.on("data", (data: Buffer) => onChunk(data, "warn"));
 
-        stream.on("close", (code: number) => {
-          finish(() => resolve({ code: code ?? 1, output: chunks.join("") }));
+        // ssh2's 'close' often carries no code; the real exit status arrives on
+        // 'exit'. A close with NO exit status means the channel was torn down
+        // under the command (connection reset / session exhaustion), not a real
+        // exit — surface that instead of masking it as a generic exit code 1 (#34).
+        let exitCode: number | null = null;
+        stream.on("exit", (code: number | null) => { exitCode = code; });
+        stream.on("close", (code: number | null) => {
+          finish(() => {
+            const final = typeof code === "number" ? code : exitCode;
+            if (final == null) {
+              reject(
+                new Error(
+                  "remote channel closed without an exit status — the SSH connection or channel was terminated mid-command",
+                ),
+              );
+            } else {
+              resolve({ code: final, output: chunks.join("") });
+            }
+          });
         });
       });
     });
@@ -476,6 +541,7 @@ export class SshExecutor implements CommandExecutor {
 
   async dispose(): Promise<void> {
     this.connecting = null;
+    this.sftpChannel = null;
     this.reverseHandlers.clear();
     this.reverseListenerClient = null;
     if (this.client) {
@@ -488,7 +554,7 @@ export class SshExecutor implements CommandExecutor {
     localPath: string,
     remotePath: string,
     onLog?: (log: LogEntry) => void,
-    options?: { excludes?: string[]; includes?: string[] },
+    options?: { excludes?: string[]; includes?: string[]; alsoInclude?: string[] },
   ): Promise<void> {
     // Pack the tree into ONE archive, upload that single file, verify + extract.
     // Transport: rsync (fast + resumable) when the toolchain allows; otherwise
@@ -498,6 +564,7 @@ export class SshExecutor implements CommandExecutor {
     const { args: tarArgs, cleanup: cleanupTarList } = await prepareSourceTarArgs(localPath, {
       excludes,
       includes: options?.includes,
+      alsoInclude: options?.alsoInclude,
     });
     const tmpLocalDir = await mkdtemp(join(tmpdir(), "openship-xfer-"));
     const localArchive = join(tmpLocalDir, "context.tar.gz");

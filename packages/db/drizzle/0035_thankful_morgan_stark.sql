@@ -1,0 +1,1 @@
+ALTER TABLE "domain" ADD COLUMN "external_ingress" boolean DEFAULT false NOT NULL;

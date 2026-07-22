@@ -1,0 +1,22 @@
+{
+  "module": "openresty",
+  "schema": 1,
+  "serial": 1,
+  "latest": "1.1.0",
+  "versions": [
+    {
+      "version": "1.1.0",
+      "minFrom": "1.0.0",
+      "apply": "consent",
+      "warning": "Resizes the rate-limit counter dict (rl_counters 16m -> 32m). OpenResty reloads and in-flight rate-limit counters reset briefly.",
+      "steps": [
+        {
+          "kind": "exec",
+          "id": "resize-rl-counters-16m-to-32m",
+          "asset": "assets/1.1.0/resize-rl-counters.sh",
+          "sha256": "5458e4ce201c4533b5074809bad4515e246435267e85b4c41acc200c0af77d49"
+        }
+      ]
+    }
+  ]
+}

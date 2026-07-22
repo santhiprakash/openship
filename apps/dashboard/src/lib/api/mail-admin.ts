@@ -168,6 +168,44 @@ export interface DnsScanResult {
   checks: DnsCheck[];
 }
 
+// ─── Outbound relay ──────────────────────────────────────────────────────────
+
+/** Per-additional-domain SES identity records (each SES domain verifies separately). */
+export type RelayIdentityMap = Record<string, { mailFromDomain?: string; sesDkim?: { name: string; value: string }[] }>;
+
+/** Masked relay status from the server (password is never returned). */
+export interface OutboundRelayStatus {
+  enabled: boolean;
+  provider: "ses" | "custom";
+  /** "all" domains via a global relayhost, or only `domains` (per-sender routing). */
+  scope?: "all" | "selected";
+  domains?: string[];
+  region?: string;
+  host: string;
+  port: number;
+  username: string;
+  mailFromDomain?: string;
+  sesDkim?: { name: string; value: string }[];
+  identities?: RelayIdentityMap;
+  updatedAt: string;
+  hasPassword: boolean;
+}
+
+/** Enable/update payload. `password` blank on update keeps the stored one. */
+export interface ConfigureRelayPayload {
+  provider: "ses" | "custom";
+  scope?: "all" | "selected";
+  domains?: string[];
+  region?: string;
+  host?: string;
+  port: number;
+  username: string;
+  password?: string;
+  mailFromDomain?: string;
+  sesDkim?: { name: string; value: string }[];
+  identities?: RelayIdentityMap;
+}
+
 // ─── Client ──────────────────────────────────────────────────────────────────
 
 export const mailAdminApi = {
@@ -264,6 +302,18 @@ export const mailAdminApi = {
           ? `${endpoints.mail.admin.dnsScan(serverId)}?domain=${encodeURIComponent(domain)}`
           : endpoints.mail.admin.dnsScan(serverId),
       ),
+  },
+  /** Outbound relay (split delivery — self-host inbox + SES/SMTP send). */
+  relay: {
+    /** Current relay config, or null when direct-to-MX (masked — no password). */
+    get: (serverId: string) =>
+      api.get<{ relay: OutboundRelayStatus | null }>(endpoints.mail.admin.relay(serverId)),
+    /** Enable / update the relay. Leave `password` blank to keep the stored one. */
+    save: (serverId: string, body: ConfigureRelayPayload) =>
+      api.post<{ relay: OutboundRelayStatus | null }>(endpoints.mail.admin.relay(serverId), body),
+    /** Disable the relay — revert Postfix to direct-to-MX. */
+    disable: (serverId: string) =>
+      api.delete<{ ok: boolean }>(endpoints.mail.admin.relay(serverId)),
   },
   backup: {
     /** The mail server's backup policy, or null if none yet. */

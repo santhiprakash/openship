@@ -176,7 +176,7 @@ export function ConnectPrompt({
                 <span className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center">
                   <Github className="size-[18px] text-foreground/70" />
                 </span>
-                <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                <span className="inline-flex items-center rounded-full bg-success-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-success">
                   {t.library.connect.default.recommended}
                 </span>
               </div>
