@@ -1540,15 +1540,18 @@ export class DockerRuntime implements RuntimeAdapter {
     });
     const stateMap: Record<string, ContainerStatus> = {
       running: "running",
+      healthy: "running",
+      starting: "running",
       restarting: "running",
       exited: "stopped",
       paused: "stopped",
       created: "stopped",
       dead: "failed",
+      unhealthy: "failed",
     };
     return containers.map((c) => ({
       containerId: c.Id,
-      status: stateMap[c.State] ?? "stopped",
+      status: stateMap[(c.State ?? "").toLowerCase().trim()] ?? "stopped",
       serviceName: c.Labels?.["openship.service"],
     }));
   }
@@ -1684,7 +1687,7 @@ export class DockerRuntime implements RuntimeAdapter {
         names: (c.Names ?? []).map((n) => n.replace(/^\//, "")),
         image: c.Image,
         imageId: c.ImageID,
-        state: c.State,
+        state: (c.State ?? "").toLowerCase().trim(),
         status: c.Status,
         labels,
         ports: (c.Ports ?? []).map((p) => ({
@@ -1718,7 +1721,7 @@ export class DockerRuntime implements RuntimeAdapter {
       name: (data.Name ?? "").replace(/^\//, ""),
       image: data.Config?.Image ?? data.Image,
       imageId: data.Image,
-      state: data.State?.Status ?? "unknown",
+      state: (data.State?.Status ?? "").toLowerCase().trim() || "unknown",
       command: toStringArray(data.Config?.Cmd),
       entrypoint: toStringArray(data.Config?.Entrypoint),
       env: data.Config?.Env ?? [],
@@ -1850,11 +1853,14 @@ export class DockerRuntime implements RuntimeAdapter {
 
     const statusMap: Record<string, ContainerInfo["status"]> = {
       running: "running",
+      healthy: "running",
+      starting: "running",
+      restarting: "running",
       exited: "stopped",
       paused: "stopped",
-      restarting: "running",
-      dead: "failed",
       created: "stopped",
+      dead: "failed",
+      unhealthy: "failed",
     };
 
     const startedAt = data.State.StartedAt;
@@ -1864,9 +1870,19 @@ export class DockerRuntime implements RuntimeAdapter {
 
     const { ip, hostPort } = extractNetworkInfo(data);
 
+    let status: ContainerInfo["status"];
+    if (data.State.Running) {
+      status = "running";
+    } else if (data.State.Paused) {
+      status = "stopped";
+    } else {
+      const rawStatus = (data.State.Status ?? "").toLowerCase().trim();
+      status = statusMap[rawStatus] ?? "stopped";
+    }
+
     return {
       containerId,
-      status: statusMap[data.State.Status] ?? "stopped",
+      status,
       ip,
       hostPort,
       uptimeSeconds: uptimeSeconds && uptimeSeconds > 0 ? uptimeSeconds : undefined,
