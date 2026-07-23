@@ -1052,6 +1052,38 @@ export class DockerRuntime implements RuntimeAdapter {
     }
   }
 
+  /**
+   * Confirm a just-built image actually exists before handing its tag back
+   * as the deploy artifact.
+   *
+   * For SSH-transport builds, verify over the SAME pooled SSH exec channel
+   * the `docker build` command itself just ran on — not `this.docker`
+   * (dockerode), which for SSH transport talks over a SEPARATE, independently
+   * -tunneled streamlocal bridge connection (see docker-ssh-agent.ts). That
+   * second connection has proven unreliable in practice: it can hang
+   * indefinitely or report the image missing even though `docker images` on
+   * the box confirms it built successfully seconds earlier. Reusing the
+   * already-proven-live exec channel avoids standing up a second, flakier
+   * connection just to ask a question the first connection already knows
+   * the answer to.
+   *
+   * For local-socket/TCP transports there is no separate bridge — `this.docker`
+   * talks directly to the daemon — so the original dockerode check is fine
+   * and stays as the fallback.
+   */
+  private async verifyImageBuilt(tag: string): Promise<void> {
+    const executor = this.transport.kind === "ssh" ? this.connectionOptions?.executor : null;
+    try {
+      if (executor) {
+        await executor.exec(`docker image inspect ${sq(tag)} >/dev/null`);
+      } else {
+        await this.docker.getImage(tag).inspect();
+      }
+    } catch (cause) {
+      throw new Error(`Docker build finished but the image ${tag} was not created`, { cause });
+    }
+  }
+
   async build(config: BuildConfig, logger?: BuildLogger): Promise<BuildResult> {
     const log = logger ?? new BuildLogger();
     const startTime = Date.now();
@@ -1092,11 +1124,7 @@ export class DockerRuntime implements RuntimeAdapter {
           sshExecutor.exec(`rm -rf ${sq(remoteContextDir)}`).catch(() => { /* best effort */ });
         }
 
-        try {
-          await this.docker.getImage(tag).inspect();
-        } catch (cause) {
-          throw new Error(`Docker build finished but the image ${tag} was not created`, { cause });
-        }
+        await this.verifyImageBuilt(tag);
         log.log(`Image ${tag} is ready.\n`);
         log.step("build", "completed", `Finalizing image ${tag}`);
         return { sessionId: config.sessionId, status: "deploying", imageRef: tag, durationMs: Date.now() - startTime };
@@ -1165,11 +1193,7 @@ export class DockerRuntime implements RuntimeAdapter {
         await this.buildViaDockerode(config, buildContext, tag, log);
       }
 
-      try {
-        await this.docker.getImage(tag).inspect();
-      } catch (cause) {
-        throw new Error(`Docker build finished but the image ${tag} was not created`, { cause });
-      }
+      await this.verifyImageBuilt(tag);
 
       log.log(`Image ${tag} is ready.\n`);
       log.log(`[build] ✓ Image ${tag} ready`);
@@ -1346,11 +1370,7 @@ export class DockerRuntime implements RuntimeAdapter {
             await this.streamDockerodeBuild(stream, spec.logger);
           }
 
-          try {
-            await this.docker.getImage(tag).inspect();
-          } catch (cause) {
-            throw new Error(`Docker build finished but the image ${tag} was not created`, { cause });
-          }
+          await this.verifyImageBuilt(tag);
 
           spec.logger.log(`Image ${tag} is ready.\n`);
           const result: BuildResult = {
