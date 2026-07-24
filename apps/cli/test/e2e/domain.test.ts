@@ -116,3 +116,41 @@ describe("openship domain preview", () => {
     expect(JSON.parse(out)).toEqual(PREVIEW.data);
   });
 });
+
+// ─── verify (apiRaw: 200 verified vs 422 not-propagated-yet) ──────────────────
+
+describe("openship domain verify", () => {
+  it("reports a verified domain and exits 0", async () => {
+    fetchStub = stubFetch(() => ({ json: { verified: true, cnameVerified: true, txtVerified: true, message: "Domain verified" } }));
+    const { err, code } = await runCommand(domainCommand, ["verify", "d1"]);
+    expect(code).toBe(0);
+    expect(fetchStub.calls[0].method).toBe("POST");
+    expect(fetchStub.calls[0].url).toBe(`${API}/domains/d1/verify`);
+    expect(err).toContain("route/CNAME: ok");
+    expect(err).toContain("TXT: ok");
+  });
+
+  it("treats a 422 (DNS not propagated) as not-verified and exits 1 without throwing", async () => {
+    fetchStub = stubFetch(() => ({ status: 422, json: { verified: false, cnameVerified: false, txtVerified: true } }));
+    const { err, code } = await runCommand(domainCommand, ["verify", "d1"]);
+    expect(code).toBe(1); // the whole point of the command: unverified is a failure exit
+    expect(fetchStub.calls).toHaveLength(1); // 422 is handled, not surfaced as an error before the request
+    expect(err).toContain("route/CNAME: missing");
+  });
+
+  it("prints the raw result and does NOT exit 1 in json mode even when unverified", async () => {
+    setJsonMode(true);
+    const body = { verified: false, cnameVerified: false, txtVerified: false };
+    fetchStub = stubFetch(() => ({ status: 422, json: body }));
+    const { out, code } = await runCommand(domainCommand, ["verify", "d1"]);
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toEqual(body);
+  });
+
+  it("surfaces a non-422 error (e.g. 500) and exits 1", async () => {
+    fetchStub = stubFetch(() => ({ status: 500, json: { error: "verifier crashed" } }));
+    const { err, code } = await runCommand(domainCommand, ["verify", "d1"]);
+    expect(code).toBe(1);
+    expect(err).toContain("verifier crashed");
+  });
+});
