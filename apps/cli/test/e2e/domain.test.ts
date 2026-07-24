@@ -283,3 +283,33 @@ describe("openship domain renew-all", () => {
     expect(JSON.parse(out)).toEqual(RESULT.data);
   });
 });
+
+// ─── auth + error handling (shared across subcommands) ───────────────────────
+
+describe("openship domain error + auth handling", () => {
+  it("surfaces the API {error} message and exits 1", async () => {
+    fetchStub = stubFetch(() => ({ status: 500, json: { error: "db down" } }));
+    const { err, code } = await runCommand(domainCommand, ["list", "-p", "prj1"]);
+    expect(code).toBe(1);
+    expect(err).toContain("db down");
+  });
+
+  it("sends the bearer token when logged in", async () => {
+    fetchStub = stubFetch(() => ({ json: { data: [] } }));
+    await runCommand(domainCommand, ["list", "-p", "prj1"]);
+    expect(fetchStub.calls[0].headers.authorization).toBe("Bearer tok");
+  });
+
+  it("still issues the request unauthenticated when logged out (domain has no pre-flight login guard)", async () => {
+    // Unlike `server`/`mail`, domain.ts does not short-circuit on a missing
+    // token — it sends the request with no Authorization header and lets the
+    // API reject it. Pin that so adding a pre-flight guard is a deliberate change.
+    h.token = null;
+    fetchStub = stubFetch(() => ({ status: 401, json: { error: "unauthorized" } }));
+    const { err, code } = await runCommand(domainCommand, ["list", "-p", "prj1"]);
+    expect(fetchStub.calls).toHaveLength(1);
+    expect(fetchStub.calls[0].headers.authorization).toBeUndefined();
+    expect(code).toBe(1);
+    expect(err).toContain("unauthorized");
+  });
+});
