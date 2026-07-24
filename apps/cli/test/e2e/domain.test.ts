@@ -198,3 +198,25 @@ describe("openship domain records", () => {
     expect(JSON.parse(out)).toEqual(RECORDS.data);
   });
 });
+
+// ─── renew (reissue SSL) ─────────────────────────────────────────────────────
+
+describe("openship domain renew", () => {
+  const SSL = { data: { domain: "app.example.com", sslStatus: "issued", issuer: "Let's Encrypt", expiresAt: "2026-10-01" } };
+
+  it("POSTs /domains/:id/renew and prints the certificate status", async () => {
+    fetchStub = stubFetch(() => ({ json: SSL }));
+    const { err, code } = await runCommand(domainCommand, ["renew", "d1"]);
+    expect(code).toBe(0);
+    expect(fetchStub.calls[0].method).toBe("POST");
+    expect(fetchStub.calls[0].url).toBe(`${API}/domains/d1/renew`);
+    expect(err).toContain("status:  issued");
+  });
+
+  it("emits the SSL result as JSON in json mode", async () => {
+    setJsonMode(true);
+    fetchStub = stubFetch(() => ({ json: SSL }));
+    const { out } = await runCommand(domainCommand, ["renew", "d1"]);
+    expect(JSON.parse(out)).toEqual(SSL.data);
+  });
+});
