@@ -222,7 +222,12 @@ export const systemCatalog = {
   checks: {
     docker: {
       versionCommand: "docker --version",
-      daemonCommand: "docker info --format '{{.ServerVersion}}'",
+      // Docker 29 removed the `.ServerVersion` template field from
+      // `docker info`, so `docker info --format '{{.ServerVersion}}'`
+      // exits with a template error even when the daemon is healthy.
+      // `docker version --format '{{.Server.Version}}'` is the stable
+      // way to probe the daemon and works across Docker 24-29+.
+      daemonCommand: "docker version --format '{{.Server.Version}}'",
       parseVersion: (output: string) =>
         output.match(/Docker version ([^\s,]+)/)?.[1] ?? output,
       missingMessage: "Docker is not installed",
